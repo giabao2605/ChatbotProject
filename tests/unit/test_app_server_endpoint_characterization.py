@@ -1,13 +1,16 @@
 import inspect
 import json
+from contextlib import nullcontext
 from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.routing import Route
 
 from mech_chatbot.api import dependencies as api_dependencies
 from mech_chatbot.api.routers import documents as document_routes
+from mech_chatbot.api.routers import operations as operation_routes
 from mech_chatbot.application.chat_turn import (
     ChatDelta,
     ChatDone,
@@ -26,6 +29,7 @@ from mech_chatbot.application.document_upload import (
     UploadReceipt,
 )
 from mech_chatbot.application.protected_files import AuthorizedFile, ProtectedFileError
+from mech_chatbot.config.settings import Settings
 
 
 pytestmark = pytest.mark.unit
@@ -308,6 +312,42 @@ def test_bulk_metadata_rejects_empty_contract_fields(payload, client_for):
     assert response.status_code == 400
 
 
+@pytest.mark.parametrize("metadata", [
+    {"qa_unknown_field": "x"},
+    {"domain": "mechanical"},
+    {"title": "Pump manual", "domain": "mechanical"},
+])
+def test_bulk_metadata_rejects_fields_that_cannot_update_a_document(
+    metadata, monkeypatch, client_for
+):
+    monkeypatch.setattr(
+        document_routes,
+        "update_document_common_metadata",
+        lambda *_args, **_kwargs: pytest.fail("invalid metadata must not be written"),
+    )
+    response = client_for(_profile("reviewer")).patch(
+        "/api/documents/bulk-metadata", json={"doc_ids": [42], "metadata": metadata}
+    )
+    assert response.status_code == 422
+    assert "metadata" in response.json()["detail"]
+
+
+def test_lifecycle_rejects_nonexistent_date_before_mutation(monkeypatch, client_for):
+    monkeypatch.setattr(
+        document_routes, "validate_document_metadata_actor", lambda *_args: (True, "allowed")
+    )
+    monkeypatch.setattr(
+        document_routes,
+        "set_document_lifecycle",
+        lambda *_args, **_kwargs: pytest.fail("invalid date must not be written"),
+    )
+    response = client_for(_profile("reviewer")).patch(
+        "/api/lifecycle/documents/42", json={"effective_date": "2026-02-30"}
+    )
+    assert response.status_code == 422
+    assert "effective_date" in response.json()["detail"]
+
+
 def test_bulk_metadata_reports_mixed_results_without_leaking_internal_errors(
     monkeypatch, client_for
 ):
@@ -396,8 +436,8 @@ def test_bulk_review_reports_valid_and_failed_items(
     published = []
 
     class Publication:
-        def resolve_latest_doc_id(self, _job_id):
-            return 42
+        def resolve_latest_doc_id(self, job_id):
+            return {9: 42, 10: 43}.get(job_id)
 
         def publish_document(self, command, actor):
             published.append((command, actor))
@@ -488,9 +528,14 @@ def test_bulk_review_executes_reject_and_delete_boundaries(
         publication=PublicationCoordinator(publication=Publication()),
     )
     monkeypatch.setattr(
+        document_routes,
+        "validate_publish_actor",
+        lambda *_args: SimpleNamespace(valid=True, issues=()),
+    )
+    monkeypatch.setattr(
         app_server.app.state,
         "runtime",
-        replace(app_server.app.state.runtime, review_documents=review),
+        replace(app_server.app.state.runtime, review_documents=review, publication_port=Publication()),
     )
 
     response = client_for(_profile("reviewer")).post(
@@ -555,6 +600,7 @@ def test_citation_page_returns_safe_placeholder_and_audits_confidential_read(
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("image/svg+xml")
     assert "Doc 42" in response.text
+    assert '<a href="/api/files/documents/42/original"' in response.text
     assert response.headers["cache-control"] == "private, no-store"
 
 
@@ -600,6 +646,46 @@ def test_original_document_serves_only_authorized_resolved_file(
     assert response.status_code == 200
     assert response.content == b"trusted-pdf"
     assert "download-name.pdf" in response.headers["content-disposition"]
+    assert response.headers["cache-control"] == "private, no-store"
+
+
+def test_auth_responses_disable_caching(monkeypatch, client_for):
+    profile = _profile()
+    monkeypatch.setattr(operation_routes, "authenticate_user", lambda *_args, **_kwargs: profile)
+    monkeypatch.setattr(
+        operation_routes.app_security,
+        "create_session_token",
+        lambda **_kwargs: ("token", SimpleNamespace(csrf="csrf")),
+    )
+    monkeypatch.setattr(operation_routes.app_security, "set_session_cookie", lambda *_args: None)
+    monkeypatch.setattr(operation_routes, "session_payload", lambda _request: SimpleNamespace(user_id=7, username="alice", csrf="csrf"))
+    monkeypatch.setattr(operation_routes, "load_user_profile", lambda **_kwargs: profile)
+    client = client_for(profile)
+
+    login = client.post("/api/auth/login", json={"username": "alice", "password": "test"})
+    me = client.get("/api/auth/me")
+
+    assert login.status_code == 200
+    assert me.status_code == 200
+    assert login.headers["cache-control"] == "private, no-store"
+    assert me.headers["cache-control"] == "private, no-store"
+
+
+def test_unhandled_api_error_disables_caching_without_exposing_exception():
+    application = app_server.create_app(Settings.from_env({}))
+
+    async def cache_error_probe(_request):
+        raise RuntimeError("private failure detail")
+
+    application.router.routes.insert(0, Route("/api/cache-error-probe", cache_error_probe))
+
+    response = TestClient(application, raise_server_exceptions=False).get(
+        "/api/cache-error-probe"
+    )
+
+    assert response.status_code == 500
+    assert response.headers["cache-control"] == "private, no-store"
+    assert "private failure detail" not in response.text
 
 
 def test_original_document_fails_closed_when_resolved_file_is_missing(
@@ -638,6 +724,140 @@ def test_original_document_denies_before_resolving_file(monkeypatch, client_for)
     assert response.json() == {"detail": "security_denied"}
 
 
+def test_pending_preview_requires_assigned_reviewer_before_file_resolution(monkeypatch, client_for):
+    class Resolver:
+        def resolve(self, _reference, _actor):
+            pytest.fail("unassigned reviewer must not resolve the file")
+
+    monkeypatch.setattr(document_routes, "validate_publish_actor", lambda *_args: SimpleNamespace(valid=False))
+    monkeypatch.setattr(
+        app_server.app.state, "runtime",
+        replace(app_server.app.state.runtime, protected_file_resolver=Resolver()),
+    )
+    response = client_for(_profile("reviewer")).get("/api/files/review/documents/42/pages/1")
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize("denial", [
+    "same_department_unassigned", "cross_department", "missing_document", "invalid_actor",
+])
+def test_publish_contract_denial_explains_policy_without_disclosing_target(
+    monkeypatch, client_for, denial,
+):
+    from mech_chatbot.db.repositories import publication
+
+    profile = _profile("reviewer")
+    row = {
+        "KnowledgeApproverUserID": 9087, "DepartmentApproverUserID": 9087,
+        "ActorActive": 1, "ActorInOwnerDepartment": 1,
+    }
+    if denial == "cross_department":
+        row = {**row, "ActorInOwnerDepartment": 0}
+    elif denial == "missing_document":
+        row = None
+    elif denial == "invalid_actor":
+        profile = {**profile, "user_id": "invalid"}
+    reads = []
+
+    def execute(statement, params):
+        reads.append((str(statement), params))
+        assert str(statement).lstrip().startswith("SELECT")
+        return SimpleNamespace(mappings=lambda: SimpleNamespace(first=lambda: row))
+
+    engine = SimpleNamespace(connect=lambda: nullcontext(SimpleNamespace(execute=execute)))
+    monkeypatch.setattr(document_routes, "validate_publish_actor", lambda doc_id, actor, roles: (
+        publication.validate_publish_actor(
+            doc_id, actor, roles, db_engine=engine,
+            policy=SimpleNamespace(allow_admin_approval_override=False),
+        )
+    ))
+    monkeypatch.setattr(document_routes, "validate_publish_contract", lambda *_args: (
+        pytest.fail("denied actor must not inspect the publication contract")
+    ))
+    for name in ("reject_document", "archive_document"):
+        monkeypatch.setattr(document_routes, name, lambda *_args, **_kwargs: (
+            pytest.fail("denied contract read must not write")
+        ))
+
+    response = client_for(profile).get("/api/documents/42/publish-contract")
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": (
+        "Không đủ quyền duyệt tài liệu. Hãy dùng tài khoản người duyệt được giao, "
+        "đang hoạt động và thuộc phòng ban sở hữu tài liệu."
+    )}
+    assert len(reads) == 1
+    assert reads[0][1] == {"doc_id": 42, "actor_id": None if denial == "invalid_actor" else 7}
+
+
+def test_pending_preview_serves_assigned_reviewers_page_and_inline_original(monkeypatch, client_for, tmp_path):
+    source = tmp_path / "pending.pdf"
+    source.write_bytes(b"trusted-pdf")
+    page = tmp_path / "page.png"
+    page.write_bytes(b"trusted-page")
+
+    class Resolver:
+        def resolve(self, reference, _actor):
+            if reference.kind == "review_page":
+                return AuthorizedFile(path=page)
+            assert reference.kind == "document_review_original"
+            return AuthorizedFile(path=source, filename="pending.pdf")
+
+    monkeypatch.setattr(document_routes, "validate_publish_actor", lambda *_args: SimpleNamespace(valid=True))
+    monkeypatch.setattr(
+        app_server.app.state, "runtime",
+        replace(app_server.app.state.runtime, protected_file_resolver=Resolver()),
+    )
+    client = client_for(_profile("reviewer"))
+    page_response = client.get("/api/files/review/documents/42/pages/1")
+    source_response = client.get("/api/files/review/documents/42/original")
+    assert page_response.status_code == 200
+    assert page_response.content == b"trusted-page"
+    assert page_response.headers["cache-control"] == "private, no-store"
+    assert page_response.headers["x-content-type-options"] == "nosniff"
+    assert source_response.status_code == 200
+    assert source_response.content == b"trusted-pdf"
+    assert source_response.headers["content-disposition"].startswith("inline;")
+    assert source_response.headers["cache-control"] == "private, no-store"
+    assert source_response.headers["x-content-type-options"] == "nosniff"
+
+
+def test_pending_html_original_downloads_instead_of_rendering_in_app_origin(monkeypatch, client_for, tmp_path):
+    source = tmp_path / "uploaded.html"
+    source.write_text("<script>alert(1)</script>", encoding="utf-8")
+
+    class Resolver:
+        def resolve(self, _reference, _actor):
+            return AuthorizedFile(path=source, filename="uploaded.html")
+
+    monkeypatch.setattr(document_routes, "validate_publish_actor", lambda *_args: SimpleNamespace(valid=True))
+    monkeypatch.setattr(
+        app_server.app.state, "runtime",
+        replace(app_server.app.state.runtime, protected_file_resolver=Resolver()),
+    )
+    response = client_for(_profile("reviewer")).get("/api/files/review/documents/42/original")
+    assert response.status_code == 200
+    assert response.headers["content-disposition"].startswith("attachment;")
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+
+def test_pending_preview_rejects_active_page_image_type(monkeypatch, client_for, tmp_path):
+    source = tmp_path / "page.svg"
+    source.write_text("<svg xmlns='http://www.w3.org/2000/svg'></svg>", encoding="utf-8")
+
+    class Resolver:
+        def resolve(self, _reference, _actor):
+            return AuthorizedFile(path=source)
+
+    monkeypatch.setattr(document_routes, "validate_publish_actor", lambda *_args: SimpleNamespace(valid=True))
+    monkeypatch.setattr(
+        app_server.app.state, "runtime",
+        replace(app_server.app.state.runtime, protected_file_resolver=Resolver()),
+    )
+    response = client_for(_profile("reviewer")).get("/api/files/review/documents/42/pages/1")
+    assert response.status_code == 415
+
+
 def test_chat_stream_serializes_incomplete_runner_error_after_visible_delta(
     monkeypatch, client_for
 ):
@@ -661,6 +881,8 @@ def test_chat_stream_serializes_incomplete_runner_error_after_visible_delta(
     )
 
     assert response.status_code == 200
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["x-accel-buffering"] == "no"
     events = _sse_events(response.text)
     assert [event for event, _payload in events] == ["thinking", "delta", "error"]
     assert events[-1][1] == {"message": "RAG stream ended without a done event"}

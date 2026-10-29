@@ -281,8 +281,8 @@ def test_bulk_review_reports_missing_identifiers_and_executes_scoped_delete_path
             calls.append(("delete-job", job_id))
 
     class Publication:
-        def resolve_latest_doc_id(self, _job_id):
-            return 42
+        def resolve_latest_doc_id(self, job_id):
+            return {6: 5, 8: 8}.get(job_id)
 
         def publish_document(self, _command, _actor):
             raise AssertionError("missing identifiers must fail before publication")
@@ -295,9 +295,18 @@ def test_bulk_review_reports_missing_identifiers_and_executes_scoped_delete_path
         publication=PublicationCoordinator(publication=Publication()),
     )
     monkeypatch.setattr(
+        document_routes,
+        "validate_publish_actor",
+        lambda *_args: SimpleNamespace(valid=True, issues=()),
+    )
+    monkeypatch.setattr(
         app_server.app.state,
         "runtime",
-        replace(app_server.app.state.runtime, review_documents=review_documents),
+        replace(
+            app_server.app.state.runtime,
+            review_documents=review_documents,
+            publication_port=Publication(),
+        ),
     )
 
     missing_publish = app_client.post(
@@ -326,9 +335,12 @@ def test_bulk_review_reports_missing_identifiers_and_executes_scoped_delete_path
         "updated": 1,
         "pending": 0,
         "failed": 1,
-        "failures": [],
+        "failures": [{"job_id": None, "doc_id": 4, "code": "missing_job_id", "error": "Thiếu JobID"}],
     }
-    assert deleted.json()["updated"] == 3
+    assert deleted.json() == {"ok": False, "updated": 2, "pending": 0, "failed": 1, "failures": [{"job_id": None, "doc_id": None, "code": "missing_ids", "error": "Thiếu DocID hoặc JobID"}]}
+    empty_deleted = app_client.post("/api/documents/review/bulk", json={"action": "delete", "items": [{}]})
+    assert empty_deleted.status_code == 200
+    assert empty_deleted.json() == {"ok": False, "updated": 0, "pending": 0, "failed": 1, "failures": [{"job_id": None, "doc_id": None, "code": "missing_ids", "error": "Thiếu DocID hoặc JobID"}]}
     assert calls == [
         ("reject-job", 6, "invalid"),
         ("reject-doc", 5),
@@ -385,7 +397,7 @@ def test_user_creation_and_password_contracts_preserve_repository_outcomes(
         "set_user_clearance",
         lambda *args: clearance_calls.append(args) or True,
     )
-    monkeypatch.setattr(operation_routes.ui_query_service, "update_user_password", lambda *_args: False)
+    monkeypatch.setattr(operation_routes.ui_query_service, "update_user_password", lambda *_args, **_kwargs: False)
 
     rejected = app_client.post(
         "/api/users", json={"username": "first", "password": "long-enough"}
@@ -419,6 +431,12 @@ def test_row_glossary_lifecycle_and_feedback_branches_remain_json_safe(
 ):
     glossary_results = iter([True, {"ok": True, "term": "BOM"}])
     lifecycle_buckets = []
+    audit_records = []
+    monkeypatch.setattr(
+        operation_routes.audit_service,
+        "write_audit_log",
+        lambda **record: audit_records.append(record),
+    )
     monkeypatch.setattr(
         operation_routes.ui_query_service,
         "list_users_basic",
@@ -462,6 +480,9 @@ def test_row_glossary_lifecycle_and_feedback_branches_remain_json_safe(
     ]
     assert primitive.json() == {"ok": True}
     assert mapping.json() == {"ok": True, "term": "BOM"}
+    assert [record["action"] for record in audit_records] == [
+        "glossary_upsert", "glossary_upsert", "feedback_classify"
+    ]
     assert lifecycle.status_code == 200
     assert lifecycle_buckets == ["expired", "expiring_soon", "needs_review"]
     assert feedback.json()["golden_hash"] is None

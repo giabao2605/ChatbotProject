@@ -2,7 +2,7 @@
 
 import hashlib
 
-from sqlalchemy import BigInteger, Column, Integer, MetaData, String, Table, select
+from sqlalchemy import BigInteger, Column, Integer, MetaData, String, Table, func, select
 
 
 class SqlSessionRevocations:
@@ -44,3 +44,30 @@ class SqlSessionRevocations:
         ).limit(1)
         with self.engine.connect() as connection:
             return connection.execute(statement).first() is not None
+
+
+    def user_generation(self, user_id):
+        key = self._hash(f"user-generation:{int(user_id)}")
+        statement = select(func.max(self.table.c.RevocationID)).where(
+            self.table.c.KeyHash == key,
+        )
+        with self.engine.connect() as connection:
+            return int(connection.execute(statement).scalar() or 0)
+
+    def revoke_user(self, user_id, *, connection=None):
+        if connection is None:
+            with self.engine.begin() as connection:
+                return self.revoke_user(user_id, connection=connection)
+        if connection.engine is not self.engine:
+            raise ValueError("Password reset and session store must use the same database")
+        key = self._hash(f"user-generation:{int(user_id)}")
+        # Epochs must survive TTL cleanup; only superseded epochs can be removed.
+        inserted = connection.execute(self.table.insert(), {
+            "KeyHash": key, "ExpiresAt": 9223372036854775807,
+        })
+        generation = int(inserted.inserted_primary_key[0])
+        connection.execute(self.table.delete().where(
+            self.table.c.KeyHash == key,
+            self.table.c.RevocationID < generation,
+        ))
+        return generation

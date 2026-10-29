@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, nextTick, onMounted, reactive, ref } from "vue";
 import ResourcePage from "@/components/ResourcePage.vue";
 import { apiGet, apiSend } from "@/api/client";
 import { pickStr, ROLES, SECURITY_LEVELS } from "@/utils/rows";
@@ -86,6 +86,7 @@ const sel = reactive({
 let originalRoles: string[] = [];
 let resolveDlg: (() => void) | null = null;
 let rejectDlg: ((e: unknown) => void) | null = null;
+let dialogTrigger: HTMLElement | null = null;
 
 const DIALOG_TITLES: Record<EditMode, string> = {
   create: "Tạo người dùng",
@@ -123,6 +124,7 @@ function resetSelections() {
 }
 
 function openCreate(): Promise<void> {
+  dialogTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   return new Promise((resolve, reject) => {
     resolveDlg = resolve;
     rejectDlg = reject;
@@ -142,6 +144,7 @@ function openCreate(): Promise<void> {
 }
 
 function openEdit(row: ApiRow, mode: Exclude<EditMode, "create">): Promise<void> {
+  dialogTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   return new Promise((resolve, reject) => {
     resolveDlg = resolve;
     rejectDlg = reject;
@@ -227,6 +230,12 @@ function cancel() {
   rejectDlg = null;
 }
 
+async function onDialogAfterHide() {
+  await nextTick();
+  dialogTrigger?.focus();
+  dialogTrigger = null;
+}
+
 const toolbar: ToolbarAction[] = [{ label: "Tạo người dùng", run: () => openCreate() }];
 
 const rowActions: RowAction[] = [
@@ -261,7 +270,7 @@ const rowActions: RowAction[] = [
     :row-actions="rowActions"
   />
 
-  <Dialog v-model:visible="dlg.visible" :header="dialogTitle" modal :style="{ width: '460px' }" @hide="cancel">
+  <Dialog v-model:visible="dlg.visible" :header="dialogTitle" modal :style="{ width: '460px' }" @hide="cancel" @after-hide="onDialogAfterHide">
     <div class="stack-form">
       <Message v-if="dlg.error" severity="error" v-text="dlg.error"></Message>
 

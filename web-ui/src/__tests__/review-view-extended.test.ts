@@ -149,6 +149,20 @@ describe("ReviewView public behavior", () => {
     expect(wrapper.text()).toContain("Tài liệu chưa có phạm vi dữ liệu để kiểm tra.");
     await expect(evidenceAction.run({ JobID: 2 })).rejects.toThrow("Chưa có tài liệu");
   });
+  it("opens the pending document metadata form from its review row", async () => {
+    const wrapper = await mountReview();
+    await action(wrapper, "Sửa metadata").run({ DocID: 144, JobID: 134 });
+    expect(router.push).toHaveBeenCalledWith({ path: "/documents", query: { tab: "effective", doc: 144 } });
+  });
+
+  it("opens assigned pending document preview from the review row", async () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    const wrapper = await mountReview();
+    await action(wrapper, "Xem trước").run({ DocID: 144, JobID: 134 });
+    expect(open).toHaveBeenCalledWith("/api/files/review/documents/144/pages/1", "_blank");
+    open.mockRestore();
+  });
+
   it("loads the review queues and presents normalized extraction evidence", async () => {
     bulkJobs = [{ JobID: 1 }];
     metadataDocs = [{ DocID: 10 }];
@@ -246,6 +260,18 @@ describe("ReviewView public behavior", () => {
     expect(incomplete.ExtractionSummary).toContain("điểm trích xuất 0.85");
     expect(incomplete.ExtractionSummary).not.toContain("đạt");
     expect(incomplete.QualityDetails).toContain("Metadata chưa đầy đủ");
+  });
+
+  it("shows Vietnamese quality labels and reason messages from the actual ingestion report", async () => {
+    pendingDocuments = [{ JobID: 1163, ExtractionReport: {
+      quality_policy_version: "balanced-v1",
+      quality_components: { extraction_coverage: 50, chunks: 20, metadata_classification: 0, domain_signal: 15 },
+      quality_reasons: [{ code: "metadata_incomplete", component: "metadata_classification", message: "Metadata hoặc phân loại chưa hoàn chỉnh." }],
+    } }];
+    const wrapper = await mountReview();
+    const rows = await contract(wrapper).load();
+    expect(rows[0].QualityDetails).toBe("Chính sách balanced-v1; Độ đầy đủ trích xuất: 50; Đoạn nội dung: 20; Metadata và phân loại: 0; Tín hiệu loại tài liệu: 15; Metadata hoặc phân loại chưa hoàn chỉnh.");
+    expect(rows[0].QualityDetails).not.toMatch(/extraction_coverage|metadata_classification|domain_signal|metadata_incomplete|\{"code"/);
   });
 
   it("publishes every supported document mode only after contract validation", async () => {
@@ -490,6 +516,52 @@ describe("ReviewView public behavior", () => {
     expect(api.apiGet).toHaveBeenCalledWith("/api/ingestion/bulk-action-jobs");
   });
 
+  it("associates mixed bulk failure IDs while keeping one POST and pruning selection", async () => {
+    bulkJobs = [
+      { JobID: 1, DocID: 10, Status: "pending_review", TenFile: "one.md" },
+      { JobID: 2, DocID: null, Status: "failed", TenFile: "two.pdf" },
+    ];
+    const wrapper = await mountReview();
+    await field(wrapper, "one.md", 'input[type="checkbox"]').setValue(true);
+    await field(wrapper, "two.pdf", 'input[type="checkbox"]').setValue(true);
+    vi.mocked(api.apiSend).mockResolvedValueOnce({ updated: 1, failed: 1, failures: [{ job_id: 2, doc_id: null, error: "Thiếu DocID hoặc JobID" }] } as never);
+    bulkJobs = [{ JobID: 2, DocID: null, Status: "failed", TenFile: "two.pdf" }];
+    await button(wrapper, "Publish đã chọn").trigger("click");
+    await flushPromises();
+    expect(api.apiSend).toHaveBeenCalledTimes(1);
+    expect(api.apiSend).toHaveBeenCalledWith("/api/documents/review/bulk", "POST", {
+      items: [{ job_id: 1, doc_id: 10 }, { job_id: 2, doc_id: null }], action: "publish", publish_mode: "standalone", reason: "",
+    });
+    expect(wrapper.text()).toContain("Hoàn tất: 1 thành công, 1 thất bại");
+    expect(wrapper.text()).toContain("JobID 2: Thiếu DocID hoặc JobID");
+    const checked = wrapper.findAll('input[type="checkbox"]').filter(input => (input.element as HTMLInputElement).checked);
+    expect(checked).toHaveLength(1);
+    expect(checked[0]!.attributes("value")).toBe("2");
+  });
+
+  it("shows each bulk validation issue with available IDs and preserves legacy messages", async () => {
+    bulkJobs = [{ JobID: 1, DocID: 10, Status: "pending_review", TenFile: "one.md" }];
+    const wrapper = await mountReview();
+    await field(wrapper, "one.md", 'input[type="checkbox"]').setValue(true);
+    vi.mocked(api.apiSend).mockResolvedValueOnce({ updated: 0, failed: 4, failures: [
+      { job_id: 1, doc_id: 10, validation: { issues: [{ message: "Thiếu title" }, {}, { message: "Thiếu owner" }] } },
+      { doc_id: 20, error: "Sai phiên bản" }, { error: "Legacy error" }, {},
+    ] } as never);
+    await button(wrapper, "Publish đã chọn").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("JobID 1 / DocID 10: Thiếu title; JobID 1 / DocID 10: Thiếu owner; DocID 20: Sai phiên bản; Legacy error; Publish thất bại");
+  });
+
+  it.each([["Reject đã chọn", "Reject thất bại"], ["Xóa đã chọn", "Xóa thất bại"]])("uses action appropriate fallback for %s", async (label, error) => {
+    bulkJobs = [{ JobID: 1, DocID: 10, Status: "pending_review", TenFile: "one.md" }];
+    const wrapper = await mountReview();
+    await field(wrapper, "one.md", 'input[type="checkbox"]').setValue(true);
+    vi.mocked(api.apiSend).mockResolvedValueOnce({ updated: 0, failed: 1, failures: [{ job_id: 1, doc_id: 10 }] } as never);
+    await button(wrapper, label).trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain(`JobID 1 / DocID 10: ${error}`);
+  });
+
   it("recovers bulk actions from Error and opaque failures and prunes stale selection", async () => {
     bulkJobs = [{ JobID: 5, DocID: 15, Status: "ready", TenFile: "five.pdf" }];
     const wrapper = await mountReview();
@@ -560,7 +632,6 @@ describe("ReviewView public behavior", () => {
           owner_signer: "QA lead",
           effective_status: "active",
           language: "vi",
-          domain: "mechanical",
         },
       },
     );

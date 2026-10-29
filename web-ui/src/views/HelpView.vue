@@ -15,36 +15,10 @@ import { t } from "@/i18n";
     <Card>
       <template #content>
         <div class="help-body">
-          <h3>1. Chat &amp; trích dẫn</h3>
-          <p>
-            Đặt câu hỏi ở trang Chat. Câu trả lời kèm trích dẫn tài liệu; bấm vào trích dẫn để mở đúng trang PDF gốc.
-            Bạn có thể gửi kèm ảnh để hỏi theo hình.
-          </p>
-          <h3>2. Tải &amp; ingest tài liệu</h3>
-          <p>
-            Vào <strong>Tải tài liệu</strong> để tải file (PDF, DOCX, XLSX…), chọn phòng ban và mức mật. Hệ thống tạo
-            job ingest; theo dõi tiến độ ở <strong>Tiến trình ingest</strong> (huỷ, xếp lại, ưu tiên, xoá).
-          </p>
-          <h3>3. Duyệt &amp; xuất bản</h3>
-          <p>
-            Người có capability <strong>reviewer</strong> (gồm <code>reviewer</code>, <code>knowledge_approver</code> hoặc
-            legacy <code>admin</code>) vào <strong>Duyệt tài liệu</strong> để xuất bản phiên bản mới / variant / độc lập,
-            từ chối hoặc lưu trữ.
-          </p>
-          <h3>4. Phân quyền</h3>
-          <p>
-            Người dùng đã đăng nhập gửi <strong>Yêu cầu quyền</strong> (nâng mức mật / thêm phòng ban). Capability
-            <strong>security_admin</strong> quản lý tài khoản, vai trò, phòng ban, site ở trang <strong>Người dùng</strong>
-            và duyệt yêu cầu quyền.
-          </p>
-          <h3>5. Chất lượng &amp; theo dõi</h3>
-          <p>
-            <strong>reviewer</strong> (hoặc legacy <code>admin</code>) dùng Feedback, Regression, Chất lượng và Báo cáo
-            sử dụng. <strong>platform_admin</strong> dùng Observability, Audit Log, Settings và danh mục tổ chức. Điểm
-            Chất lượng là DocQualityScore từ feedback, không phải điểm extraction.
-          </p>
-          <h3>6. Ngôn ngữ</h3>
-          <p>Chuyển Việt/Anh bằng nút ngôn ngữ trên thanh điều hướng; lựa chọn được lưu theo tài khoản.</p>
+          <template v-for="step in 6" :key="step">
+            <h3 v-text="t(`help.step${step}.title`)"></h3>
+            <p v-text="t(`help.step${step}.body`)"></p>
+          </template>
         </div>
       </template>
     </Card>

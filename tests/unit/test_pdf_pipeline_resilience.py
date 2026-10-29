@@ -10,6 +10,76 @@ from tests.unit import test_pdf_pipeline_characterization as characterization
 pytestmark = pytest.mark.unit
 
 
+def test_vector_cleanup_with_document_id_never_deletes_another_version_by_filename():
+    calls = []
+
+    class Client:
+        def delete(self, **kwargs):
+            calls.append(kwargs["points_selector"])
+
+    pipeline._delete_vectors_for_file(
+        "same-name.pdf", "QA_B", doc_id=170,
+        dependencies=characterization._dependencies(Client()),
+    )
+
+    assert len(calls) == 1
+    condition = calls[0].must[0]
+    assert condition.key == "metadata.doc_id"
+    assert condition.match.value == 170
+
+
+def test_scan_page_uses_local_ocr_text_as_source():
+    token = object()
+
+    class Page:
+        def get_text(self, mode="text", *, textpage=None):
+            return "QA-20260922-PDF-002 Torque 109 N.m Hold 111 minutes" if textpage is token else ""
+
+        def get_textpage_ocr(self, **kwargs):
+            assert kwargs["language"] == "eng+vie"
+            return token
+
+    text, scanned = pipeline._read_pdf_page_text(Page(), dpi=200)
+
+    assert scanned is True
+    assert "Torque 109 N.m" in text
+
+
+def test_scan_page_with_unavailable_ocr_returns_no_verified_text():
+    class Page:
+        def get_text(self, mode="text", *, textpage=None):
+            return ""
+
+        def get_textpage_ocr(self, **_kwargs):
+            raise RuntimeError("OCR unavailable")
+
+    assert pipeline._read_pdf_page_text(Page(), dpi=200) == ("", True)
+
+
+def test_short_verified_scan_ocr_counts_as_extracted_pages(tmp_path, monkeypatch):
+    pdf_document = characterization._PdfDocument(["", ""])
+    plumber_document = characterization._PlumberDocument([[], []])
+    captured, _qdrant = characterization._install_common_boundaries(monkeypatch, tmp_path)
+    values = iter((
+        "QA-20260922-PDF-002 Page 1 Torque 109 N.m Hold 111 minutes",
+        "QA-20260922-PDF-002 Page 2 Torque 112 N.m Hold 114 minutes",
+    ))
+    monkeypatch.setattr(pipeline.fitz, "open", lambda _path: pdf_document)
+    monkeypatch.setattr(pipeline.pdfplumber, "open", lambda _path: plumber_document)
+    monkeypatch.setattr(pipeline, "_read_pdf_page_text", lambda _page, **_kwargs: (next(values), True))
+
+    report = pipeline.process_and_ingest_pdf(
+        str(tmp_path / "short-scan.pdf"), "short-scan.pdf", "QA_B",
+        domain_override="generic", security_override="internal", site_override="QA_B",
+        dependencies=captured["dependencies"],
+    )
+
+    assert report["status"] == "success"
+    assert report["pages_text_extracted"] == [1, 2]
+    assert report["quality_status"] != "blocked"
+    assert [page["page_no"] for page in captured["pages"]] == [1, 2]
+
+
 def test_pdf_governance_lookup_failure_blocks_external_processing(
     tmp_path, monkeypatch,
 ):
@@ -48,6 +118,7 @@ def test_pdf_governance_lookup_failure_blocks_external_processing(
 
 def test_supported_file_missing_document_id_blocks_external_processing(monkeypatch):
     external_calls = []
+    destructive_calls = []
 
     monkeypatch.setattr(
         pipeline, "reset_document_metadata", lambda *_a, **_k: None,
@@ -62,9 +133,9 @@ def test_supported_file_missing_document_id_blocks_external_processing(monkeypat
         "extract_text_from_supported_file",
         lambda *_a, **_k: external_calls.append("reader") or ("content", "text"),
     )
-    monkeypatch.setattr(pipeline, "_delete_vectors_for_file", lambda *_a, **_k: None)
-    monkeypatch.setattr(pipeline, "mark_document_ingest_failed", lambda *_a, **_k: None)
-    monkeypatch.setattr(pipeline, "restore_document_children", lambda *_a, **_k: None)
+    monkeypatch.setattr(pipeline, "_delete_vectors_for_file", lambda *_a, **_k: destructive_calls.append("vectors"))
+    monkeypatch.setattr(pipeline, "mark_document_ingest_failed", lambda *_a, **_k: destructive_calls.append("document"))
+    monkeypatch.setattr(pipeline, "restore_document_children", lambda *_a, **_k: destructive_calls.append("children"))
 
     dependencies = characterization._dependencies()
     report = pipeline.process_and_ingest_file(
@@ -82,6 +153,7 @@ def test_supported_file_missing_document_id_blocks_external_processing(monkeypat
     assert report["quality_status"] == "blocked"
     assert "Khong tao duoc document identity" in report["message"]
     assert external_calls == []
+    assert destructive_calls == []
 
 
 def test_published_duplicate_does_not_start_destructive_rollback(tmp_path, monkeypatch):
@@ -271,13 +343,19 @@ def test_pdf_page_failure_does_not_prevent_later_pages_from_being_ingested(
     assert plumber_document.closed is True
 
 
-def test_pdf_open_and_rollback_failures_are_reported_without_escaping(monkeypatch):
+def test_pdf_open_failure_skips_rollback_without_document_id(monkeypatch):
     monkeypatch.setattr(
         pipeline.fitz,
         "open",
         lambda _path: (_ for _ in ()).throw(OSError("invalid pdf")),
     )
     monkeypatch.setattr(pipeline, "ROLLBACK_ON_INGEST_ERROR", True)
+    monkeypatch.setattr(
+        pipeline,
+        "_delete_vectors_for_file",
+        lambda *_args, **_kwargs: pytest.fail("must not delete vectors without document id"),
+    )
+
     report = pipeline.process_and_ingest_pdf(
         "invalid.pdf",
         "invalid.pdf",
@@ -293,6 +371,7 @@ def test_pdf_open_and_rollback_failures_are_reported_without_escaping(monkeypatc
     assert report["quality_hard_blocked"] is True
     assert "invalid pdf" in report["message"]
     assert any("khong co DocID" in item for item in report["warnings"])
+    assert not any("Rollback vector/metadata" in item for item in report["warnings"])
 
 
 def test_new_document_with_doc_id_reports_vector_rollback_failure(

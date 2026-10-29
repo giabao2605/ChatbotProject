@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 from mech_chatbot.adapters.chat_runtime import (
@@ -149,6 +150,7 @@ class AppRuntime:
     strict_site_filter: bool
     math_v2_authorizer: Any = None
     graph_v2_authorizer: Any = None
+    db_engine: Any = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,6 +210,7 @@ def build_app_runtime(
     strict_site_filter: bool = True,
     math_v2_authorizer: Any = None,
     graph_v2_authorizer: Any = None,
+    db_engine: Any = None,
 ) -> AppRuntime:
     """Build an immutable app runtime from explicitly supplied adapters."""
     runner = ChatTurnRunner(
@@ -244,6 +247,7 @@ def build_app_runtime(
         strict_site_filter=bool(strict_site_filter),
         math_v2_authorizer=math_v2_authorizer,
         graph_v2_authorizer=graph_v2_authorizer,
+        db_engine=db_engine,
     )
 
 
@@ -327,7 +331,7 @@ def _build_protected_file_resolver(
 ) -> ProtectedFileResolver | None:
     if raw_root is None:
         return None
-    root = raw_root()
+    root = Path(raw_root())
     return ProtectedFileResolver(
         store=SqlProtectedFileStore(
             engine_provider=lambda: engine() if callable(engine) else engine
@@ -336,6 +340,10 @@ def _build_protected_file_resolver(
             project_root=root.parent.parent,
             raw_root=root,
             processed_root=root.parent / "processed",
+            additional_processed_roots=(
+                root.parent.parent / "src" / "data" / "processed",
+                root.resolve().parent.parent / "src" / "data" / "processed",
+            ),
         ),
         audit=RepositoryProtectedFileAuditSink(
             write_audit_log=write_audit_log
@@ -396,6 +404,7 @@ def build_default_app_runtime(
         strict_site_filter=strict_site_filter,
         math_v2_authorizer=math_v2_authorizer,
         graph_v2_authorizer=graph_v2_authorizer,
+        db_engine=engine,
     )
 
 

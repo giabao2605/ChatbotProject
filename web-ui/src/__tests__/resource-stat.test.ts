@@ -345,6 +345,7 @@ describe("ResourcePage public behavior", () => {
       rowActions: [
         { label: "Run row", confirm: "Sure?", run: runRow },
         { label: "Fail row", run: failRow },
+        { label: "Blocked", run: vi.fn().mockResolvedValue({ ok: false, result: { message: "Không thể vô hiệu hóa" } }) },
         { label: "Always", run: vi.fn().mockResolvedValue(undefined) },
         { label: "Hidden", visible: () => false, run: vi.fn() },
       ],
@@ -371,6 +372,12 @@ describe("ResourcePage public behavior", () => {
     await flushPromises();
     expect(wrapper.text()).toContain("row failed");
 
+    await button(wrapper, "Blocked").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Không thể vô hiệu hóa");
+    expect(wrapper.text()).not.toContain("Thành công");
+    expect(load).toHaveBeenCalledTimes(2);
+
     confirm.mockReturnValue(false);
     await button(wrapper, "Run toolbar").trigger("click");
     expect(runToolbar).not.toHaveBeenCalled();
@@ -383,6 +390,63 @@ describe("ResourcePage public behavior", () => {
     await button(wrapper, "Fail toolbar").trigger("click");
     await flushPromises();
     expect(wrapper.text()).toContain("Đã xảy ra lỗi");
+  });
+
+  it.each([
+    ["success", "body"],
+    ["cancel", "body"],
+    ["success", "another input"],
+    ["cancel", "another input"],
+    ["success", "detached opener"],
+    ["cancel", "detached opener"],
+  ] as const)("restores %s action focus safely when focus is on %s", async (outcome, destination) => {
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve, reject) => {
+      finish = outcome === "success" ? resolve : () => reject(new Error(""));
+    });
+    const run = vi.fn(() => pending);
+    const host = document.createElement("div");
+    const input = document.createElement("input");
+    document.body.append(host, input);
+    const wrapper = mount(ResourcePage, {
+      attachTo: host,
+      global,
+      props: {
+        title: "Actions",
+        load: vi.fn().mockResolvedValue([{ id: 7 }]),
+        toolbar: outcome === "success" ? [{ label: "Open", run }] : [],
+        rowActions: outcome === "cancel" ? [{ label: "Open", run }] : [],
+      },
+    });
+    try {
+      await flushPromises();
+      const opener = button(wrapper, "Open").element as HTMLButtonElement;
+      opener.focus();
+      const focus = vi.spyOn(opener, "focus");
+      await button(wrapper, "Open").trigger("click");
+      expect(opener.disabled).toBe(true);
+      input.focus();
+      if (destination !== "another input") input.remove();
+      if (destination === "detached opener") wrapper.unmount();
+      finish();
+      await flushPromises();
+      if (destination === "detached opener") {
+        expect(opener.isConnected).toBe(false);
+      } else {
+        expect(opener.disabled).toBe(false);
+      }
+      if (destination === "body") {
+        expect(document.activeElement).toBe(opener);
+        expect(focus).toHaveBeenCalledOnce();
+      } else {
+        expect(document.activeElement).toBe(destination === "another input" ? input : document.body);
+        expect(focus).not.toHaveBeenCalled();
+      }
+    } finally {
+      if (destination !== "detached opener") wrapper.unmount();
+      host.remove();
+      input.remove();
+    }
   });
 
   it("opens, cancels, submits, and reports errors from the create form", async () => {
@@ -441,6 +505,7 @@ describe("ResourcePage public behavior", () => {
 
     submit.mockRejectedValueOnce(new Error("duplicate machine"));
     await button(wrapper, "Add machine").trigger("click");
+    await wrapper.find('input[type="text"]').setValue("Lathe");
     await wrapper.find("form").trigger("submit");
     await flushPromises();
     expect(wrapper.find(".dialog").exists()).toBe(true);
@@ -451,9 +516,72 @@ describe("ResourcePage public behavior", () => {
     await flushPromises();
     expect(wrapper.text()).toContain("Đã xảy ra lỗi");
   });
+
+  it("blocks missing required values and reports rejected create responses", async () => {
+    const submit = vi.fn().mockResolvedValueOnce({ ok: false });
+    const wrapper = mountResource({
+      title: "Machines",
+      load: vi.fn().mockResolvedValue([]),
+      createForm: {
+        triggerLabel: "Add machine",
+        fields: [
+          { key: "name", label: "Name", required: true },
+          { key: "count", label: "Count", type: "number", required: true },
+          { key: "notes", label: "Notes", type: "textarea", required: true },
+          { key: "site", label: "Site", type: "select", required: true, options: [{ label: "A", value: "A" }] },
+        ],
+        submit,
+      },
+    });
+    await flushPromises();
+    await button(wrapper, "Add machine").trigger("click");
+    await wrapper.find("form").trigger("submit");
+    expect(submit).not.toHaveBeenCalled();
+    expect(wrapper.find(".dialog .message").text()).toContain("Name");
+    expect(wrapper.find('.dialog input[type="text"]').attributes()).toHaveProperty("required");
+
+    await wrapper.find('input[type="text"]').setValue("  Machine  ");
+    await wrapper.find("form").trigger("submit");
+    expect(submit).not.toHaveBeenCalled();
+    expect(wrapper.find(".dialog .message").text()).toContain("Count");
+    await wrapper.find('input[type="number"]').setValue("0");
+    await wrapper.find("form").trigger("submit");
+    expect(submit).not.toHaveBeenCalled();
+    expect(wrapper.find(".dialog .message").text()).toContain("Notes");
+    await wrapper.find("textarea").setValue("Details");
+    await wrapper.find("form").trigger("submit");
+    expect(submit).not.toHaveBeenCalled();
+    expect(wrapper.find(".dialog .message").text()).toContain("Site");
+    await wrapper.find("select").setValue("A");
+    await wrapper.find("form").trigger("submit");
+    await flushPromises();
+    expect(submit).toHaveBeenCalledOnce();
+    expect(wrapper.find(".dialog").exists()).toBe(true);
+    expect(wrapper.text()).not.toContain("Thành công");
+    expect(wrapper.find(".dialog").text()).toContain("Không lưu được");
+  });
 });
 
 describe("StatView public behavior", () => {
+  it("labels report metrics in Vietnamese while preserving values, unknown keys, and English", async () => {
+    const load = vi.fn().mockResolvedValue({ total_questions: 7, hit_rate: 0.5, vendor_metric: 11, daily: [{ date: "2026-10-05", count: 3 }] });
+    const wrapper = mountStat({ title: "Metrics", load });
+    await flushPromises();
+    expect(wrapper.text()).toContain("Tổng câu hỏi");
+    expect(wrapper.text()).toContain("Tỷ lệ trúng cache");
+    expect(wrapper.text()).toContain("Theo ngày");
+    expect(wrapper.findAll("th").map(item => item.text())).toEqual(["Ngày", "Số lượng"]);
+    expect(wrapper.text()).toContain("vendor_metric");
+    expect(wrapper.text()).toContain("0.5");
+    expect(wrapper.text()).toContain("2026-10-05");
+    setLocale("en");
+    await nextTick();
+    expect(wrapper.text()).toContain("total_questions");
+    expect(wrapper.findAll("th").map(item => item.text())).toEqual(["date", "count"]);
+    expect(load).toHaveBeenCalledOnce();
+    wrapper.unmount();
+  });
+
   it("renders scalars, numeric bars, object tables, and inline metrics", async () => {
     const wrapper = mountStat({
       title: "Metrics",
@@ -478,7 +606,7 @@ describe("StatView public behavior", () => {
 
     expect(wrapper.text()).toContain("Operations");
     expect(wrapper.text()).toContain("Runtime statistics");
-    expect(wrapper.text()).toContain("count");
+    expect(wrapper.text()).toContain("Số lượng");
     expect(wrapper.text()).toContain("3");
     expect(wrapper.text()).toContain("ratio");
     expect(wrapper.text()).toContain("1.23");

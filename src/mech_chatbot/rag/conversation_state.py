@@ -46,6 +46,34 @@ def is_enabled(value: bool = False):
     return bool(value)
 
 
+_REFERENT_PHRASE = re.compile(
+    r"\b(?:bien the|phien ban|model|tai lieu|san pham|ban ve) (?:do|ay|nay|kia)\b"
+    r"|\b(?:that|this) (?:variant|version|model|document|product|drawing)\b"
+)
+
+
+def has_missing_referent(question):
+    """Recognize an unnamed entity reference, without guessing from retrieved docs."""
+    text = str(question or "")
+    if has_explicit_code(text):
+        return False
+    normalized = _norm_text(text)
+    case_text = re.sub(r"\s+", " ", _strip_accents(text)).strip()
+    for match in _REFERENT_PHRASE.finditer(normalized):
+        # An attached explicit name/code makes the question self-contained.
+        tail = normalized[match.end():]
+        if re.match(r'''\s+(?:cua|of|for)\s+["“'][^"”']{2,}["”']''', tail):
+            continue
+        suffix = re.match(r"\s+(?:cua|of|for)\s+([\w-]+)", tail)
+        if suffix:
+            name = suffix.group(1)
+            name_start = match.end() + suffix.start(1)
+            if case_text[name_start].isupper() or "_" in name:
+                continue
+        return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Candidate helpers
 # ---------------------------------------------------------------------------

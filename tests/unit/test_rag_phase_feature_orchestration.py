@@ -1929,6 +1929,64 @@ def test_exact_code_miss_returns_a_typed_terminal(monkeypatch, blocked, expected
     assert event_names.index("retrieval") < event_names.index("rag_end")
 
 
+@pytest.mark.parametrize(
+    ("include_gamma", "initial_beta"),
+    [(False, False), (True, False), (True, True)],
+)
+def test_exact_code_miss_requires_accessible_content_for_every_code(
+    monkeypatch, include_gamma, initial_beta,
+):
+    from mech_chatbot.rag.phases import retrieval_enrichment as enrichment_phase
+    from mech_chatbot.rag.phases.contracts import PhaseTerminal
+
+    request = _prepared_request(question="So sánh QA-BETA-01 và QA-GAMMA-01")
+    decision = _route_decision(request, part_ids=("QA-BETA-01", "QA-GAMMA-01"))
+    primary = PrimaryRetrievalOutcome(
+        documents=(), base_k=5, retrieval_mode="hybrid", started_at=time.time(),
+        active_filter=None, has_active_filter=False, decomposition_notice="",
+        decomposition_states=(), decomposition_branches=(), decomposition_intents=(),
+        decomposition_intent_coverage=(), decomposition_used_fallback=False,
+        decomposition_intent_overflow=False, auxiliary_input_tokens=0,
+        auxiliary_output_tokens=0, planner_estimated_cost=0.0,
+        correction_estimated_cost=0.0,
+    )
+    beta = Document(page_content="QA-BETA-01 torque 61 N.m", metadata={"doc_id": 1150})
+    gamma = Document(page_content="QA-GAMMA-01 torque 67 N.m", metadata={"doc_id": 1151})
+    if initial_beta:
+        primary = replace(primary, documents=(beta,))
+    unrelated = Document(page_content="QA-GAMMA-010 unrelated code", metadata={"doc_id": 1200})
+    documents = [beta, unrelated] + ([gamma] if include_gamma else [])
+    calls = []
+    vectorstore = SimpleNamespace(as_retriever=lambda **kwargs: (
+        calls.append(kwargs) or SimpleNamespace(invoke=lambda _query: documents)
+    ))
+    allowed_filter = SimpleNamespace(kind="current_published_rbac")
+    monkeypatch.setattr(
+        "mech_chatbot.rag.community_summaries.load_community_context",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            documents=(), used=False, summary_count=0, reason="disabled"
+        ),
+    )
+    monkeypatch.setattr(enrichment_phase, "current_published_filter", lambda _rbac: allowed_filter)
+    monkeypatch.setattr(enrichment_phase, "probe_restricted_access", lambda *_args, **_kwargs: (False, None))
+    monkeypatch.setattr(enrichment_phase, "_disambiguate", lambda **kwargs: (None, kwargs["retrieved_docs"]))
+    outcome = _run_phase(
+        lambda state: enrichment_phase.enrich_retrieval(decision, primary, state),
+        retrieval=_retrieval_adapter(vectorstore=vectorstore),
+        provider=SimpleNamespace(invoke=lambda *_args, **_kwargs: None),
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["search_kwargs"]["filter"] is allowed_filter
+    if include_gamma:
+        assert outcome.documents == (beta, gamma)
+        assert outcome.new_part_ids == ()
+        assert outcome.retrieval_mode == "content_code_after_exact_miss"
+    else:
+        assert isinstance(outcome, PhaseTerminal)
+        assert outcome.reason_code == "no_docs_for_exact_code"
+
+
 def test_inherited_code_miss_falls_back_to_general_retrieval(monkeypatch):
     from mech_chatbot.rag.phases import retrieval_enrichment as enrichment_phase
 

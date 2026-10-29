@@ -53,6 +53,7 @@ def reset_document_metadata(
     db_engine=None,
     snapshot_store=None,
     classification_model=None,
+    source_file_path=None,
 ):
     """Fix #1: GOI MOT LAN truoc khi nap file. Xoa metadata cu, tra ve DocID dung chung.
 
@@ -69,6 +70,8 @@ def reset_document_metadata(
                 if classification_model is not None
                 else {}
             )
+            if source_file_path is not None:
+                create_kwargs["source_file_path"] = source_file_path
             doc_id = _r_document._get_or_create_doc(
                 conn,
                 file_name,
@@ -88,7 +91,7 @@ def reset_document_metadata(
             return doc_id
     except Exception as e:
         logger.error(f"Loi reset metadata {file_name}: {e}", exc_info=True)
-        if isinstance(e, ValueError) and "published" in str(e):
+        if isinstance(e, ValueError):
             raise e
         return None
 

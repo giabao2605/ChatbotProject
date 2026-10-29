@@ -95,6 +95,17 @@ class SqlProtectedFileStore:
             department_knowledge_approver_user_id=_optional_user_id(row, 17),
         )
 
+    def has_page(self, doc_id: int, page_no: int) -> bool:
+        engine = self._engine_provider()
+        if engine is None:
+            raise RuntimeError("database unavailable")
+        with evidence_read_connection(engine) as connection:
+            row = connection.execute(
+                text("SELECT TOP 1 PageNo FROM dbo.DocumentPages WHERE DocID = :doc_id AND PageNo = :page_no"),
+                {"doc_id": int(doc_id), "page_no": int(page_no)},
+            ).fetchone()
+        return row is not None
+
     def load_page_image(self, doc_id: int, page_no: int) -> str | None:
         engine = self._engine_provider()
         if engine is None:
@@ -159,10 +170,12 @@ class FilesystemProtectedFileStorage:
         project_root: Path,
         raw_root: Path,
         processed_root: Path,
+        additional_processed_roots: Iterable[Path] = (),
     ) -> None:
         self._project_root = Path(project_root)
         self._raw_root = Path(raw_root)
         self._processed_root = Path(processed_root)
+        self._processed_roots = (self._processed_root, *(Path(root) for root in additional_processed_roots))
 
     @property
     def project_root(self) -> Path:
@@ -201,7 +214,7 @@ class FilesystemProtectedFileStorage:
     def resolve_page_image(self, stored_path: str | None, *, allow_fallback: bool = True) -> Path | None:
         # Earlier ingestion wrote exact SQL image paths under src/data/processed.
         legacy_root = self._project_root / "src" / "data" / "processed"
-        resolved = self.resolve_under_root(stored_path, (self._processed_root, legacy_root))
+        resolved = self.resolve_under_root(stored_path, (*self._processed_roots, legacy_root))
         if resolved is not None and resolved.exists() and resolved.is_file():
             return resolved
         if not allow_fallback:

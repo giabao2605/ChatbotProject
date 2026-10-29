@@ -268,7 +268,7 @@ def test_mark_job_waiting_quota_swallows_database_failure(monkeypatch):
 
 
 def test_set_job_priority_converts_value_and_fails_closed(monkeypatch):
-    engine = _Engine([_Result()])
+    engine = _Engine([_Result(rowcount=1)])
     monkeypatch.setattr(jobs, "engine", engine)
     assert jobs.set_job_priority(5, "10") is True
     assert engine.connection.calls[0][1] == {"p": 10, "id": 5}
@@ -293,7 +293,7 @@ def test_cancel_job_fails_closed(monkeypatch):
 
 
 def test_requeue_job_resets_job_and_fails_closed(monkeypatch):
-    engine = _Engine([_Result()])
+    engine = _Engine([_Result(rowcount=1)])
     monkeypatch.setattr(jobs, "engine", engine)
     assert jobs.requeue_job(8) is True
     assert engine.connection.calls[0][1] == {"id": 8}

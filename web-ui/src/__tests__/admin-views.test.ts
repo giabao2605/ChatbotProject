@@ -1,7 +1,14 @@
-import { defineComponent, h, type PropType } from "vue";
+import { defineComponent, h, nextTick, watch, type PropType } from "vue";
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import PrimeVue from "primevue/config";
+import Button from "primevue/button";
+import Column from "primevue/column";
+import DataTable from "primevue/datatable";
+import Dialog from "primevue/dialog";
+import ResourcePage from "@/components/ResourcePage.vue";
 import OrgView from "@/views/OrgView.vue";
+import MaterialsView from "@/views/MaterialsView.vue";
 import SettingsView from "@/views/SettingsView.vue";
 import * as api from "@/api/client";
 import type {
@@ -91,8 +98,14 @@ const DialogStub = defineComponent({
     visible: Boolean,
     header: { type: String, default: "" },
   },
-  emits: ["update:visible", "hide"],
-  setup(props, { slots }) {
+  emits: ["update:visible", "hide", "after-hide"],
+  setup(props, { slots, emit }) {
+    watch(() => props.visible, async (visible, wasVisible) => {
+      if (wasVisible && !visible) {
+        await nextTick();
+        emit("after-hide");
+      }
+    });
     return () =>
       props.visible
         ? h("div", { class: "dialog", "data-header": props.header }, [
@@ -472,6 +485,7 @@ describe("OrgView public ResourcePage contracts", () => {
     mockGet(defaultOrgRoutes());
     const wrapper = mount(OrgView, { global });
     await flushPromises();
+    await resource(wrapper, "Phòng ban").load();
     const actions = resource(wrapper, "Phòng ban").rowActions!;
     const changeStatus = actions.find(
       (action) => action.label === "Đổi trạng thái",
@@ -486,6 +500,7 @@ describe("OrgView public ResourcePage contracts", () => {
       "Đổi trạng thái — ENG",
     );
     await wrapper.find(".dialog select").setValue("active");
+    vi.mocked(api.apiSend).mockResolvedValueOnce({ ok: true });
     await button(wrapper, "Lưu").trigger("click");
     await statusDone;
     expect(api.apiSend).toHaveBeenCalledWith(
@@ -497,6 +512,19 @@ describe("OrgView public ResourcePage contracts", () => {
 
     const statusRetry = changeStatus.run({ MaPhong: "HR", Status: "" });
     await flushPromises();
+    vi.mocked(api.apiSend).mockResolvedValueOnce({
+      ok: false,
+      message: "Không thể đổi trạng thái.",
+    });
+    await button(wrapper, "Lưu").trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".dialog").exists()).toBe(true);
+    expect(wrapper.text()).toContain("Không thể đổi trạng thái.");
+    vi.mocked(api.apiSend).mockResolvedValueOnce({});
+    await button(wrapper, "Lưu").trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".dialog").exists()).toBe(true);
+    expect(wrapper.text()).toContain("Đổi trạng thái phòng ban thất bại.");
     vi.mocked(api.apiSend).mockRejectedValueOnce(new Error("status offline"));
     await button(wrapper, "Lưu").trigger("click");
     await flushPromises();
@@ -505,7 +533,7 @@ describe("OrgView public ResourcePage contracts", () => {
     await button(wrapper, "Lưu").trigger("click");
     await flushPromises();
     expect(wrapper.text()).toContain("Lỗi");
-    vi.mocked(api.apiSend).mockResolvedValueOnce({});
+    vi.mocked(api.apiSend).mockResolvedValueOnce({ ok: true });
     await button(wrapper, "Lưu").trigger("click");
     await statusRetry;
 
@@ -523,6 +551,15 @@ describe("OrgView public ResourcePage contracts", () => {
     expect(wrapper.text()).toContain("Chọn phòng ban đích.");
     await wrapper.find(".dialog select").setValue("HR");
     await wrapper.find('.dialog input[type="checkbox"]').setValue(false);
+    vi.mocked(api.apiSend).mockResolvedValueOnce({
+      ok: false,
+      message: "Không thể chuyển phòng ban.",
+    });
+    await button(wrapper, "Lưu").trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".dialog").exists()).toBe(true);
+    expect(wrapper.text()).toContain("Không thể chuyển phòng ban.");
+    vi.mocked(api.apiSend).mockResolvedValueOnce({ ok: true });
     await button(wrapper, "Lưu").trigger("click");
     await reassignDone;
     expect(api.apiSend).toHaveBeenCalledWith(
@@ -543,7 +580,104 @@ describe("OrgView public ResourcePage contracts", () => {
     expect(wrapper.find(".dialog").exists()).toBe(false);
   });
 
-  it("keeps optional catalogs empty when the department preload fails", async () => {
+  it("updates transfer targets from the refreshed department list after creation", async () => {
+    const routes = defaultOrgRoutes();
+    mockGet(routes);
+    const wrapper = mount(OrgView, { global });
+    try {
+      await flushPromises();
+      const departments = resource(wrapper, "Phòng ban");
+      await departments.load();
+      vi.mocked(api.apiSend).mockResolvedValueOnce({ ok: true });
+      await departments.createForm!.submit({ code: "QA", name: "Quality" });
+      mockGet({
+        ...routes,
+        "/api/catalog/departments": {
+          departments: [
+            { code: "ENG", name: "Engineering" },
+            { DeptCode: "HR", DeptName: "" },
+            { code: "QA", name: "Quality" },
+          ],
+        },
+      });
+      const refreshed = await departments.load();
+      expect(refreshed).toContainEqual({ code: "QA", name: "Quality" });
+      const reassign = departments.rowActions!.find((item) => item.label === "Chuyển dữ liệu")!;
+      const cancelled = reassign.run({ code: "ENG" });
+      const cancelledAssertion = expect(cancelled).rejects.toThrow("");
+      await flushPromises();
+      const options = wrapper.findAll(".dialog option").map((option) => ({
+        value: option.attributes("value"),
+        label: option.text(),
+      }));
+      await button(wrapper, "Huỷ").trigger("click");
+      await cancelledAssertion;
+      expect(options).toEqual([
+        { value: "", label: "—" },
+        { value: "HR", label: "HR" },
+        { value: "QA", label: "QA — Quality" },
+      ]);
+      expect(vi.mocked(api.apiGet).mock.calls.filter(([path]) => path === "/api/catalog/departments")).toHaveLength(2);
+      expect(api.apiSend).toHaveBeenCalledTimes(1);
+    } finally {
+      wrapper.unmount();
+    }
+  });
+
+  it.each(["Escape", "Huỷ"])("restores transfer action focus after closing with %s", async (closeWith) => {
+    mockGet(defaultOrgRoutes());
+    const host = document.createElement("div");
+    document.body.append(host);
+    const wrapper = mount(OrgView, {
+      attachTo: host,
+      global: {
+        plugins: [[PrimeVue, { unstyled: true }]],
+        components: { Button, Column, DataTable, Dialog },
+        stubs: {
+          Card: CardStub,
+          InputText: InputTextStub,
+          Message: global.stubs.Message,
+          ProgressSpinner: global.stubs.ProgressSpinner,
+          Tag: true,
+          Textarea: true,
+          transition: false,
+        },
+      },
+    });
+    try {
+      await flushPromises();
+      const departments = wrapper.findAllComponents(ResourcePage).find((item) => item.props("title") === "Phòng ban")!;
+      const trigger = button(departments, "Chuyển dữ liệu");
+      const opener = trigger.element as HTMLButtonElement;
+      opener.focus();
+      await trigger.trigger("click");
+      await vi.waitFor(() => {
+        const dialog = document.querySelector('[role="dialog"]');
+        expect(dialog).not.toBeNull();
+        expect(dialog!.contains(document.activeElement)).toBe(true);
+      });
+      expect(opener.disabled).toBe(true);
+      document.querySelector<HTMLButtonElement>('[role="dialog"] button[aria-label="Lưu"]')!.click();
+      await flushPromises();
+      expect(document.querySelector('[role="dialog"]')!.textContent).toContain("Chọn phòng ban đích.");
+      if (closeWith === "Escape") {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
+      } else {
+        document.querySelector<HTMLButtonElement>('[role="dialog"] button[aria-label="Huỷ"]')!.click();
+      }
+      await vi.waitFor(() => {
+        expect(document.querySelector('[role="dialog"]')).toBeNull();
+        expect(opener.disabled).toBe(false);
+        expect(document.activeElement).toBe(opener);
+      });
+      expect(api.apiSend).not.toHaveBeenCalled();
+    } finally {
+      wrapper.unmount();
+      host.remove();
+    }
+  });
+
+  it("keeps optional catalogs empty when the department list fails to load", async () => {
     mockGet({
       ...defaultOrgRoutes(),
       "/api/catalog/departments": () => {
@@ -552,6 +686,8 @@ describe("OrgView public ResourcePage contracts", () => {
     });
     const wrapper = mount(OrgView, { global });
     await flushPromises();
+
+    await expect(resource(wrapper, "Phòng ban").load()).rejects.toThrow("catalog offline");
 
     const reassign = resource(wrapper, "Phòng ban").rowActions!.find(
       (action) => action.label === "Chuyển dữ liệu",
@@ -562,6 +698,193 @@ describe("OrgView public ResourcePage contracts", () => {
     expect(wrapper.findAll(".dialog option")).toHaveLength(1);
     await button(wrapper, "Huỷ").trigger("click");
     await cancelledAssertion;
+  });
+});
+
+describe("MaterialsView synonym dialog", () => {
+  it.each([["Escape", ""], ["Đóng", ""], ["Đóng", "carbon steel"]])("settles synonym action after %s with edit %s", async (closeWith, synonym) => {
+    let synonyms: unknown[] = [];
+    let removed = false;
+    const materialData = () => ({ materials: [
+      ...(removed ? [] : [{ material_id: 5, code: "STEEL", display: "Steel", synonyms }]),
+      ...(synonym ? [{ material_id: 7, code: "IRON", display: "Iron", synonyms: [] }] : []),
+    ] });
+    mockGet({
+      "/api/materials": materialData,
+    });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const wrapper = mount(MaterialsView, {
+      attachTo: host,
+      global: {
+        plugins: [[PrimeVue, { unstyled: true }]],
+        components: { Button, Column, DataTable, Dialog },
+        stubs: {
+          Card: CardStub,
+          InputText: InputTextStub,
+          Message: global.stubs.Message,
+          ProgressSpinner: global.stubs.ProgressSpinner,
+          Tag: true,
+          Textarea: true,
+          transition: false,
+        },
+      },
+    });
+    let finishRefresh: (() => void) | undefined;
+    try {
+      await flushPromises();
+      const trigger = button(wrapper, "Đồng nghĩa");
+      const opener = trigger.element as HTMLButtonElement;
+      opener.focus();
+      await trigger.trigger("click");
+      await vi.waitFor(() => {
+        const dialog = document.querySelector('[role="dialog"]');
+        expect(dialog).not.toBeNull();
+        expect(dialog!.contains(document.activeElement)).toBe(true);
+      });
+      expect(opener.disabled).toBe(true);
+      if (synonym) {
+        vi.mocked(api.apiSend).mockImplementationOnce(async () => {
+          synonyms = [{ synonym_id: 6, synonym, is_active: true }];
+          return { ok: true };
+        });
+        const input = document.querySelector<HTMLInputElement>('[role="dialog"] input')!;
+        input.value = synonym;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        await flushPromises();
+        document.querySelector<HTMLButtonElement>('[role="dialog"] button[aria-label="Thêm"]')!.click();
+        await flushPromises();
+        expect(document.querySelector('[role="dialog"]')!.textContent).toContain(synonym);
+        const pendingRefresh = new Promise<void>((resolve) => { finishRefresh = resolve; });
+        vi.mocked(api.apiGet).mockImplementationOnce(async () => {
+          await pendingRefresh;
+          return materialData();
+        });
+      }
+      if (closeWith === "Escape") {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
+      } else {
+        document.querySelector<HTMLButtonElement>('[role="dialog"] button[aria-label="Đóng"]')!.click();
+      }
+      if (synonym) {
+        await vi.waitFor(() => expect(wrapper.find(".loading-block").exists()).toBe(true));
+        const whileLoading = {
+          openerConnected: opener.isConnected,
+          tableVisible: wrapper.find(".card").exists() && wrapper.find(".card").isVisible(),
+          openerDisabled: opener.disabled,
+        };
+        finishRefresh!();
+        await flushPromises();
+        expect({ ...whileLoading, focusReturned: document.activeElement === opener }).toEqual({
+          openerConnected: true, tableVisible: false, openerDisabled: true, focusReturned: true,
+        });
+      }
+      await vi.waitFor(() => {
+        expect(document.querySelector('[role="dialog"]')).toBeNull();
+        expect((button(wrapper, "Đồng nghĩa").element as HTMLButtonElement).disabled).toBe(false);
+        if (synonym) {
+          expect(wrapper.findComponent(ResourcePage).text()).toContain(synonym);
+        }
+        expect(button(wrapper, "Đồng nghĩa").element).toBe(opener);
+        expect(document.activeElement).toBe(opener);
+      });
+      expect(wrapper.findAll(".row-actions button").every((item) => !(item.element as HTMLButtonElement).disabled)).toBe(true);
+      if (synonym) {
+        expect(api.apiSend).toHaveBeenCalledWith("/api/materials/5/synonyms", "POST", { synonym });
+        const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+        try {
+          let finishDelete!: () => void;
+          vi.mocked(api.apiSend).mockImplementationOnce(() => new Promise((resolve) => {
+            finishDelete = () => { removed = true; resolve({ ok: true }); };
+          }));
+          const trigger = button(wrapper, "Xoá");
+          const deletedOpener = trigger.element as HTMLButtonElement;
+          deletedOpener.focus();
+          const focus = vi.spyOn(deletedOpener, "focus");
+          await trigger.trigger("click");
+          const temporaryFocus = document.createElement("input");
+          document.body.append(temporaryFocus);
+          temporaryFocus.focus();
+          temporaryFocus.remove();
+          expect(document.activeElement).toBe(document.body);
+          finishDelete();
+          await flushPromises();
+          expect(wrapper.findComponent(ResourcePage).text()).not.toContain("STEEL");
+          expect(wrapper.findComponent(ResourcePage).text()).toContain("IRON");
+          expect(api.apiSend).toHaveBeenLastCalledWith("/api/materials/5", "DELETE");
+          expect(deletedOpener.isConnected).toBe(false);
+          expect(document.activeElement).toBe(document.body);
+          expect(focus).not.toHaveBeenCalled();
+        } finally {
+          confirm.mockRestore();
+        }
+      } else {
+        expect(api.apiSend).not.toHaveBeenCalled();
+        expect(api.apiGet).toHaveBeenCalledTimes(1);
+      }
+    } finally {
+      finishRefresh?.();
+      wrapper.unmount();
+      host.remove();
+    }
+  });
+
+  it.each(["replacement", "reorder", "unkeyed", "other input"])("restores refreshed action focus safely after %s", async (change) => {
+    const steel = { material_id: 5, code: "STEEL" };
+    const iron = { material_id: 7, code: "IRON" };
+    let loadedRows = [steel, iron];
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    const host = document.createElement("div");
+    const input = document.createElement("input");
+    document.body.append(host, input);
+    const wrapper = mount(ResourcePage, {
+      attachTo: host,
+      props: {
+        title: "Materials",
+        dataKey: change === "unkeyed" ? undefined : "material_id",
+        columns: [{ field: "code", header: "Code" }],
+        load: async () => loadedRows,
+        rowActions: [{ label: "Update", run: () => pending }],
+      },
+      global: {
+        plugins: [[PrimeVue, { unstyled: true }]],
+        components: { Button, Column, DataTable },
+        stubs: {
+          Card: CardStub, Message: global.stubs.Message, ProgressSpinner: global.stubs.ProgressSpinner,
+          InputText: InputTextStub, Tag: true, Textarea: true, Dialog: true,
+        },
+      },
+    });
+    try {
+      await flushPromises();
+      const trigger = button(wrapper, "Update");
+      const opener = trigger.element as HTMLButtonElement;
+      opener.focus();
+      const focus = vi.spyOn(opener, "focus");
+      await trigger.trigger("click");
+      expect(opener.disabled).toBe(true);
+      input.focus();
+      if (change !== "other input") input.remove();
+      loadedRows = change === "replacement" || change === "unkeyed"
+        ? [{ material_id: 9, code: "COPPER" }, iron]
+        : [iron, steel];
+      finish();
+      await flushPromises();
+      if (change === "reorder") {
+        expect(opener.closest("tr")!.textContent).toContain("STEEL");
+        expect(document.activeElement).toBe(opener);
+        expect(focus).toHaveBeenCalledOnce();
+      } else {
+        expect(document.activeElement).toBe(change === "other input" ? input : document.body);
+        expect(focus).not.toHaveBeenCalled();
+        if (change === "replacement") expect(opener.isConnected).toBe(false);
+      }
+    } finally {
+      wrapper.unmount();
+      host.remove();
+      input.remove();
+    }
   });
 });
 

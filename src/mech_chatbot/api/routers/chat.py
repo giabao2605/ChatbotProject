@@ -11,12 +11,15 @@ import json
 import os
 from contextlib import nullcontext
 from time import monotonic
+from functools import partial
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
+from PIL import Image
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 from mech_chatbot.config.repository_runtime import current_repository_engine
@@ -25,7 +28,12 @@ from mech_chatbot.db.evidence_snapshot import evidence_read_snapshot, EvidenceSn
 from mech_chatbot.api import app_security
 from mech_chatbot.api.dependencies import csrf_profile, current_profile
 from mech_chatbot.api.evidence_contracts import ScopeTotalRequest, ScopeComparisonRequest, GraphQueryRequest, BomRollupRequest, QueryPlanRequest, require_comparison_context
-from mech_chatbot.api.file_access import chat_image_path, data_raw_root, page_has_vision
+from mech_chatbot.api.file_access import (
+    chat_image_path,
+    data_raw_root,
+    page_has_preview,
+    page_has_vision,
+)
 from mech_chatbot.api.request_limits import (
     UploadTooLarge,
     enforce_request_rate_limit,
@@ -86,7 +94,9 @@ def _sse(event: str, data: Any) -> str:
 
 
 def _citation_list(retrieved_docs: list[Any]) -> list[dict[str, Any]]:
-    return build_citation_list(retrieved_docs, page_has_vision=page_has_vision)
+    return build_citation_list(
+        retrieved_docs, page_has_vision=page_has_vision, page_has_preview=page_has_preview
+    )
 
 
 def _filter_citations_by_answer(
@@ -135,6 +145,9 @@ def _sources_for_chat_ids(
     chat_ids: list[int],
     runtime: Any,
 ) -> dict[int, list[dict[str, Any]]]:
+    db_engine = getattr(runtime, "db_engine", None)
+    vision_available = partial(page_has_vision, db_engine=db_engine) if db_engine is not None else page_has_vision
+    preview_available = partial(page_has_preview, db_engine=db_engine) if db_engine is not None else page_has_preview
     rows = runtime.app_support_queries.answer_sources_for_chat_ids(
         tuple(int(chat_id) for chat_id in chat_ids if chat_id)
     )
@@ -147,7 +160,7 @@ def _sources_for_chat_ids(
         if version is None or version < 1:
             continue
         revision_query = f'?citation_version={version}'
-        verified_vision = bool(has_vision) and page_has_vision(int(doc_id), page_no)
+        verified_vision = bool(has_vision) and vision_available(int(doc_id), page_no)
         out.setdefault(int(chat_id), []).append(
             {
                 "doc_id": int(doc_id),
@@ -159,7 +172,7 @@ def _sources_for_chat_ids(
                 "has_vision": verified_vision,
                 "page_url": (
                     f"/api/files/documents/{int(doc_id)}/pages/{page_no}{revision_query}"
-                    if verified_vision
+                    if preview_available(int(doc_id), page_no)
                     else None
                 ),
                 "original_url": f"/api/files/documents/{int(doc_id)}/original{revision_query}",
@@ -299,12 +312,15 @@ def _resolve_chat_citations(
     citation_docs: Any,
     streamed_candidates: Any,
     answer: str,
+    *,
+    db_engine: Any = None,
 ) -> tuple[tuple[dict[str, Any], ...], str]:
     return resolve_chat_citations(
         citation_docs,
         streamed_candidates,
         answer,
-        page_has_vision=page_has_vision,
+        page_has_vision=partial(page_has_vision, db_engine=db_engine) if db_engine is not None else page_has_vision,
+        page_has_preview=partial(page_has_preview, db_engine=db_engine) if db_engine is not None else page_has_preview,
     )
 
 
@@ -409,6 +425,11 @@ def upload_chat_image(
         raw = read_upload_limited(file.file, CHAT_IMAGE_MAX_BYTES)
     except UploadTooLarge:
         raise HTTPException(status_code=413, detail="File is too large")
+    try:
+        with Image.open(BytesIO(raw)) as image:
+            image.verify()
+    except (OSError, ValueError, Image.DecompressionBombError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid image file") from exc
     out_dir = data_raw_root() / "Chat_Images"
     out_dir.mkdir(parents=True, exist_ok=True)
     image_id = f"{uuid4().hex}{ext}"

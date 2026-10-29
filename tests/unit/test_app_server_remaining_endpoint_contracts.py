@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, text
 
 from mech_chatbot.api import dependencies as api_dependencies
 from mech_chatbot.api.routers import documents as document_routes
@@ -34,8 +35,9 @@ def _profile(*roles):
 
 
 @pytest.fixture
-def client_for():
+def client_for(monkeypatch):
     clients = []
+    monkeypatch.setattr(operation_routes.audit_service, "write_audit_log", lambda **_kwargs: None)
 
     def build(profile):
         app_server.app.dependency_overrides[api_dependencies.current_profile] = (
@@ -210,7 +212,7 @@ def test_access_request_fails_closed_when_repository_rejects(monkeypatch, client
     )
 
     response = client_for(_profile()).post(
-        "/api/access/request", json={"request_type": "clearance"}
+        "/api/access/request", json={"request_type": "clearance", "requested_level": "internal"}
     )
 
     assert response.status_code == 400
@@ -284,6 +286,42 @@ def test_document_metadata_denial_stops_mutation(monkeypatch, client_for):
     )
 
     assert response.status_code == 403
+
+
+def test_pending_variant_code_route_checks_role_and_result(monkeypatch, client_for):
+    calls = []
+    monkeypatch.setattr(document_routes, "validate_document_metadata_actor", lambda *_args: (True, ""))
+    monkeypatch.setattr(
+        document_routes, "update_pending_variant_code",
+        lambda doc_id, code, reviewer: calls.append((doc_id, code, reviewer))
+        or {"ok": True, "variant_code": code},
+    )
+    reviewer = client_for(_profile("reviewer"))
+    response = reviewer.patch("/api/documents/42/variant-code", json={"variant_code": "beta"})
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "variant_code": "beta"}
+    assert calls == [(42, "beta", "alice")]
+    assert reviewer.patch("/api/documents/42/variant-code", json={"variant_code": "beta", "title": "x"}).status_code == 422
+    assert calls == [(42, "beta", "alice")]
+
+    viewer = client_for(_profile("viewer"))
+    assert viewer.patch("/api/documents/42/variant-code", json={"variant_code": "beta"}).status_code == 403
+    assert calls == [(42, "beta", "alice")]
+
+
+def test_pending_variant_code_route_keeps_rejection_explicit(monkeypatch, client_for):
+    monkeypatch.setattr(document_routes, "validate_document_metadata_actor", lambda *_args: (True, ""))
+    monkeypatch.setattr(
+        document_routes, "update_pending_variant_code",
+        lambda *_args, **_kwargs: {"ok": False, "error": "Mã biến thể đã được xuất bản; chọn mã khác"},
+    )
+
+    response = client_for(_profile("reviewer")).patch(
+        "/api/documents/42/variant-code", json={"variant_code": "beta"}
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Mã biến thể đã được xuất bản; chọn mã khác"}
 
 
 @pytest.mark.parametrize(
@@ -377,6 +415,10 @@ def test_governance_value_error_is_mapped_without_asserting_internal_text(
 
 def test_ingestion_listing_and_queue_controls(monkeypatch, client_for):
     calls = []
+    monkeypatch.setattr(document_routes, "list_bulk_action_jobs", lambda **_kwargs: [
+        {"JobID": 8, "ThuMuc": "CoKhi", "Site": "HN", "SecurityLevel": "internal",
+         "UploadedBy": "alice", "DocID": None},
+    ])
     monkeypatch.setattr(
         document_routes,
         "list_ingestion_jobs",
@@ -414,6 +456,24 @@ def test_ingestion_listing_and_queue_controls(monkeypatch, client_for):
     assert pending.json() == {"ok": True}
     assert calls[0][1]["username"] == "alice"
     assert calls[1] == ("priority", 8, 4)
+
+
+@pytest.mark.parametrize("days", [-1, 0, "bad", None, True, 1.5, "1.5"])
+def test_review_days_rejects_invalid_input_before_storage(monkeypatch, client_for, days):
+    monkeypatch.setattr(document_routes, "_assert_metadata_actor", lambda *_args: None)
+    monkeypatch.setattr(document_routes, "mark_document_reviewed", lambda *_a, **_k: pytest.fail("invalid review date write"))
+    response = client_for(_profile("reviewer")).post(
+        "/api/lifecycle/documents/42/reviewed", json={"next_review_days": days}
+    )
+    assert response.status_code == 422
+
+
+def test_review_days_defaults_only_when_missing(monkeypatch, client_for):
+    monkeypatch.setattr(document_routes, "_assert_metadata_actor", lambda *_args: None)
+    calls = []
+    monkeypatch.setattr(document_routes, "mark_document_reviewed", lambda *_a, **kwargs: calls.append(kwargs) or True)
+    assert client_for(_profile("reviewer")).post("/api/lifecycle/documents/42/reviewed", json={}).json() == {"ok": True}
+    assert calls[0]["next_review_days"] == 180
 
 
 def test_ingestion_publish_requires_matching_document(monkeypatch, client_for):
@@ -659,6 +719,29 @@ def test_feedback_without_correct_answer_does_not_query_golden_source(
     }
 
 
+def test_feedback_classify_serializes_sqlalchemy_row_after_write(monkeypatch, client_for):
+    with create_engine("sqlite://").connect() as conn:
+        row = conn.execute(
+            text("SELECT 169 AS SourceDocID, 'QA_B' AS Department, 'SiteB' AS Site")
+        ).first()
+    monkeypatch.setattr(
+        operation_routes.ui_query_service,
+        "classify_feedback_and_get_source",
+        lambda *_args, **_kwargs: row,
+    )
+
+    response = client_for(_profile("reviewer")).post(
+        "/api/feedback/4/classify", json={"failure_type": "other"}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "result": {"SourceDocID": 169, "Department": "QA_B", "Site": "SiteB"},
+        "golden_hash": None,
+        "regression_qid": None,
+    }
+
+
 def test_feedback_correction_creates_golden_and_regression_evidence(
     monkeypatch, client_for
 ):
@@ -829,3 +912,127 @@ def test_graph_reviews_audit_successful_server_bound_actor(
     assert reviews == [(5, "reject", {"reviewer": "alice", "note": "reviewed"})]
     assert audits[0]["action"] == audit_action
     assert audits[0]["user_id"] == 7
+
+
+@pytest.mark.parametrize("expected_doc_id", [-1, 0, 1.5, 1.0, True, False, "abc", "42", [], {}])
+def test_regression_rejects_invalid_expected_doc_id_before_storage(monkeypatch, client_for, expected_doc_id):
+    calls = []
+    monkeypatch.setattr(operation_routes.feedback_service, "add_regression_question", lambda **kwargs: calls.append(kwargs) or 91)
+    response = client_for(_profile("reviewer")).post("/api/regression/questions", json={"question": "QA regression", "expected_doc_id": expected_doc_id})
+    assert response.status_code == 422
+    assert calls == []
+
+
+@pytest.mark.parametrize("expected_doc_id, normalized", [(None, None), ("", None), (42, 42)])
+def test_regression_accepts_optional_or_positive_expected_doc_id(monkeypatch, client_for, expected_doc_id, normalized):
+    calls = []
+    monkeypatch.setattr(operation_routes.feedback_service, "add_regression_question", lambda **kwargs: calls.append(kwargs) or 91)
+    response = client_for(_profile("reviewer")).post("/api/regression/questions", json={"question": "QA regression", "expected_doc_id": expected_doc_id, "expected_keywords": "pump,torque", "department": "QA", "site": "QA"})
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "result": 91}
+    assert calls == [{"question": "QA regression", "expected_doc_id": normalized, "expected_keywords": "pump,torque", "department": "QA", "site": "QA", "created_by": "alice"}]
+
+
+_CRUD_AUDIT_CASES = [
+    ("post", "/api/glossary", "glossary_service", "upsert_glossary_term",
+     {"term": "private-term", "domain": "private-domain", "expansion": "private-expansion"},
+     {"ok": True, "glossary_id": 31}, "glossary_upsert", "DomainGlossary", 31, {}),
+    ("patch", "/api/glossary/31/active", "glossary_service", "set_glossary_active",
+     {"is_active": False}, True, "glossary_active", "DomainGlossary", 31, {"is_active": False}),
+    ("delete", "/api/glossary/31", "glossary_service", "delete_glossary_term",
+     {}, True, "glossary_delete", "DomainGlossary", 31, {}),
+    ("post", "/api/materials", "material_service", "upsert_material",
+     {"code": " MAT-QA ", "display": "private-display", "category": "private-category"},
+     True, "material_upsert", "MaterialDictionary", None, {"canonical_code": "MAT-QA"}),
+    ("post", "/api/materials/41/synonyms", "material_service", "add_material_synonym",
+     {"synonym": "private-synonym"}, True, "material_synonym_add", "MaterialDictionary", 41, {}),
+    ("delete", "/api/materials/41", "material_service", "delete_material",
+     {}, True, "material_delete", "MaterialDictionary", 41, {}),
+    ("delete", "/api/materials/synonyms/51", "material_service", "delete_material_synonym",
+     {}, True, "material_synonym_delete", "MaterialSynonym", 51, {}),
+    ("post", "/api/feedback/61/classify", "ui_query_service", "classify_feedback_and_get_source",
+     {"failure_type": "private-failure", "reviewer_note": "private-note"},
+     {"SourceDocID": 42}, "feedback_classify", "FeedbackReview", 61, {}),
+    ("delete", "/api/feedback/61", "ui_query_service", "delete_feedback",
+     {}, True, "feedback_delete", "FeedbackReview", 61, {}),
+    ("post", "/api/regression/questions", "feedback_service", "add_regression_question",
+     {"question": "private-question", "expected_keywords": "private-keywords"},
+     71, "regression_question_create", "RegressionQuestion", 71, {}),
+    ("patch", "/api/regression/questions/71/active", "feedback_service", "set_regression_question_active",
+     {"is_active": False}, True, "regression_question_active", "RegressionQuestion", 71, {"is_active": False}),
+]
+
+
+@pytest.mark.parametrize("outcome", ["success", "failure", "denied"])
+@pytest.mark.parametrize(
+    "method,path,service,target,body,saved,action,entity_type,entity_id,details",
+    _CRUD_AUDIT_CASES,
+    ids=[case[6] for case in _CRUD_AUDIT_CASES],
+)
+def test_crud_audit_success_contract(
+    monkeypatch, client_for, outcome, method, path, service, target, body,
+    saved, action, entity_type, entity_id, details,
+):
+    audits = []
+    calls = []
+    failed = {"ok": False, "message": "not saved"} if action == "glossary_upsert" else (
+        None if action in {"feedback_classify", "regression_question_create"} else False
+    )
+    result = failed if outcome == "failure" else saved
+    monkeypatch.setattr(
+        getattr(operation_routes, service), target,
+        lambda *_args, **_kwargs: calls.append(True) or result,
+    )
+    monkeypatch.setattr(operation_routes.audit_service, "write_audit_log", lambda **record: audits.append(record))
+    client = client_for(_profile("viewer" if outcome == "denied" else "admin"))
+    response = client.request(method.upper(), path, json={**body, "username": "forged", "user_id": 999, "secret": "private-secret"})
+
+    if outcome == "denied":
+        assert response.status_code == 403
+        assert calls == audits == []
+        return
+    assert calls == [True]
+    if action == "glossary_upsert":
+        assert response.status_code == (400 if outcome == "failure" else 200)
+        assert response.json() == ({"detail": "not saved"} if outcome == "failure" else saved)
+    elif action == "feedback_classify":
+        assert response.status_code == 200
+        assert response.json() == {"result": result, "golden_hash": None, "regression_qid": None}
+    elif action == "regression_question_create":
+        assert response.status_code == 200
+        assert response.json() == {"ok": result is not None, "result": result}
+    else:
+        assert response.status_code == 200
+        assert response.json() == {"ok": bool(result)}
+    assert audits == ([] if outcome == "failure" else [{
+        "username": "alice", "user_id": 7, "action": action,
+        "entity_type": entity_type, "entity_id": entity_id, "details": details,
+    }])
+
+
+@pytest.mark.parametrize("result", [True, False, None])
+def test_glossary_audit_preserves_legacy_bool_response(monkeypatch, client_for, result):
+    audits = []
+    monkeypatch.setattr(operation_routes.glossary_service, "upsert_glossary_term", lambda **_kwargs: result)
+    monkeypatch.setattr(operation_routes.audit_service, "write_audit_log", lambda **record: audits.append(record))
+    response = client_for(_profile("reviewer")).post("/api/glossary", json={"term": "private-term", "domain": "private-domain", "glossary_id": 31})
+    assert response.status_code == 200
+    assert response.json() == {"ok": bool(result)}
+    assert audits == ([{
+        "username": "alice", "user_id": 7, "action": "glossary_upsert",
+        "entity_type": "DomainGlossary", "entity_id": 31, "details": {},
+    }] if result else [])
+
+
+def test_material_upsert_audit_keeps_existing_id(monkeypatch, client_for):
+    audits = []
+    monkeypatch.setattr(operation_routes.material_service, "upsert_material", lambda **_kwargs: True)
+    monkeypatch.setattr(operation_routes.audit_service, "write_audit_log", lambda **record: audits.append(record))
+    response = client_for(_profile("reviewer")).post("/api/materials", json={"code": " MAT-QA ", "material_id": 41})
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert audits == [{
+        "username": "alice", "user_id": 7, "action": "material_upsert",
+        "entity_type": "MaterialDictionary", "entity_id": 41,
+        "details": {"canonical_code": "MAT-QA"},
+    }]

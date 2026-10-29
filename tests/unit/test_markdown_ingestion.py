@@ -228,6 +228,55 @@ def test_office_upload_records_one_extracted_page_and_reaches_review(
     assert saved_pages[0]["extraction_status"] == "success"
 
 
+@pytest.mark.parametrize("extension", ["txt", "csv", "docx", "xlsx", "pptx"])
+def test_supported_text_file_records_extracted_page_and_reaches_review(
+    tmp_path, monkeypatch, extension
+):
+    path = tmp_path / f"torque.{extension}"
+    if extension == "txt":
+        path.write_text("Torque11 N.m", encoding="utf-8")
+    elif extension == "csv":
+        path.write_text("metric,value\nTorque11,11\n", encoding="utf-8")
+    elif extension == "docx":
+        from docx import Document as WordDocument
+
+        document = WordDocument()
+        document.add_paragraph("Torque11 N.m")
+        document.save(path)
+    elif extension == "xlsx":
+        import pandas as pd
+
+        pd.DataFrame({"metric": ["Torque11"], "value": [11]}).to_excel(path, index=False)
+    else:
+        from pptx import Presentation
+
+        presentation = Presentation()
+        slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+        slide.shapes.add_textbox(0, 0, 1000000, 1000000).text = "Torque11 N.m"
+        presentation.save(path)
+
+    saved_pages = []
+    _install_success_path_stubs(monkeypatch, saved_pages)
+
+    report = pipeline.process_and_ingest_file(
+        str(path), path.name, "Technical",
+        domain_override="generic", security_override="internal", site_override="HQ",
+        dependencies=_dependencies(),
+        config=pipeline.PdfIngestionConfig(rollback_on_error=False),
+    )
+
+    assert report["total_chunks"] >= 2
+    extracted_field = "pages_table_extracted" if extension in {"csv", "xlsx"} else "pages_text_extracted"
+    assert report[extracted_field] == [1]
+    assert report["status"] == "success"
+    assert report["quality_status"] == "ready_for_review"
+    assert report["quality_hard_blocked"] is False
+    assert len(saved_pages) == 1
+    assert saved_pages[0]["page_no"] == 1
+    assert saved_pages[0]["extraction_status"] == "success"
+    assert "Torque11" in saved_pages[0]["text_extract"]
+
+
 def test_non_pdf_external_calls_run_inside_governed_document_context(
     tmp_path,
     monkeypatch,

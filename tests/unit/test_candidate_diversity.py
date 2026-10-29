@@ -42,3 +42,16 @@ def test_diversify_retains_identical_text_with_different_source_provenance():
     docs[2].metadata.update(version_no=2, trang_so=1, parent_section="same section")
 
     assert diversify_candidates(docs, max_per_document=4, cap=4) == docs
+
+
+def test_diversify_keeps_separate_pages_with_same_parent_section():
+    docs = [
+        SimpleNamespace(page_content=text, metadata={
+            "doc_id": 1148, "parent_section": "QA_B", "parent_page": page,
+        })
+        for text, page in (("page 2", 2), ("page 2 summary", 2), ("page 1", 1))
+    ]
+
+    assert diversify_candidates(
+        docs, max_per_document=4, max_per_section=1, cap=4,
+    ) == [docs[0], docs[2]]

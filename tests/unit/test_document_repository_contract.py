@@ -9,6 +9,8 @@ import pytest
 pytestmark = pytest.mark.unit
 
 document = pytest.importorskip("mech_chatbot.db.repositories.document")
+feedback_repository = pytest.importorskip("mech_chatbot.db.repositories.feedback")
+semantic_cache_repository = pytest.importorskip("mech_chatbot.db.repositories.semantic_cache")
 
 
 class _Result:
@@ -176,7 +178,7 @@ def test_published_document_cannot_be_reingested(install_engine, monkeypatch):
         if "FROM dbo.DepartmentKnowledgeGovernance" in sql:
             return _Result()
         if "SELECT DocID, LifecycleStatus" in sql:
-            return _Result([(42, "published", "approved", "published", 1, 1)])
+            return _Result([(42, "published", "approved", "published", 1, 1, None)])
         return _Result()
 
     connection = install_engine(handle)
@@ -205,7 +207,7 @@ def test_reingest_resets_a_draft_to_review_with_safe_classification_defaults(
         if "FROM dbo.DepartmentKnowledgeGovernance" in sql:
             return _Result()
         if "SELECT DocID, LifecycleStatus" in sql:
-            return _Result([(42, "draft", "rejected", "draft", 0, 0)])
+            return _Result([(42, "draft", "rejected", "draft", 0, 0, "C:/uploads/drawing.pdf")])
         return _Result()
 
     connection = install_engine(handle)
@@ -414,13 +416,15 @@ def test_mark_ingest_failed_refuses_published_approved_document(install_engine):
     assert all("UPDATE TaiLieu" not in sql for sql, _params in connection.calls)
 
 
-def test_mark_ingest_failed_refuses_inconsistent_published_or_servable_document(
-    install_engine,
+@pytest.mark.parametrize("row", [
+    (42, "draft", "rejected", "published", 1, 0),
+    (42, "draft", "approved", "draft", 0, 0),
+])
+def test_mark_ingest_failed_refuses_inconsistent_published_or_approved_document(
+    install_engine, row,
 ):
     connection = install_engine(
-        lambda sql, _params: _Result(
-            [(42, "draft", "rejected", "published", 1, 0)]
-        )
+        lambda sql, _params: _Result([row])
         if "SELECT DocID" in sql
         else pytest.fail("published/servable guard must stop before destructive SQL")
     )
@@ -448,7 +452,7 @@ def test_published_or_servable_document_cannot_be_reingested_when_review_is_inco
         if "FROM dbo.DepartmentKnowledgeGovernance" in sql:
             return _Result()
         if "SELECT DocID, LifecycleStatus" in sql:
-            return _Result([(42, "draft", "rejected", "published", 1, 0)])
+            return _Result([(42, "draft", "rejected", "published", 1, 0, None)])
         return _Result()
 
     connection = install_engine(handle)
@@ -473,6 +477,17 @@ def test_mark_ingest_failed_does_not_touch_data_when_document_is_missing(install
 
     assert len(connection.calls) == 1
     assert "SELECT DocID" in connection.calls[0][0]
+
+
+def test_mark_ingest_failed_preserves_published_document(install_engine):
+    connection = install_engine(
+        lambda sql, _params: _Result([(42, "published", "approved", "published", 1, 1)])
+        if "SELECT DocID" in sql else _Result()
+    )
+
+    document.mark_document_ingest_failed("drawing.pdf", "QA", "duplicate upload")
+
+    assert len(connection.calls) == 1
 
 
 def test_document_info_maps_governance_and_classification_fields(install_engine):
@@ -614,8 +629,12 @@ def test_missing_document_cannot_be_deleted(install_engine):
 
 def test_qdrant_failure_rolls_back_the_soft_delete(install_engine, monkeypatch):
     connection = install_engine(
-        lambda sql, _params: _Result([("drawing.pdf", "QA", "published")])
+        lambda sql, _params: _Result([("drawing.pdf", "QA", "published", "qa/drawing.pdf", 0)])
         if "SELECT TenFile" in sql
+        else _Result([(10,)])
+        if "SELECT TOP 2 DocID" in sql
+        else _Result([(42, "published", None)])
+        if "SELECT TOP 2 JobID" in sql
         else _Result()
     )
 
@@ -630,37 +649,33 @@ def test_qdrant_failure_rolls_back_the_soft_delete(install_engine, monkeypatch):
     ) is False
     updates = [(sql, params) for sql, params in connection.calls if "UPDATE TaiLieu" in sql]
     assert "LifecycleStatus = 'deleting'" in updates[0][0]
-    assert updates[-1][1] == {"s": "published", "id": 10}
+    assert updates[-1][1] == {"s": "published", "current": 0, "id": 10}
 
 
 def test_successful_delete_cleans_all_stores_and_audits(install_engine, monkeypatch):
     connection = install_engine(
         lambda sql, _params: _Result(
-            [("drawing.pdf", "QA", "published")]
+            [("drawing.pdf", "QA", "published", "qa/drawing.pdf", 1)]
             if "SELECT TenFile" in sql
+            else [(10,)]
+            if "SELECT TOP 2 DocID" in sql
+            else [(42, "published", "worker-1")]
+            if "SELECT TOP 2 JobID" in sql
+            else [(0,)]
+            if "KnowledgeGraphNode" in sql
             else [("missing-page.png",)]
             if "SELECT ImagePath" in sql
             else []
         )
     )
     qdrant_deletes = []
-    cleanup_calls = []
-    cache_calls = []
     audit_calls = []
     removed_images = []
     qdrant_client = SimpleNamespace(
         delete=lambda **kwargs: qdrant_deletes.append(kwargs)
     )
-    monkeypatch.setattr(
-        document._r_feedback,
-        "cleanup_dangling_records",
-        lambda: cleanup_calls.append(True),
-    )
-    monkeypatch.setattr(
-        document._r_semantic_cache,
-        "sc_clear_all",
-        lambda: cache_calls.append(True),
-    )
+    monkeypatch.setattr(feedback_repository, "cleanup_dangling_records", lambda: pytest.fail("global feedback cleanup"))
+    monkeypatch.setattr(semantic_cache_repository, "sc_clear_all", lambda: pytest.fail("global cache clear"))
     monkeypatch.setattr(
         document._r_audit,
         "write_audit_log",
@@ -682,10 +697,20 @@ def test_successful_delete_cleans_all_stores_and_audits(install_engine, monkeypa
     assert "DELETE FROM TechnicalAttributes" in sql_text
     assert "DELETE FROM DocumentAttributes" in sql_text
     assert "DELETE FROM TaiLieu" in sql_text
-    assert "DELETE FROM dbo.IngestionJobs" in sql_text
+    assert "DELETE FROM dbo.IngestionJobs WHERE JobID = :job_id" in sql_text
+    assert "DELETE FROM dbo.IngestionJobs WHERE TenFile" not in sql_text
+    assert "UPDATE GoldenAnswer SET SourceDocID = NULL WHERE SourceDocID = :id" in sql_text
+    assert "UPDATE FeedbackReview SET SourceDocID = NULL WHERE SourceDocID = :id" in sql_text
+    assert "UPDATE AnswerSource SET DocID = NULL WHERE DocID = :id" in sql_text
+    assert "UPDATE dbo.ChatEvidenceManifest SET IsComplete = 0" in sql_text
+    assert "DELETE FROM dbo.AnswerEvidence WHERE DocID = :id" in sql_text
+    assert "UPDATE RegressionQuestion SET ExpectedDocID = NULL WHERE ExpectedDocID = :id" in sql_text
+    assert all(
+        params.get("id") == 10 or params.get("job_id") == 42
+        for sql, params in connection.calls
+        if sql.startswith(("UPDATE GoldenAnswer", "UPDATE FeedbackReview", "UPDATE AnswerSource", "UPDATE RegressionQuestion", "DELETE FROM dbo.IngestionJobs", "DELETE FROM dbo.AnswerEvidence"))
+    )
     assert len(qdrant_deletes) == 1
-    assert cleanup_calls == [True]
-    assert cache_calls == [True]
     assert removed_images == ["missing-page.png"]
     assert audit_calls == [
         (
@@ -696,3 +721,90 @@ def test_successful_delete_cleans_all_stores_and_audits(install_engine, monkeypa
             {"ten_file": "drawing.pdf", "thu_muc": "QA"},
         )
     ]
+
+
+@pytest.mark.parametrize("job_rows,doc_rows", [([], [(10,)]), ([(42, "published", None), (43, "published", None)], [(10,)]), ([(42, "published", None)], [(10,), (11,)])])
+def test_delete_fails_closed_when_document_job_link_is_not_unique(install_engine, job_rows, doc_rows):
+    connection = install_engine(
+        lambda sql, _params: _Result(
+            [("drawing.pdf", "QA", "published", "qa/drawing.pdf", 1)]
+            if "SELECT TenFile" in sql
+            else doc_rows
+            if "SELECT TOP 2 DocID" in sql
+            else job_rows
+            if "SELECT TOP 2 JobID" in sql
+            else []
+        )
+    )
+
+    assert document.delete_document_completely(10, qdrant_client=SimpleNamespace(delete=lambda **_kw: None), collection_name="test-knowledge") is False
+    assert not any(sql.startswith(("UPDATE", "DELETE")) for sql, _ in connection.calls)
+
+
+def test_delete_removes_only_the_linked_upload_file(install_engine, monkeypatch, tmp_path):
+    upload_dir = tmp_path / "Uploads" / "QA"
+    upload_dir.mkdir(parents=True)
+    target = upload_dir / "target.pdf"
+    other = upload_dir / "other.pdf"
+    target.write_bytes(b"target")
+    other.write_bytes(b"other")
+    connection = install_engine(
+        lambda sql, _params: _Result(
+            [("target.pdf", "QA", "published", str(target), 1)]
+            if "SELECT TenFile" in sql
+            else [(10,)]
+            if "SELECT TOP 2 DocID" in sql
+            else [(42, "published", None)]
+            if "SELECT TOP 2 JobID" in sql
+            else []
+        )
+    )
+    monkeypatch.setattr(document._r_audit, "write_audit_log", lambda *_args, **_kwargs: None)
+
+    assert document.delete_document_completely(
+        10,
+        qdrant_client=SimpleNamespace(delete=lambda **_kw: None),
+        collection_name="test-knowledge",
+        raw_root=lambda: tmp_path,
+    ) is True
+    assert not target.exists()
+    assert other.read_bytes() == b"other"
+    assert any("DELETE FROM dbo.IngestionJobs WHERE JobID" in sql for sql, _ in connection.calls)
+
+
+def test_delete_rejects_source_outside_upload_root(install_engine, tmp_path):
+    outside = tmp_path / "unrelated.pdf"
+    outside.write_bytes(b"preserve")
+    connection = install_engine(
+        lambda sql, _params: _Result([("unrelated.pdf", "QA", "published", str(outside), 1)])
+        if "SELECT TenFile" in sql else _Result()
+    )
+
+    assert document.delete_document_completely(10, raw_root=lambda: tmp_path) is False
+    assert outside.read_bytes() == b"preserve"
+    assert not any(sql.startswith(("UPDATE", "DELETE")) for sql, _ in connection.calls)
+
+
+def test_delete_with_protected_references_stops_before_qdrant_or_sql_mutation(install_engine):
+    connection = install_engine(
+        lambda sql, _params: _Result(
+            [("drawing.pdf", "QA", "published", "qa/drawing.pdf", 1)]
+            if "SELECT TenFile" in sql
+            else [(10,)]
+            if "SELECT TOP 2 DocID" in sql
+            else [(42, "published", None)]
+            if "SELECT TOP 2 JobID" in sql
+            else [(1,)]
+            if "KnowledgeGraphNode" in sql
+            else []
+        )
+    )
+    qdrant_deletes = []
+
+    assert document.delete_document_completely(
+        10,
+        qdrant_client=SimpleNamespace(delete=lambda **kwargs: qdrant_deletes.append(kwargs)),
+        collection_name="test-knowledge",
+    ) is False
+    assert qdrant_deletes == []
+    assert not any(sql.startswith(("UPDATE", "DELETE")) for sql, _ in connection.calls)

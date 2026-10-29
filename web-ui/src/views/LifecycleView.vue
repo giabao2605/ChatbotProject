@@ -18,7 +18,17 @@ type LifecyclePayload = {
 // (xem get_lifecycle_overview). Tach thanh 3 bang de hien thi + thao tac.
 async function loadGroup(key: "expired" | "expiring_soon" | "needs_review"): Promise<ApiRow[]> {
   const data = await apiGet<LifecyclePayload>("/api/lifecycle", { soon_days: 30 });
-  return data[key] ?? [];
+  return (data[key] ?? []).map((row) => ({
+    doc_id: row.DocID,
+    file: row.OriginalFileName,
+    dept: row.Department,
+    version_no: row.VersionNo,
+    effective_status: row.EffectiveStatus,
+    effective_date: row.EffectiveDateStart,
+    expiry_date: row.ExpiryDate,
+    review_date: row.ReviewDate,
+    last_reviewed_at: row.LastReviewedAt,
+  }));
 }
 
 const loadSelected = () => loadGroup(props.group);
@@ -83,12 +93,19 @@ function openDialog(row: ApiRow, mode: "reviewed" | "dates"): Promise<void> {
 }
 
 async function submit() {
-  dlg.busy = true;
+  if (dlg.busy) return;
   dlg.error = "";
+  const nextReviewDays = Number(dlg.next_review_days);
+  if (dlg.mode === "reviewed" && (!Number.isInteger(nextReviewDays) || nextReviewDays < 1)) {
+    dlg.error = "Nhập số ngày nguyên từ 1 trở lên.";
+    return;
+  }
+  dlg.busy = true;
   try {
+    let result: { ok: boolean };
     if (dlg.mode === "reviewed") {
-      await apiSend(`/api/lifecycle/documents/${dlg.docId}/reviewed`, "POST", {
-        next_review_days: Number(dlg.next_review_days) || 180,
+      result = await apiSend(`/api/lifecycle/documents/${dlg.docId}/reviewed`, "POST", {
+        next_review_days: nextReviewDays,
       });
     } else {
       const body: Record<string, unknown> = {};
@@ -100,8 +117,9 @@ async function submit() {
         dlg.busy = false;
         return;
       }
-      await apiSend(`/api/lifecycle/documents/${dlg.docId}`, "PATCH", body);
+      result = await apiSend(`/api/lifecycle/documents/${dlg.docId}`, "PATCH", body);
     }
+    if (!result.ok) throw new Error("Không cập nhật được tài liệu.");
     dlg.visible = false;
     resolveDlg?.();
     resolveDlg = null;
@@ -145,7 +163,7 @@ const toolbar: ToolbarAction[] = [
     :toolbar="props.group === 'expired' ? toolbar : []"
   />
 
-  <Dialog v-model:visible="dlg.visible" :header="dialogTitle" modal :style="{ width: '440px' }" @hide="cancel">
+  <Dialog v-model:visible="dlg.visible" :header="dialogTitle" modal :closable="!dlg.busy" :close-on-escape="!dlg.busy" :style="{ width: '440px' }" @after-hide="cancel">
     <div class="stack-form">
       <Message v-if="dlg.error" severity="error" v-text="dlg.error"></Message>
       <label v-if="dlg.mode === 'reviewed'" class="field">
@@ -169,7 +187,7 @@ const toolbar: ToolbarAction[] = [
       </template>
     </div>
     <template #footer>
-      <Button label="Huỷ" severity="secondary" outlined :disabled="dlg.busy" @click="cancel" />
+      <Button label="Huỷ" severity="secondary" outlined :disabled="dlg.busy" @click="dlg.visible = false" />
       <Button label="Lưu" :loading="dlg.busy" @click="submit" />
     </template>
   </Dialog>

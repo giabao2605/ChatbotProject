@@ -1,9 +1,13 @@
 from contextlib import nullcontext
 from dataclasses import replace
+from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from mech_chatbot.api import dependencies
 from mech_chatbot.api.routers import chat as chat_routes
@@ -96,7 +100,7 @@ def test_auth_session_lifecycle_exposes_only_public_profile(
     monkeypatch.setattr(
         operation_routes,
         "authenticate_user",
-        lambda username, password: profile
+        lambda username, password, **_kwargs: profile
         if (username, password) == ("alice", "correct-password")
         else None,
     )
@@ -144,7 +148,7 @@ def test_logout_revokes_replayed_cookie_and_rotated_session_token(
     monkeypatch.setattr(
         operation_routes,
         "authenticate_user",
-        lambda username, password: profile
+        lambda username, password, **_kwargs: profile
         if (username, password) == ("alice", "correct-password")
         else None,
     )
@@ -182,6 +186,24 @@ def test_logout_revokes_replayed_cookie_and_rotated_session_token(
     assert logged_out.json() == {"ok": True}
     assert replayed_first.status_code == 401
     assert replayed_rotated.status_code == 401
+
+
+def test_successful_password_reset_revokes_existing_session(monkeypatch):
+    settings = app_server.app.state.process_settings
+    token, _ = app_server.app_security.create_session_token(
+        user_id=74, username="reset-route-qa", settings=settings
+    )
+    monkeypatch.setattr(operation_routes.bcrypt, "hashpw", lambda *_args: b"hashed")
+    monkeypatch.setattr(operation_routes.ui_query_service, "update_user_password", lambda *_args, on_password_updated: on_password_updated(None) or True)
+
+    result = operation_routes.user_password(
+        74, {"password": "long-enough"}, _profile("security_admin")
+    )
+
+    assert result == {"ok": True}
+    with pytest.raises(HTTPException) as error:
+        app_server.app_security.verify_session_token(token, settings=settings)
+    assert error.value.status_code == 401
 
 
 def test_auth_profile_and_refresh_fail_closed_for_inactive_user(
@@ -260,10 +282,21 @@ def test_chat_image_upload_validates_content_and_returns_owner_token(
 ):
     monkeypatch.setattr(chat_routes, "data_raw_root", lambda: tmp_path)
     client = client_for(_profile())
+    image_buffer = BytesIO()
+    Image.new("RGB", (1, 1)).save(image_buffer, format="PNG")
+    valid_png = image_buffer.getvalue()
 
     invalid_type = client.post(
         "/api/chat/upload-image",
         files={"file": ("notes.txt", b"not-an-image", "text/plain")},
+    )
+    empty_image = client.post(
+        "/api/chat/upload-image",
+        files={"file": ("empty.png", b"", "image/png")},
+    )
+    corrupt_image = client.post(
+        "/api/chat/upload-image",
+        files={"file": ("fake.png", b"not-an-image", "image/png")},
     )
     oversized = client.post(
         "/api/chat/upload-image",
@@ -271,10 +304,12 @@ def test_chat_image_upload_validates_content_and_returns_owner_token(
     )
     uploaded = client.post(
         "/api/chat/upload-image",
-        files={"file": ("evidence.png", b"png", "image/png")},
+        files={"file": ("evidence.png", valid_png, "image/png")},
     )
 
     assert invalid_type.status_code == 400
+    assert empty_image.status_code == 400
+    assert corrupt_image.status_code == 400
     assert oversized.status_code == 413
     assert uploaded.status_code == 200
     body = uploaded.json()
@@ -286,7 +321,8 @@ def test_chat_image_upload_validates_content_and_returns_owner_token(
     assert body["file_name"] == "evidence.png"
     assert token_payload.user_id == 7
     assert token_payload.username == f"image:{body['image_id']}"
-    assert (tmp_path / "Chat_Images" / body["image_id"]).read_bytes() == b"png"
+    assert (tmp_path / "Chat_Images" / body["image_id"]).read_bytes() == valid_png
+    assert list((tmp_path / "Chat_Images").iterdir()) == [tmp_path / "Chat_Images" / body["image_id"]]
 
 
 def test_chat_message_rejects_untrusted_image_tokens_before_rag(
@@ -423,7 +459,11 @@ def test_history_exposes_only_sources_attributed_by_each_answer(
     monkeypatch.setattr(
         chat_routes,
         "page_has_vision",
-        lambda doc_id, page_no: (doc_id, page_no) == (42, 7),
+        lambda doc_id, page_no, **_kwargs: (doc_id, page_no) == (42, 7),
+    )
+    monkeypatch.setattr(
+        chat_routes, "page_has_preview",
+        lambda doc_id, page_no, **_kwargs: (doc_id, page_no) == (42, 7),
     )
     monkeypatch.setattr(
         chat_routes,
@@ -459,6 +499,30 @@ def test_history_exposes_only_sources_attributed_by_each_answer(
     assert messages[2]["citations"] == []
     assert "Nguồn tham chiếu" in messages[0]["ref_text"]
     assert "citations" not in messages[3]
+
+
+def test_history_ocr_citation_exposes_image_without_vision_summary(monkeypatch, client_for):
+    class Support:
+        def answer_sources_for_chat_ids(self, _chat_ids):
+            return [(11, 42, "scan.pdf", 1, "7", 0.91, 0)]
+
+    monkeypatch.setattr(
+        app_server.app.state, "runtime",
+        replace(app_server.app.state.runtime, app_support_queries=Support()),
+    )
+    monkeypatch.setattr(chat_routes, "page_has_vision", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(chat_routes, "page_has_preview", lambda *_args, **_kwargs: True, raising=False)
+    monkeypatch.setattr(
+        chat_routes, "get_chat_history",
+        lambda *_args, **_kwargs: [{"chat_id": 11, "content": "[SRC:D42P7]"}],
+    )
+
+    response = client_for(_profile()).post("/api/chat/history", json={"session_id": "s1"})
+
+    assert response.status_code == 200
+    citation = response.json()["messages"][0]["citations"][0]
+    assert citation["has_vision"] is False
+    assert citation["page_url"] == "/api/files/documents/42/pages/7?citation_version=1"
 
 
 def test_chat_image_download_fails_closed_until_owner_is_proven(
@@ -810,6 +874,19 @@ def test_ingestion_rejection_never_reports_false_success(
         document_routes,
         "mark_job_rejected",
         lambda job_id: marked.append(job_id) or mark_result,
+    )
+    monkeypatch.setattr(
+        document_routes,
+        "validate_publish_actor",
+        lambda *_args: SimpleNamespace(valid=True, issues=()),
+    )
+    monkeypatch.setattr(
+        app_server.app.state,
+        "runtime",
+        replace(
+            app_server.app.state.runtime,
+            publication_port=SimpleNamespace(resolve_latest_doc_id=lambda _job_id: 42),
+        ),
     )
 
     response = client_for(_profile("reviewer")).post(

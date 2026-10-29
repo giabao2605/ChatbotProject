@@ -37,6 +37,7 @@ _REQUEST_SETTINGS: ContextVar[AppSecuritySettings | None] = ContextVar(
     "app_security_settings",
     default=None,
 )
+_USER_GENERATIONS: dict[int, int] = {}
 
 
 @dataclass(frozen=True)
@@ -46,11 +47,10 @@ class SessionPayload:
     exp: int
     csrf: str
     session_id: str = ""
+    generation: int = 0
 
 
-# Session revocation is intentionally process-local.  The current app contract
-# has no shared session store, so this closes replay in the serving process
-# without pretending to provide multi-worker or multi-instance revocation.
+# Production binds the SQL revocation store; memory is only the unbound fallback.
 _SESSION_REVOCATIONS: dict[str, int] = {}
 _SESSION_REVOCATIONS_LOCK = RLock()
 _REVOCATION_STORE: ContextVar[Any] = ContextVar('session_revocation_store', default=None)
@@ -136,8 +136,9 @@ def create_session_token(
     *,
     user_id: int,
     username: str,
-    ttl_seconds: int | None = None,
     session_id: str | None = None,
+    generation: int | None = None,
+    ttl_seconds: int | None = None,
     issued_at: int | None = None,
     settings: AppSecuritySettings | None = None,
 ) -> tuple[str, SessionPayload]:
@@ -146,12 +147,20 @@ def create_session_token(
         if ttl_seconds is not None
         else session_ttl_seconds(settings)
     )
+    resolved_user_id = int(user_id)
+    resolved_session_id = session_id or secrets.token_urlsafe(32)
+    current_generation = user_session_generation(resolved_user_id)
+    if generation is not None and generation != current_generation:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session revoked")
+    if _is_session_revoked("", resolved_session_id):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session revoked")
     payload: dict[str, Any] = {
-        "user_id": int(user_id),
+        "user_id": resolved_user_id,
         "username": str(username),
         "exp": (int(time.time()) if issued_at is None else int(issued_at)) + int(ttl),
         "csrf": secrets.token_urlsafe(32),
-        "session_id": str(session_id or secrets.token_urlsafe(32)),
+        "session_id": resolved_session_id,
+        "generation": current_generation,
     }
     body = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
     token = f"{body}.{_sign(body, settings)}"
@@ -180,12 +189,14 @@ def verify_session_token(
             exp=int(raw["exp"]),
             csrf=str(raw["csrf"]),
             session_id=str(raw.get("session_id") or ""),
+            generation=int(raw.get("generation", 0)),
         )
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session payload") from exc
     if payload.exp <= int(time.time()):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
-    if _is_session_revoked(token, payload.session_id):
+    stale = payload.generation != user_session_generation(payload.user_id)
+    if stale or _is_session_revoked(token, payload.session_id):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session revoked")
     return payload
 
@@ -270,6 +281,31 @@ def _purge_session_revocations(now: int) -> None:
     ]
     for key in expired:
         del _SESSION_REVOCATIONS[key]
+
+
+def user_session_generation(user_id: int) -> int:
+    store = _REVOCATION_STORE.get()
+    if store is not None:
+        try:
+            return store.user_generation(int(user_id))
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Session service unavailable") from exc
+    with _SESSION_REVOCATIONS_LOCK:
+        return _USER_GENERATIONS.get(int(user_id), 0)
+
+
+def revoke_user_sessions(user_id: int, *, connection=None) -> None:
+    store = _REVOCATION_STORE.get()
+    if store is not None:
+        try:
+            store.revoke_user(int(user_id), connection=connection)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Session service unavailable") from exc
+        return
+    if connection is not None:
+        raise HTTPException(status_code=503, detail="Session service unavailable")
+    with _SESSION_REVOCATIONS_LOCK:
+        _USER_GENERATIONS[int(user_id)] = _USER_GENERATIONS.get(int(user_id), 0) + 1
 
 
 def set_session_cookie(

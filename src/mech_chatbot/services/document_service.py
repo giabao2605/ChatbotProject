@@ -1,6 +1,7 @@
 """P2.3 — Document service (L6). Pass-through toi db repositories."""
 from mech_chatbot.db.repositories.doc_metadata import (
     update_document_common_metadata,
+    update_pending_variant_code,
 )
 from mech_chatbot.db.repositories.document import (
     delete_document_completely,
@@ -8,6 +9,7 @@ from mech_chatbot.db.repositories.document import (
 from mech_chatbot.db.repositories.publication import (
     publish_document,
     reconcile_serving_state,
+    validate_publish_actor,
     validate_publish_contract,
 )
 from mech_chatbot.db.repositories.version import (

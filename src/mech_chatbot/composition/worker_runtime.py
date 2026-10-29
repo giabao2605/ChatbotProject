@@ -121,9 +121,11 @@ def _build_classifier_adapter(
 ) -> Any | None:
     """Compose the worker text provider; missing config remains fail-closed."""
 
-    from mech_chatbot.llm.llm_client import build_llm_adapter
+    builder = llm_builder
+    if builder is None:
+        from mech_chatbot.llm.llm_client import build_llm_adapter
 
-    builder = llm_builder or build_llm_adapter
+        builder = build_llm_adapter
     try:
         return builder(
             LlmSettings.from_settings(settings),

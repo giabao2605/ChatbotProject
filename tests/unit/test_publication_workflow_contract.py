@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from mech_chatbot.db.repositories import publication
 
@@ -115,6 +116,180 @@ def test_publish_document_rejects_action_and_doc_id_before_touching_boundaries(
     assert invalid_doc.doc_id is None
     assert invalid_doc.state == "validation_failed"
     assert invalid_doc.error == "DocID khong hop le"
+
+
+@pytest.mark.parametrize(
+    ("outbox_status", "expected_ok", "expected_state"),
+    [("processing", True, "processing"), ("done", True, "published"), ("failed", False, "failed")],
+)
+def test_publish_reports_actual_outbox_state_when_own_claim_loses(
+    monkeypatch, outbox_status, expected_ok, expected_state,
+):
+    _install_engine(
+        monkeypatch,
+        lambda sql, _params: _Result(row=(outbox_status,))
+        if "SELECT Status FROM dbo.PublicationOutbox" in sql else _Result(),
+    )
+    monkeypatch.setattr(
+        publication, "_create_outbox_event",
+        lambda *_args, **_kwargs: publication.PublicationResult(
+            ok=True, doc_id=1149, outbox_id=10345, state="publishing"
+        ),
+    )
+    monkeypatch.setattr(publication, "process_publication_outbox_once", lambda **_kwargs: None)
+
+    result = publication.publish_document(
+        1149, action="standalone", reviewer="reviewer_b", reviewer_id=100,
+        reviewer_roles=["reviewer"],
+    )
+
+    assert result.ok is expected_ok
+    assert result.doc_id == 1149
+    assert result.outbox_id == 10345
+    assert result.state == expected_state
+    if outbox_status == "failed":
+        assert result.error
+
+
+@pytest.mark.parametrize(
+    ("variant_code", "collision"),
+    [("default", None), ("A", {"DocID": 168})],
+)
+def test_new_variant_with_conflicting_code_is_rejected_before_outbox_write(
+    monkeypatch, variant_code, collision,
+):
+    _install_validations(monkeypatch)
+
+    def dispatch(sql, _params):
+        if "SELECT PublicationState, Servable, PublicationVersion" in sql:
+            return _Result(mapped={
+                "PublicationState": "draft", "Servable": False, "PublicationVersion": 0,
+            })
+        if "SELECT BaseCode, VariantCode" in sql:
+            return _Result(mapped={"BaseCode": "QA-PUMP", "VariantCode": variant_code})
+        if "SELECT TOP 1 DocID FROM dbo.TaiLieu" in sql:
+            return _Result(mapped=collision)
+        if "INSERT INTO dbo.PublicationOutbox" in sql or "SET PublicationState = 'publishing'" in sql:
+            pytest.fail("invalid variant must not create outbox or change document")
+        return _Result()
+
+    engine = _install_engine(monkeypatch, dispatch)
+    monkeypatch.setattr(
+        publication, "process_publication_outbox_once",
+        lambda **_kwargs: pytest.fail("invalid variant must not process"),
+    )
+
+    result = publication.publish_document(
+        170, action="new_variant", reviewer="reviewer_b", reviewer_id=100,
+        reviewer_roles=["reviewer"],
+    )
+
+    assert result.state == "validation_failed"
+    assert result.ok is False
+    assert "biến thể" in result.error.lower()
+    assert not any("INSERT INTO dbo.PublicationOutbox" in sql for sql, _ in engine.calls)
+
+
+def test_corrected_variant_can_create_new_event_after_old_event_exhausted(monkeypatch):
+    _install_validations(monkeypatch)
+
+    def dispatch(sql, _params):
+        if "SELECT PublicationState, Servable, PublicationVersion" in sql:
+            return _Result(mapped={"PublicationState": "failed", "Servable": False, "PublicationVersion": 1})
+        if "SELECT BaseCode, VariantCode" in sql:
+            return _Result(mapped={"BaseCode": "QA-PUMP", "VariantCode": "beta"})
+        if "SELECT TOP 1 OutboxID FROM dbo.PublicationOutbox" in sql:
+            return _Result(mapped={"OutboxID": 353})
+        if "SELECT TOP 1 OutboxID, Status" in sql:
+            return _Result(mapped=None)
+        if "INSERT INTO dbo.PublicationOutbox" in sql:
+            return _Result(row=(354,))
+        return _Result()
+
+    engine = _install_engine(monkeypatch, dispatch)
+    result = publication._create_outbox_event(
+        170, "new_variant", "reviewer_b", reviewer_id=100, reviewer_roles=["reviewer"]
+    )
+
+    assert result.ok is True
+    assert result.outbox_id == 354
+    inserts = [params for sql, params in engine.calls if "INSERT INTO dbo.PublicationOutbox" in sql]
+    assert inserts == [{
+        "doc_id": 170, "action": "new_variant",
+        "payload": inserts[0]["payload"], "key": "publication:170:new_variant:2:after:353",
+    }]
+
+
+def test_queued_new_variant_is_revalidated_before_qdrant_changes(monkeypatch):
+    _install_validations(monkeypatch)
+
+    def dispatch(sql, _params):
+        if "SELECT BaseCode, VariantCode" in sql:
+            return _Result(mapped={"BaseCode": "QA-PUMP", "VariantCode": "default"})
+        if "sp_getapplock" in sql:
+            return _Result(row=(0,))
+        if "SELECT DocID, BaseCode, VariantCode" in sql:
+            return _Result(mapped={
+                "DocID": 170, "BaseCode": "QA-PUMP", "VariantCode": "default",
+                "PublicationVersion": 0, "ServingEpoch": None, "EffectiveStatus": "draft",
+            })
+        return _Result()
+
+    _install_engine(monkeypatch, dispatch)
+    monkeypatch.setattr(
+        publication._r_qdrant, "update_qdrant_metadata",
+        lambda *_args, **_kwargs: pytest.fail("invalid event must not change Qdrant"),
+    )
+    event = {
+        "OutboxID": 353, "DocID": 170, "Action": "new_variant",
+        "PayloadJson": '{"reviewer":"reviewer_b","reviewer_id":100,"reviewer_roles":["reviewer"]}',
+    }
+
+    with pytest.raises(RuntimeError, match="biến thể"):
+        publication._publish_event(event)
+
+
+def test_new_variant_holds_database_lock_through_publication(monkeypatch):
+    order = []
+
+    def dispatch(sql, _params):
+        if "SELECT BaseCode, VariantCode" in sql:
+            return _Result(mapped={"BaseCode": "QA-PUMP", "VariantCode": "A"})
+        if "sp_getapplock" in sql:
+            order.append("locked")
+            return _Result(row=(0,))
+        return _Result()
+
+    _install_engine(monkeypatch, dispatch)
+    monkeypatch.setattr(
+        publication, "_publish_event_unlocked",
+        lambda *_args, **_kwargs: order.append("published") or "done",
+        raising=False,
+    )
+
+    result = publication._publish_event({"DocID": 170, "Action": "new_variant"})
+
+    assert result == "done"
+    assert order == ["locked", "published"]
+
+
+def test_database_publication_failure_hides_sql_details_from_response(monkeypatch):
+    event = {"OutboxID": 353, "DocID": 170, "Action": "new_variant", "AttemptCount": 1}
+    monkeypatch.setattr(publication, "_claim_outbox", lambda **_kwargs: dict(event))
+    monkeypatch.setattr(
+        publication,
+        "_publish_event",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            IntegrityError("UPDATE secret_table SET password=:password", {"password": "secret"}, Exception("constraint"))
+        ),
+    )
+    monkeypatch.setattr(publication, "_mark_outbox_failure", lambda *_args, **_kwargs: None)
+
+    result = publication.process_publication_outbox_once(outbox_id=353)
+
+    assert result.state == "failed"
+    assert "secret_table" not in result.error
+    assert "secret" not in result.error
 
 
 def test_publish_document_creates_idempotent_outbox_and_processes_it(monkeypatch):

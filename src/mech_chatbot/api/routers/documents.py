@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import mimetypes
+from datetime import date
 from pathlib import Path
 from time import monotonic
 from typing import Annotated, Any, Mapping
@@ -22,7 +23,7 @@ from mech_chatbot.application.document_upload import (
     UploadFailure,
     UploadRejected,
 )
-from mech_chatbot.application.protected_files import ProtectedFileActor, ProtectedFileError, ProtectedFileReference
+from mech_chatbot.application.protected_files import LEVEL_ORDER, ProtectedFileActor, ProtectedFileError, ProtectedFileReference, normalize_security_level
 from mech_chatbot.api.dependencies import csrf_profile, current_profile, require_any_role
 from mech_chatbot.api.request_limits import (
     UploadTooLarge,
@@ -43,10 +44,11 @@ from mech_chatbot.config.logging import logger
 from mech_chatbot.services.audit_service import write_audit_log
 from mech_chatbot.services.document_service import (
     archive_document,
-    delete_document_completely,
     reconcile_serving_state,
     reject_document,
     update_document_common_metadata,
+    update_pending_variant_code,
+    validate_publish_actor,
     validate_publish_contract,
 )
 from mech_chatbot.services.job_service import (
@@ -120,6 +122,56 @@ def _assert_metadata_actor(doc_id: int, profile: dict[str, Any]) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=reason)
 
 
+def _assert_review_actor(doc_id: int, profile: dict[str, Any]) -> None:
+    result = validate_publish_actor(
+        doc_id, profile.get("user_id"), profile.get("roles") or []
+    )
+    if not result.valid:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Không đủ quyền duyệt tài liệu. Hãy dùng tài khoản người duyệt được giao, "
+                "đang hoạt động và thuộc phòng ban sở hữu tài liệu."
+            ),
+        )
+
+
+def _job_department_allowed(row: dict[str, Any], profile: dict[str, Any]) -> bool:
+    if _is_admin(profile):
+        return True
+    department = str(row.get("ThuMuc") or "").strip().casefold()
+    allowed = {str(item).strip().casefold() for item in profile.get("allowed_departments") or []}
+    return bool(department) and department in allowed
+
+
+def _assert_job_review_actor(job_id: int, profile: dict[str, Any], runtime: Any) -> int | None:
+    doc_id = runtime.publication_port.resolve_latest_doc_id(job_id)
+    if doc_id:
+        _assert_review_actor(doc_id, profile)
+        return int(doc_id)
+    rows = [row for row in _rows_to_json(list_bulk_action_jobs()) if _safe_int(row.get("JobID")) == job_id]
+    if not rows or any(row.get("DocID") or not _job_department_allowed(row, profile) for row in rows):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    return None
+
+
+def _assert_job_control_actor(job_id: int, profile: dict[str, Any], *, uploader_cancel: bool = False) -> None:
+    rows = _rows_to_json(list_bulk_action_jobs(job_id=job_id))
+    if not rows:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    pure_uploader = uploader_cancel and not role_allows(profile.get("roles"), "reviewer", "admin")
+    for row in rows:
+        scoped = _job_department_allowed(row, profile)
+        if not _is_admin(profile):
+            sites = {str(site).strip() for site in profile.get("allowed_sites") or []}
+            scoped = scoped and str(row.get("Site") or "").strip() in sites
+            scoped = scoped and LEVEL_ORDER[normalize_security_level(row.get("SecurityLevel"))] <= LEVEL_ORDER[normalize_security_level(profile.get("max_security_level") or "public")]
+        if not scoped or (pure_uploader and row.get("UploadedBy") != profile.get("username")):
+            raise HTTPException(status_code=403, detail="Forbidden")
+        if _safe_int(row.get("DocID")) and not pure_uploader:
+            _assert_review_actor(int(row["DocID"]), profile)
+
+
 def _read_upload_command(
     file: UploadFile, *, owner_department: str, shared_departments: tuple[str, ...], domain: str | None,
     security_level: str | None, process_stage: str | None, site: str | None,
@@ -145,10 +197,13 @@ def _upload_error_payload(failure: UploadFailure) -> dict[str, Any]:
     return {"file_name": failure.file_name, "error": failure.message}
 
 
-def _file_response(path: Path, filename: str | None = None) -> FileResponse:
+def _file_response(path: Path, filename: str | None = None, *, inline: bool = False) -> FileResponse:
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(path, media_type=mimetypes.guess_type(str(path))[0] or "application/octet-stream", filename=filename)
+    return FileResponse(
+        path, media_type=mimetypes.guess_type(str(path))[0] or "application/octet-stream",
+        filename=filename, content_disposition_type="inline" if inline else "attachment",
+    )
 
 
 def _resolve_protected_file(request: Request, reference: ProtectedFileReference, profile: dict[str, Any]):
@@ -204,20 +259,45 @@ def citation_page(doc_id: int, page_no: int, request: Request, profile: dict[str
                   citation_version: Annotated[int | None, Query(ge=1)] = None):
     if citation_version is not None:
         return _revision_file_response(request, ProtectedFileReference.page(doc_id, page_no, expected_version=citation_version), profile, pin)
-    verify_file_pin(doc_id,profile,pin,page_no=page_no)
-    authorized = _resolve_protected_file(request, ProtectedFileReference.page(doc_id, page_no), profile)
+    verify_file_pin(doc_id, profile, pin, page_no=page_no)
     if pin is not None:
+        authorized = _resolve_protected_file(request, ProtectedFileReference.page(doc_id, page_no), profile)
         if authorized.placeholder:
-            raise HTTPException(404,detail='Source image unavailable')
-        return pinned_original_response(authorized.path,None,pin.image_hash,inline=True)
+            raise HTTPException(404, detail='Source image unavailable')
+        return pinned_original_response(authorized.path, None, pin.image_hash, inline=True)
+    return _document_page_response(doc_id, page_no, request, profile, review=False)
+
+
+@files_router.get("/review/documents/{doc_id}/pages/{page_no}")
+def review_citation_page(
+    doc_id: int, page_no: int, request: Request,
+    profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin")),
+):
+    _assert_review_actor(doc_id, profile)
+    return _document_page_response(doc_id, page_no, request, profile, review=True)
+
+
+def _document_page_response(doc_id: int, page_no: int, request: Request, profile: dict[str, Any], *, review: bool):
+    reference = ProtectedFileReference.review_page(doc_id, page_no) if review else ProtectedFileReference.page(doc_id, page_no)
+    authorized = _resolve_protected_file(request, reference, profile)
     if authorized.placeholder:
+        original_url = f"/api/files/review/documents/{int(doc_id)}/original" if review else f"/api/files/documents/{int(doc_id)}/original"
         svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
 <rect width="640" height="360" fill="#111827"/><rect x="24" y="24" width="592" height="312" rx="16" fill="#1f2937" stroke="#475569"/>
 <text x="320" y="160" text-anchor="middle" fill="#cbd5e1" font-family="Arial,sans-serif" font-size="24">Không có ảnh xem trước</text>
 <text x="320" y="202" text-anchor="middle" fill="#94a3b8" font-family="Arial,sans-serif" font-size="18">Doc {int(doc_id)} · Trang {int(page_no)}</text>
-<text x="320" y="242" text-anchor="middle" fill="#64748b" font-family="Arial,sans-serif" font-size="15">Nhấn vào nguồn để mở tài liệu gốc</text></svg>"""
-        return Response(content=svg, media_type="image/svg+xml", headers={"Cache-Control": "private, no-store"})
-    return _file_response(authorized.path)
+<a href="{original_url}" target="_top"><text x="320" y="242" text-anchor="middle" fill="#93c5fd" font-family="Arial,sans-serif" font-size="15" text-decoration="underline">Mở tài liệu gốc</text></a></svg>"""
+        headers = {"Cache-Control": "private, no-store"}
+        if review:
+            headers["X-Content-Type-Options"] = "nosniff"
+        return Response(content=svg, media_type="image/svg+xml", headers=headers)
+    if review and authorized.path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
+        raise HTTPException(status_code=415, detail="Preview image type is not supported")
+    file_response = _file_response(authorized.path)
+    if review:
+        file_response.headers["Cache-Control"] = "private, no-store"
+        file_response.headers["X-Content-Type-Options"] = "nosniff"
+    return file_response
 
 
 @files_router.get("/documents/{doc_id}/original")
@@ -236,6 +316,22 @@ def original_document(doc_id: int, request: Request, profile: dict[str, Any] = D
 def review_preview_original(doc_id: int, request: Request, profile: dict[str, Any] = Depends(current_profile)):
     authorized = _resolve_protected_file(request, ProtectedFileReference.review_original(doc_id), profile)
     return _file_response(authorized.path, filename=authorized.filename)
+
+
+@files_router.get("/review/documents/{doc_id}/original")
+def review_original_document(
+    doc_id: int, request: Request,
+    profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin")),
+):
+    _assert_review_actor(doc_id, profile)
+    authorized = _resolve_protected_file(request, ProtectedFileReference.review_original(doc_id), profile)
+    file_response = _file_response(
+        authorized.path, filename=authorized.filename,
+        inline=authorized.path.suffix.lower() == ".pdf",
+    )
+    file_response.headers["Cache-Control"] = "private, no-store"
+    file_response.headers["X-Content-Type-Options"] = "nosniff"
+    return file_response
 
 
 @files_router.get("/chat-images/{image_id}")
@@ -414,7 +510,15 @@ def ingestion_jobs(status_value: str | None = None, profile: dict[str, Any] = De
 
 @router.get("/documents/pending-review")
 def documents_pending_review(profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
-    return {"documents": _rows_to_json(list_pending_review_docs())}
+    rows = _rows_to_json(list_pending_review_docs())
+    return {
+        "documents": [
+            row for row in rows
+            if _safe_int(row.get("DocID")) and validate_publish_actor(
+                row["DocID"], profile.get("user_id"), profile.get("roles") or []
+            ).valid
+        ]
+    }
 
 
 @router.post("/documents/reconcile-serving")
@@ -428,7 +532,12 @@ def documents_reconcile_serving(body: dict[str, Any], profile: dict[str, Any] = 
 
 @router.get("/documents/expiring")
 def documents_expiring(profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
-    return {"documents": _rows_to_json(list_expiring_documents())}
+    return {"documents": _rows_to_json(list_expiring_documents(
+        allowed_departments=profile.get("allowed_departments") or [],
+        allowed_sites=profile.get("allowed_sites") or [],
+        max_security_level=profile.get("max_security_level") or "public",
+        global_read_admin=_is_admin(profile),
+    ))}
 
 
 @router.get("/documents/bulk-meta")
@@ -441,9 +550,26 @@ def documents_bulk_meta(
             if dept.endswith(suffix):
                 dept = dept[: -len(suffix)]
                 break
+    documents = [
+        row for row in _rows_to_json(list_docs_for_bulk_meta(
+            dept=dept, domain=domain,
+            allowed_departments=profile.get("allowed_departments") or [],
+            allowed_sites=profile.get("allowed_sites") or [],
+            max_security_level=profile.get("max_security_level") or "public",
+            global_read_admin=_is_admin(profile),
+        ))
+        if validate_document_metadata_actor(
+            row["DocID"], profile.get("user_id"), profile.get("roles") or []
+        )[0]
+    ]
+    visible_departments = {row["ThuMuc"] for row in documents}
     return {
-        "documents": _rows_to_json(list_docs_for_bulk_meta(dept=dept, domain=domain)),
-        "departments": list_bulk_meta_departments(),
+        "documents": documents,
+        "departments": [
+            item for item in list_bulk_meta_departments()
+            if item.removesuffix(" (disabled)").removesuffix(" (archived)")
+            in visible_departments
+        ],
     }
 
 
@@ -455,9 +581,22 @@ def documents_bulk_metadata(body: dict[str, Any], profile: dict[str, Any] = Depe
         raise HTTPException(status_code=400, detail="doc_ids không hợp lệ")
     if not isinstance(metadata, dict) or not metadata:
         raise HTTPException(status_code=400, detail="metadata không hợp lệ")
+    allowed_fields = {
+        "title", "summary", "tags", "doc_number", "issued_date", "effective_date",
+        "expiry_date", "review_date", "owner_signer", "language", "effective_status",
+        "site", "knowledge_owner_user_id", "knowledge_approver_user_id",
+        "taxonomy_version", "parent_applicable", "parent_section", "parent_page",
+        "attributes", "domain",
+    }
+    if any(key not in allowed_fields and value not in (None, "") for key, value in metadata.items()):
+        raise HTTPException(status_code=422, detail="metadata chứa trường không hỗ trợ")
+    if metadata.get("domain") and not metadata.get("attributes"):
+        raise HTTPException(status_code=422, detail="metadata domain chỉ áp dụng cùng attributes")
     ok = 0
     fail = 0
     fields = {key: value for key, value in metadata.items() if key not in {"attributes", "domain"} and value not in (None, "")}
+    if not fields and not metadata.get("attributes"):
+        raise HTTPException(status_code=422, detail="metadata không có trường cần cập nhật")
     for raw_id in raw_ids:
         doc_id = _safe_int(raw_id)
         if not doc_id:
@@ -494,6 +633,17 @@ def _documents_review_bulk_impl(body: dict[str, Any], profile: dict[str, Any], r
         )
         for item in items
     )
+    if action in {"reject", "delete"}:
+        for item in review_items:
+            linked_doc_id = (
+                _assert_job_review_actor(item.job_id, profile, runtime)
+                if item.job_id else None
+            )
+            if item.doc_id:
+                if item.job_id and item.doc_id != linked_doc_id:
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+                if not item.job_id:
+                    _assert_review_actor(item.doc_id, profile)
     result = runtime.review_documents.execute(
         ReviewDocumentsCommand(action=action, publish_mode=publish_mode, reason=reason, items=review_items),
         _document_actor(profile),
@@ -536,8 +686,21 @@ def document_update_metadata(doc_id: int, body: dict[str, Any], profile: dict[st
     return {"ok": bool(result), "result": result}
 
 
+@router.patch("/documents/{doc_id}/variant-code")
+def document_update_variant_code(doc_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
+    _assert_any_role(profile, "reviewer", "admin")
+    _assert_metadata_actor(doc_id, profile)
+    if set(body) != {"variant_code"}:
+        raise HTTPException(status_code=422, detail="Chỉ chấp nhận mã biến thể")
+    result = update_pending_variant_code(doc_id, body["variant_code"], reviewer=profile.get("username") or "System")
+    if not result["ok"]:
+        raise HTTPException(status_code=409, detail=result["error"])
+    return result
+
+
 @router.get("/documents/{doc_id}/publish-contract")
 def document_publish_contract(doc_id: int, profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
+    _assert_review_actor(doc_id, profile)
     return validate_publish_contract(doc_id).to_dict()
 
 
@@ -613,19 +776,23 @@ def document_publish_standalone(
 @router.post("/documents/{doc_id}/reject")
 def document_reject(doc_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
+    _assert_review_actor(doc_id, profile)
     return {"ok": bool(reject_document(doc_id, reviewer=profile.get("username") or "System"))}
 
 
 @router.post("/documents/{doc_id}/archive")
 def document_archive(doc_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
+    _assert_review_actor(doc_id, profile)
     return {"ok": bool(archive_document(doc_id, reviewer=profile.get("username") or "System"))}
 
 
 @router.delete("/documents/{doc_id}")
-def document_delete(doc_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
+def document_delete(doc_id: int, request: Request, profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "admin")
-    return {"ok": bool(delete_document_completely(doc_id, reviewer=profile.get("username") or "System"))}
+    return {"ok": bool(request.app.state.runtime.review_store.delete_document(
+        doc_id, reviewer=profile.get("username") or "System"
+    ))}
 
 
 @router.get("/ingestion/eta")
@@ -638,36 +805,48 @@ def ingestion_eta(profile: dict[str, Any] = Depends(require_any_role("uploader",
 
 @router.get("/ingestion/bulk-action-jobs")
 def ingestion_bulk_jobs(profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
-    return {"jobs": _rows_to_json(list_bulk_action_jobs())}
+    rows = _rows_to_json(list_bulk_action_jobs())
+    return {"jobs": [
+        row for row in rows
+        if (
+            validate_publish_actor(row["DocID"], profile.get("user_id"), profile.get("roles") or []).valid
+            if _safe_int(row.get("DocID")) else _job_department_allowed(row, profile)
+        )
+    ]}
 
 
 @router.post("/ingestion/jobs/bulk-delete")
 def ingestion_bulk_delete(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "admin")
-    return {"ok": bool(bulk_delete_ingestion_jobs(body.get("ids") or []))}
+    deleted, failed = bulk_delete_ingestion_jobs(body.get("ids") or [])
+    return {"ok": failed == 0, "deleted": deleted, "failed": failed}
 
 
 @router.patch("/ingestion/jobs/{job_id}/priority")
 def ingestion_set_priority(job_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
+    _assert_job_control_actor(job_id, profile)
     return {"ok": bool(set_job_priority(job_id, _safe_int(body.get("priority")) or 0))}
 
 
 @router.post("/ingestion/jobs/{job_id}/cancel")
 def ingestion_cancel(job_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "uploader", "reviewer", "admin")
+    _assert_job_control_actor(job_id, profile, uploader_cancel=True)
     return {"ok": bool(cancel_job(job_id, canceled_by=profile.get("username") or "System"))}
 
 
 @router.post("/ingestion/jobs/{job_id}/requeue")
 def ingestion_requeue(job_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
+    _assert_job_control_actor(job_id, profile)
     return {"ok": bool(requeue_job(job_id))}
 
 
 @router.post("/ingestion/jobs/{job_id}/pending-review")
 def ingestion_pending_review(job_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
+    _assert_job_control_actor(job_id, profile)
     return {"ok": bool(mark_job_pending_review(job_id))}
 
 
@@ -686,8 +865,9 @@ def ingestion_publish(
 
 
 @router.post("/ingestion/jobs/{job_id}/reject")
-def ingestion_reject(job_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
+def ingestion_reject(job_id: int, body: dict[str, Any], request: Request, profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
+    _assert_job_review_actor(job_id, profile, request.app.state.runtime)
     reason = str(body.get("reason") or "")
     return {"ok": bool(reject_ingestion_job(job_id, reason) or mark_job_rejected(job_id))}
 
@@ -726,6 +906,15 @@ def lifecycle_refresh(profile: dict[str, Any] = Depends(csrf_profile)):
 def lifecycle_set_document(doc_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
     _assert_metadata_actor(doc_id, profile)
+    for field in ("effective_date", "expiry_date", "review_date"):
+        value = body.get(field)
+        if value not in (None, ""):
+            try:
+                if not isinstance(value, str) or len(value) != 10:
+                    raise ValueError("date format")
+                date.fromisoformat(value)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=f"{field} phải là ngày hợp lệ YYYY-MM-DD") from exc
     return {"ok": bool(set_document_lifecycle(
         doc_id, effective_date=body.get("effective_date"), expiry_date=body.get("expiry_date"),
         review_date=body.get("review_date"), reviewer=profile.get("username") or "System",
@@ -736,9 +925,13 @@ def lifecycle_set_document(doc_id: int, body: dict[str, Any], profile: dict[str,
 def lifecycle_mark_reviewed(doc_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
     _assert_metadata_actor(doc_id, profile)
+    value = body.get("next_review_days", 180)
+    days = _safe_int(value) if isinstance(value, (int, str)) and not isinstance(value, bool) else None
+    if days is None or days < 1:
+        raise HTTPException(status_code=422, detail="next_review_days phải là số nguyên >= 1")
     return {"ok": bool(mark_document_reviewed(
         doc_id, reviewer=profile.get("username") or "System",
-        next_review_days=_safe_int(body.get("next_review_days")) or 180,
+        next_review_days=days,
     ))}
 
 

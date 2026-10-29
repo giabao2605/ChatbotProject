@@ -4,8 +4,11 @@ from mech_chatbot.config.settings import Settings
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
+from sqlalchemy import create_engine, event
 
 from mech_chatbot.api import dependencies as api_dependencies
+from mech_chatbot.api import file_access
 from mech_chatbot.api.routers import chat as chat_routes
 from mech_chatbot.api.routers import documents as document_routes
 from mech_chatbot.api.routers import operations as operation_routes
@@ -317,6 +320,7 @@ def test_chat_message_serializes_typed_runner_events_without_transport_or_reposi
 
 def test_text_citation_has_download_without_preview(monkeypatch):
     monkeypatch.setattr(chat_routes, "page_has_vision", lambda _doc_id, _page_no: False)
+    monkeypatch.setattr(chat_routes, "page_has_preview", lambda _doc_id, _page_no: False)
     citations = chat_routes._citation_list([
         {
             "doc_id": 9,
@@ -350,6 +354,7 @@ def test_ordinary_citation_without_a_valid_version_never_links_to_latest(monkeyp
 
 def test_ordinary_pdf_citation_keeps_revision_on_both_urls(monkeypatch):
     monkeypatch.setattr(chat_routes, 'page_has_vision', lambda *_: True)
+    monkeypatch.setattr(chat_routes, 'page_has_preview', lambda *_: True)
     card = chat_routes._citation_list([
         {'doc_id': 9, 'trang': 1, 'file_goc': 'manual.pdf', 'version_no': 3}
     ])[0]
@@ -381,6 +386,90 @@ def test_live_citation_filter_requires_exact_source_id():
         citations,
         "Nguồn: bom.pdf, Trang 3, SourceID D42P3",
     ) == [citations[0]]
+
+
+def test_live_ocr_citation_keeps_vision_false_and_exposes_available_preview(monkeypatch):
+    monkeypatch.setattr(chat_routes, "page_has_vision", lambda *_args: False)
+    monkeypatch.setattr(chat_routes, "page_has_preview", lambda *_args: True, raising=False)
+    docs = [{"doc_id": 9, "trang": 1, "file_goc": "scan.pdf", "version_no": 1}]
+
+    citations, _reference = chat_routes._resolve_chat_citations(docs, [], "[SRC:D9P1]")
+
+    assert citations[0]["has_vision"] is False
+    assert citations[0]["page_url"] == "/api/files/documents/9/pages/1?citation_version=1"
+    assert chat_routes._citation_list(docs) == list(citations)
+
+
+@pytest.mark.parametrize("summary", ["", "vision dimensions"])
+@pytest.mark.parametrize("image_state", ["approved", "missing", "outside"])
+@pytest.mark.parametrize("surface", ["live", "history"])
+def test_composed_runtime_citations_use_its_owned_engine(
+    monkeypatch, tmp_path, summary, image_state, surface
+):
+    from mech_chatbot.config.settings import AppProcessSettings, Settings
+
+    image = tmp_path / ("src/data/processed/page.png" if image_state != "outside" else "outside.png")
+    image.parent.mkdir(parents=True, exist_ok=True)
+    if image_state != "missing":
+        Image.new("RGB", (2, 2)).save(image)
+    calls = []
+    engine = create_engine("sqlite://")
+
+    @event.listens_for(engine, "before_cursor_execute", retval=True)
+    def sqlite_syntax(_conn, _cursor, sql, params, _context, _many):
+        calls.append((sql, params))
+        converted = sql.replace("dbo.", "").replace("SELECT TOP 1", "SELECT")
+        converted = converted.replace("TRY_CONVERT(INT, a.ChunkRef)", "CAST(a.ChunkRef AS INTEGER)")
+        return (converted + " LIMIT 1" if "SELECT TOP 1" in sql else converted), params
+
+    with engine.begin() as connection:
+        connection.exec_driver_sql("CREATE TABLE DocumentPages (DocID INT, PageNo INT, VisionSummary TEXT, ImagePath TEXT)")
+        connection.exec_driver_sql("CREATE TABLE AnswerSource (ChatID INT, DocID INT, FileName TEXT, VersionNo INT, ChunkRef TEXT, Score FLOAT, RankNo INT)")
+        connection.exec_driver_sql("INSERT INTO DocumentPages VALUES (9,1,?,?)", (summary, str(image)))
+        connection.exec_driver_sql("INSERT INTO AnswerSource VALUES (11,9,'scan.pdf',1,'1',0.91,1)")
+
+    monkeypatch.setattr(file_access, "engine", file_access._ENGINE_UNSET)
+    monkeypatch.setattr(file_access, "project_root", lambda: tmp_path)
+    monkeypatch.setattr(app_server, "data_raw_root", lambda: tmp_path / "data/raw")
+    runtime = app_server._build_default_app_runtime(
+        AppProcessSettings.from_settings(Settings.from_env({})),
+        SimpleNamespace(schedule=lambda *_args: False),
+        post=lambda *_args, **_kwargs: None,
+        engine=engine,
+    )
+    docs = [{"doc_id": 9, "trang": 1, "file_goc": "scan.pdf", "version_no": 1}]
+
+    live, _ = runtime.citation_resolver(docs, [], "[SRC:D9P1]")
+    history = chat_routes._sources_for_chat_ids([11], runtime)[11]
+
+    expected_url = "/api/files/documents/9/pages/1?citation_version=1" if image_state == "approved" else None
+    citation = live[0] if surface == "live" else history[0]
+    assert citation["page_url"] == expected_url
+    assert citation["has_vision"] is bool(summary and image_state == "approved")
+    assert any("SELECT TOP 1 ImagePath" in sql for sql, _ in calls)
+    assert runtime.db_engine is engine
+    other_engine = create_engine("sqlite://")
+    event.listen(other_engine, "before_cursor_execute", sqlite_syntax, retval=True)
+    with other_engine.begin() as connection:
+        connection.exec_driver_sql("CREATE TABLE DocumentPages (DocID INT, PageNo INT, VisionSummary TEXT, ImagePath TEXT)")
+        connection.exec_driver_sql("CREATE TABLE AnswerSource (ChatID INT, DocID INT, FileName TEXT, VersionNo INT, ChunkRef TEXT, Score FLOAT, RankNo INT)")
+        connection.exec_driver_sql("INSERT INTO DocumentPages VALUES (9,1,'',?)", (str(tmp_path / "src/data/processed/other-missing.png"),))
+        connection.exec_driver_sql("INSERT INTO AnswerSource VALUES (11,9,'scan.pdf',1,'1',0.91,1)")
+    other = app_server._build_default_app_runtime(
+        runtime.settings,
+        SimpleNamespace(schedule=lambda *_args: False),
+        post=lambda *_args, **_kwargs: None,
+        engine=other_engine,
+    )
+    assert other.db_engine is other_engine
+    # Missing rows in the second app cannot reuse the first app's approved image.
+    assert other.citation_resolver(docs, [], "[SRC:D9P1]")[0][0]["page_url"] is None
+    assert chat_routes._sources_for_chat_ids([11], other)[11][0]["page_url"] is None
+    assert runtime.citation_resolver(docs, [], "[SRC:D9P1]")[0][0]["page_url"] == expected_url
+    assert chat_routes._sources_for_chat_ids([11], runtime)[11][0]["page_url"] == expected_url
+    assert file_access.engine is file_access._ENGINE_UNSET
+    other_engine.dispose()
+    engine.dispose()
 
 
 def test_chat_message_serializes_runner_error_without_persistence_seam_patching(

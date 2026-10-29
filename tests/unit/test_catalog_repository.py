@@ -337,6 +337,20 @@ def test_set_department_status_rejects_missing_archived_and_in_use_departments(m
     assert blocked["summary"]["users"] == 2
 
 
+def test_set_department_status_rejects_unknown_status_without_write(monkeypatch):
+    monkeypatch.setattr(
+        catalog, "get_department_summary", lambda _code: _summary("active"),
+    )
+    monkeypatch.setattr(
+        catalog, "upsert_department",
+        lambda *_args, **_kwargs: pytest.fail("unknown status must not be normalized"),
+    )
+
+    result = catalog.set_department_status("ENG", "QA_INVALID")
+
+    assert result["ok"] is False
+
+
 def test_set_department_status_persists_audits_and_returns_fresh_summary(monkeypatch):
     summaries = iter([_summary("active"), _summary("disabled")])
     monkeypatch.setattr(catalog, "get_department_summary", lambda _code: next(summaries))
@@ -396,7 +410,7 @@ def test_reassign_department_data_moves_sql_rbac_and_reports_qdrant_failures(mon
     summaries = {"OLD": _summary("active"), "ENG": _summary("active")}
     monkeypatch.setattr(catalog, "get_department_summary", summaries.get)
     script = [
-        _Result(rows=[(11, "OLD")]),
+        _Result(rows=[(11, "OLD", 1)]),
         _Result(),
         _Result(),
         _Result(),
@@ -417,35 +431,37 @@ def test_reassign_department_data_moves_sql_rbac_and_reports_qdrant_failures(mon
     monkeypatch.setattr(
         catalog._r_qdrant,
         "update_qdrant_metadata",
-        lambda doc_id, payload: qdrant_calls.append((doc_id, payload)) or False,
+        lambda doc_id, payload: qdrant_calls.append((doc_id, payload)) or len(qdrant_calls) == 1,
     )
     monkeypatch.setattr(
         catalog,
         "set_department_status",
-        lambda *args, **kwargs: {"ok": True, "status": "disabled"},
+        lambda *args, **kwargs: pytest.fail("source must stay active until Qdrant succeeds"),
     )
     audits = []
     cache_invalidations = []
     monkeypatch.setattr(catalog._r_audit, "write_audit_log", lambda *args: audits.append(args))
     monkeypatch.setattr(
         catalog._r_semantic_cache,
-        "_invalidate_semantic_cache",
-        lambda reason: cache_invalidations.append(reason),
+        "sc_delete_for_docs",
+        lambda doc_ids, *, connection: cache_invalidations.append((doc_ids, connection)),
     )
 
     result = catalog.reassign_department_data(" OLD ", " ENG ", actor="admin")
 
     assert result == {
-        "ok": True,
+        "ok": False,
         "source": "OLD",
         "target": "ENG",
         "moved_docs": 1,
         "moved_users": 2,
         "qdrant_failures": [11],
-        "status_result": {"ok": True, "status": "disabled"},
+        "status_result": {"ok": False, "message": "Qdrant chưa cập nhật đủ; phòng nguồn vẫn hoạt động."},
+        "message": "Chuyển phòng ban chưa hoàn tất; cần kiểm tra SQL và Qdrant trước khi thử lại.",
     }
     assert qdrant_calls == [
-        (11, {"phong_ban_quyen": ["ENG", "SHARED"], "department": "ENG"})
+        (11, {"servable": False}),
+        (11, {"phong_ban_quyen": ["ENG", "SHARED"], "department": "ENG", "servable": True}),
     ]
     calls = engine.connection.calls
     assert any(
@@ -469,14 +485,111 @@ def test_reassign_department_data_moves_sql_rbac_and_reports_qdrant_failures(mon
         for statement, params in calls
     )
     assert audits[-1][0:3] == ("admin", "department_reassign", "Departments")
-    assert cache_invalidations == ["dept.reassign"]
+    assert cache_invalidations == [([11], engine.connection)]
+
+
+def test_reassign_department_data_aborts_sql_when_qdrant_hide_fails(monkeypatch):
+    summaries = {"OLD": _summary("active"), "ENG": _summary("active")}
+    monkeypatch.setattr(catalog, "get_department_summary", summaries.get)
+    engine = _Engine([_Result(rows=[(11, "OLD", 1)])])
+    monkeypatch.setattr(catalog, "engine", engine)
+    qdrant_calls = []
+    monkeypatch.setattr(
+        catalog._r_qdrant,
+        "update_qdrant_metadata",
+        lambda doc_id, payload: qdrant_calls.append((doc_id, payload)) or False,
+    )
+    monkeypatch.setattr(
+        catalog,
+        "set_department_status",
+        lambda *_args, **_kwargs: pytest.fail("source status must not change"),
+    )
+
+    result = catalog.reassign_department_data("OLD", "ENG", move_users=False)
+
+    assert result["ok"] is False
+    assert qdrant_calls == [(11, {"servable": False})]
+    assert not any("UPDATE dbo.TaiLieu" in statement for statement, _ in engine.connection.calls)
+
+
+def test_reassign_department_data_restores_earlier_docs_if_later_hide_fails(monkeypatch):
+    summaries = {"OLD": _summary("active"), "ENG": _summary("active")}
+    monkeypatch.setattr(catalog, "get_department_summary", summaries.get)
+    engine = _Engine([_Result(rows=[(11, "OLD", 1), (12, "OLD", 1)])])
+    monkeypatch.setattr(catalog, "engine", engine)
+    qdrant_calls = []
+
+    def qdrant_update(doc_id, payload):
+        qdrant_calls.append((doc_id, payload))
+        return doc_id != 12
+
+    monkeypatch.setattr(catalog._r_qdrant, "update_qdrant_metadata", qdrant_update)
+    monkeypatch.setattr(
+        catalog,
+        "set_department_status",
+        lambda *_args, **_kwargs: pytest.fail("source status must not change"),
+    )
+
+    result = catalog.reassign_department_data("OLD", "ENG", move_users=False)
+
+    assert result["ok"] is False
+    assert qdrant_calls == [
+        (11, {"servable": False}),
+        (12, {"servable": False}),
+        (11, {"servable": True}),
+    ]
+    assert not any("UPDATE dbo.TaiLieu" in statement for statement, _ in engine.connection.calls)
+
+
+def test_reassign_department_data_reports_failed_source_disable(monkeypatch):
+    summaries = {"OLD": _summary("active"), "ENG": _summary("active")}
+    monkeypatch.setattr(catalog, "get_department_summary", summaries.get)
+    monkeypatch.setattr(catalog, "engine", _Engine([_Result(rows=[]), _Result(rows=[])]))
+    monkeypatch.setattr(
+        catalog, "set_department_status",
+        lambda *_args, **_kwargs: {"ok": False, "message": "disable failed"},
+    )
+    monkeypatch.setattr(catalog._r_audit, "write_audit_log", lambda *_args: None)
+    monkeypatch.setattr(catalog._r_semantic_cache, "_invalidate_semantic_cache", lambda *_args: None)
+
+    result = catalog.reassign_department_data("OLD", "ENG", move_users=False)
+
+    assert result["ok"] is False
+    assert result["status_result"] == {"ok": False, "message": "disable failed"}
+
+
+def test_reassign_department_data_restores_qdrant_when_scoped_cache_delete_fails(monkeypatch):
+    summaries = {"OLD": _summary("active"), "ENG": _summary("active")}
+    monkeypatch.setattr(catalog, "get_department_summary", summaries.get)
+    monkeypatch.setattr(catalog, "engine", _Engine([_Result(rows=[(11, "OLD", 1)])]))
+    monkeypatch.setattr(
+        catalog._r_semantic_cache,
+        "sc_delete_for_docs",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("cache unavailable")),
+    )
+    qdrant_calls = []
+    monkeypatch.setattr(
+        catalog._r_qdrant,
+        "update_qdrant_metadata",
+        lambda doc_id, payload: qdrant_calls.append((doc_id, payload)) or True,
+    )
+    monkeypatch.setattr(
+        catalog,
+        "set_department_status",
+        lambda *_args, **_kwargs: pytest.fail("source must stay active"),
+    )
+
+    result = catalog.reassign_department_data("OLD", "ENG", move_users=False)
+
+    assert result == {"ok": False, "message": "cache unavailable"}
+    assert qdrant_calls == [(11, {"servable": False}), (11, {"servable": True})]
 
 
 def test_reassign_department_data_supports_no_user_move_and_reports_transaction_failure(monkeypatch):
     summaries = {"OLD": _summary("active"), "ENG": _summary("active")}
     monkeypatch.setattr(catalog, "get_department_summary", summaries.get)
     script = [
-        _Result(rows=[(12, "SHARED")]),
+        _Result(rows=[(12, "SHARED", 1)]),
         _Result(),
         _Result(),
         _Result(),
@@ -498,7 +611,10 @@ def test_reassign_department_data_supports_no_user_move_and_reports_transaction_
     assert result["ok"] is True
     assert result["moved_users"] == 0
     assert result["qdrant_failures"] == []
-    assert qdrant_calls == [(12, {"phong_ban_quyen": [], "department": "ENG"})]
+    assert qdrant_calls == [
+        (12, {"servable": False}),
+        (12, {"phong_ban_quyen": [], "department": "ENG", "servable": True}),
+    ]
 
     monkeypatch.setattr(catalog, "engine", _Engine([RuntimeError("transaction failed")]))
     result = catalog.reassign_department_data("OLD", "ENG")

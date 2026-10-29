@@ -87,8 +87,11 @@ def test_reference_can_resolve_subject_from_current_sentence(question):
     assert result['standalone_question'] == 'Quy trình xin nghỉ phép thế nào?'
 
 
-def test_unresolved_reference_does_not_guess_after_context_failure():
-    result = intent.analyze_context('Quy trình đó thế nào?',
+@pytest.mark.parametrize('question', [
+    'Quy trình đó thế nào?', 'Thông số của biến thể đó?', 'What is the holding time of that variant?',
+])
+def test_unresolved_reference_does_not_guess_after_context_failure(question):
+    result = intent.analyze_context(question,
         chat_history=[{'role': 'user', 'content': 'Xin chào'}],
         runtime=_runtime(_ImmediateExecutor(error=ValueError('invalid JSON'))))
     assert result['clarification_required'] is True
@@ -460,6 +463,73 @@ def test_context_analysis_provider_failure_returns_safe_fallback(monkeypatch, er
         assert executor.future.cancelled is True
 
 
+@pytest.mark.parametrize("question", [
+    "Mô-men siết và thời gian giữ của biến thể đó là bao nhiêu?",
+    "What are the tightening torque and holding time of that variant?",
+])
+def test_restored_history_referent_rewrites_without_in_memory_anchors(question):
+    history = [
+        {"role": "user", "content": (
+            "Mô-men siết và thời gian giữ của biến thể Beta trong tài liệu "
+            "QA_20260924_browser_firefox_variant_beta.md là bao nhiêu? Trích nguồn."
+        )},
+        {"role": "assistant", "content": (
+            "- **Mô-men siết:** 61 N.m\n- **Thời gian giữ:** 17 phút\n\n"
+            "[Nguồn: QA_20260924_browser_firefox_variant_beta.md, Trang 1, "
+            "Version 1, SourceID D1150P1]"
+        )},
+    ]
+    standalone = "Mô-men siết và thời gian giữ của biến thể Beta là bao nhiêu?"
+    calls = []
+
+    def provider(messages, **kwargs):
+        calls.append((messages[0].content, kwargs))
+        return SimpleNamespace(content=(
+            '{"context_action":"continue","standalone_question":"' + standalone + '"}'
+        ))
+
+    assert intent.analyze_context(
+        question, chat_history=history, current_part_ids=[], active_doc_refs=None,
+        invoke_provider=provider, trace_id="restored-history", runtime=_runtime(),
+    ) == {
+        "context_action": "continue", "standalone_question": standalone,
+        "llm_resolved": True,
+    }
+    assert len(calls) == 1
+    prompt, kwargs = calls[0]
+    assert history[0]["content"] in prompt and history[1]["content"] in prompt
+    assert kwargs == {"surface": "query_disambiguation", "trace_id": "restored-history"}
+
+
+@pytest.mark.parametrize(("history", "enabled", "question", "clarification"), [
+    (None, True, "Mô-men siết và thời gian giữ của biến thể đó là bao nhiêu?", True),
+    ([{"role": "user", "content": "Tra biến thể Beta"}], False,
+     "Mô-men siết và thời gian giữ của biến thể đó là bao nhiêu?", True),
+    ([{"role": "user", "content": "Tra biến thể Beta"}], True,
+     "Mô-men siết và thời gian giữ của biến thể Gamma là bao nhiêu?", False),
+    ([{"role": "user", "content": "Tra biến thể Beta"}], True,
+     "Mô-men siết và thời gian giữ của biến thể đó của AB-120 là bao nhiêu?", False),
+])
+def test_referent_rewrite_preserves_fresh_disabled_and_explicit_target_paths(
+    history, enabled, question, clarification,
+):
+    calls = []
+
+    def provider(*_args, **_kwargs):
+        calls.append(True)
+        raise AssertionError("request must keep the existing no-rewrite path")
+
+    assert intent.analyze_context(
+        question, chat_history=history, current_part_ids=[], active_doc_refs=None,
+        invoke_provider=provider, runtime=_runtime(rewrite_enabled=enabled),
+    ) == {
+        "context_action": "continue", "standalone_question": question,
+        "llm_resolved": False,
+        **({"clarification_required": True} if clarification else {}),
+    }
+    assert calls == []
+
+
 def test_runtime_factory_owns_executor_lifecycle(monkeypatch):
     created = []
 
@@ -494,3 +564,33 @@ def test_version_comparison_does_not_accept_unstated_model_versions(monkeypatch)
     *_, data = intent.extract_search_intent("Compare two versions, please.", runtime=_runtime())
     assert data["version_policy"] == "compare_versions"
     assert data["detected_versions"] == []
+
+
+@pytest.mark.parametrize("question", ["Thông số của biến thể đó?", "What is the holding time of that variant?"])
+def test_context_rewrite_cannot_silently_keep_an_unresolved_variant(question):
+    def provider(*_args, **_kwargs):
+        return SimpleNamespace(content=json.dumps({"context_action": "continue", "standalone_question": question}))
+    result = intent.analyze_context(
+        question, chat_history=[{"role": "user", "content": "Tra biến thể Beta"}],
+        invoke_provider=provider, runtime=_runtime(),
+    )
+    assert result["clarification_required"] is True
+    assert result["llm_resolved"] is False
+
+
+@pytest.mark.parametrize("earlier_scope", [False, True])
+def test_local_scope_does_not_treat_unresolved_variant_as_a_standalone_subject(earlier_scope):
+    history = ([{"role": "user", "content": "Thời gian xử lý yêu cầu cấp quyền là bao lâu?"}]
+               if earlier_scope else [])
+    history += [
+        {"role": "user", "content": "Biến thể đó có mô-men siết là bao nhiêu?"},
+        {"role": "assistant", "content": "Bạn vui lòng cho biết mã biến thể cần tra."},
+    ]
+    question = "Quy trình đó thực hiện như thế nào?"
+    result = intent.analyze_context(
+        question, chat_history=history,
+        runtime=_runtime(_ImmediateExecutor(error=ValueError("provider unavailable"))),
+    )
+    assert result["clarification_required"] is True
+    assert result["standalone_question"] == question
+    assert result["llm_resolved"] is False

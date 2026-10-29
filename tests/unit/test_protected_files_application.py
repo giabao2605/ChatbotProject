@@ -52,6 +52,7 @@ def _record(**overrides) -> DocumentAccessRecord:
 class Store:
     record: DocumentAccessRecord | None = None
     page_path: str | None = None
+    page_exists: bool = True
     chat_owned: bool = False
     available: bool = True
 
@@ -60,6 +61,9 @@ class Store:
 
     def load_page_image(self, doc_id: int, page_no: int) -> str | None:
         return self.page_path
+
+    def has_page(self, doc_id: int, page_no: int) -> bool:
+        return self.page_exists
 
     def chat_image_owned_by(self, image_id: str, username: str) -> bool:
         if not self.available:
@@ -142,6 +146,40 @@ def test_display_department_does_not_restore_revoked_file_grant() -> None:
     assert raised.value.detail == "department_denied"
 
 
+def test_assigned_reviewer_can_preview_pending_page_and_original(tmp_path) -> None:
+    source = tmp_path / "pending.pdf"
+    page = tmp_path / "pending-page.png"
+    audit = Audit()
+    record = _record(
+        review_status="pending_review", publication_state="draft",
+        lifecycle_status="pending_review", servable=False, is_current=False,
+        knowledge_approver_user_id=81,
+    )
+    resolver = _resolver(Store(record=record, page_path="rendered.png"), Storage(original=source, page=page), audit)
+    reviewer = _actor(user_id=81, roles=frozenset({"reviewer"}))
+
+    assert resolver.resolve(ProtectedFileReference.review_page(42, 1), reviewer).path == page
+    assert resolver.resolve(ProtectedFileReference.review_original(42), reviewer).path == source
+    assert [item.action for item in audit.records] == ["view_pending_page", "review_preview_original"]
+    with pytest.raises(ProtectedFileError):
+        resolver.resolve(ProtectedFileReference.page(42, 1), reviewer)
+
+
+@pytest.mark.parametrize("actor,record,reason", [
+    (_actor(user_id=81), _record(review_status="pending_review", publication_state="draft", servable=False,
+                               knowledge_approver_user_id=81), "review_preview_role_denied"),
+    (_actor(user_id=81, roles=frozenset({"reviewer"}), allowed_departments=frozenset({"Other"}), department="Other"),
+     _record(review_status="pending_review", publication_state="draft", servable=False,
+             knowledge_approver_user_id=81), "department_denied"),
+    (_actor(user_id=81, roles=frozenset({"reviewer"})), _record(), "document_not_pending_review"),
+])
+def test_pending_preview_rejects_wrong_role_scope_or_state(actor, record, reason) -> None:
+    resolver = _resolver(Store(record=record), Storage(original=Path("pending.pdf")))
+    with pytest.raises(ProtectedFileError) as denied:
+        resolver.resolve(ProtectedFileReference.review_original(42), actor)
+    assert denied.value.code == "unauthorized"
+    assert denied.value.detail == reason
+
 
 def test_missing_page_image_returns_placeholder_after_confidential_audit() -> None:
     audit = Audit()
@@ -160,6 +198,18 @@ def test_missing_page_image_returns_placeholder_after_confidential_audit() -> No
     assert result.placeholder is True
     assert audit.records[0].action == "view_citation_page"
     assert audit.records[0].details["page_no"] == 3
+
+
+@pytest.mark.parametrize("page_no", [0, 999999])
+def test_nonexistent_document_page_is_not_a_placeholder(page_no: int) -> None:
+    resolver = _resolver(
+        Store(record=_record(), page_exists=False), Storage(page=None)
+    )
+
+    with pytest.raises(ProtectedFileError) as raised:
+        resolver.resolve(ProtectedFileReference.page(42, page_no), _actor())
+
+    assert raised.value.code == "not_found"
 
 
 @pytest.mark.parametrize("image_id", ["../secret.png", "nested/secret.png", ".hidden"])

@@ -10,6 +10,7 @@ KHÔNG import streamlit / ui ở tầng này.
 from sqlalchemy import text
 
 from mech_chatbot.db.engine import engine, resolve_engine as _resolve_engine
+from .jobs import JOB_CONTROL_DOCUMENT_GUARD
 
 
 def resolve_engine(candidate=None):
@@ -126,10 +127,22 @@ def get_role_dashboard(profile, *, strict_site_filter=True):
 			strict_site_filter=strict_site_filter,
 		),
 	}
-	if not role_allows(roles, "reviewer") and not role_allows(roles, "platform_admin"):
+	if not role_allows(roles, "reviewer"):
 		result["document_lifecycle"] = {
 			"effective": int(result["document_lifecycle"].get("effective", 0))
 		}
+	if role_allows(roles, "viewer", "uploader", "reviewer"):
+		result["recent_documents"] = [
+			{"DocID": row[0], "OriginalFileName": row[1],
+			 "Department": row[2], "LifecycleStatus": row[3]}
+			for row in list_recent_documents(
+				allowed_departments=allowed_departments,
+				max_security_level=max_security_level,
+				allowed_sites=allowed_sites,
+				global_read_admin=global_read_admin,
+				strict_site_filter=strict_site_filter,
+			)
+		]
 	with engine.connect() as conn:
 		if role_allows(roles, "uploader"):
 			result["ingestion"] = {
@@ -213,13 +226,26 @@ def get_role_dashboard(profile, *, strict_site_filter=True):
 	return result
 
 
-def list_recent_documents():
+def list_recent_documents(allowed_departments=None, max_security_level="public",
+							  allowed_sites=None, global_read_admin=False,
+							  strict_site_filter=True):
+	params = {"soon_days": 30}
+	filters = _document_access_filters(
+		allowed_departments=allowed_departments,
+		max_security_level=max_security_level,
+		allowed_sites=allowed_sites,
+		global_read_admin=global_read_admin,
+		params=params,
+		strict_site_filter=strict_site_filter,
+	)
+	filters.append(f"({_lifecycle_bucket_case()}) = 'effective'")
 	with engine.connect() as conn:
-		return conn.execute(text("""
-                SELECT TOP 10 DocID, TenFile, ThuMuc, ReviewStatus, LifecycleStatus, NgayTaiLen
-                FROM TaiLieu
-                ORDER BY NgayTaiLen DESC
-            """)).fetchall()
+		return conn.execute(text(f"""
+			SELECT TOP 10 d.DocID, d.TenFile, d.ThuMuc, d.LifecycleStatus
+			FROM dbo.TaiLieu d
+			WHERE {' AND '.join(filters)}
+			ORDER BY d.NgayTaiLen DESC, d.DocID DESC
+		"""), params).fetchall()
 
 
 def list_recent_failed_jobs():
@@ -283,8 +309,11 @@ def bulk_delete_ingestion_jobs(ids):
 	with engine.begin() as conn:
 		for jid in ids:
 			try:
-				conn.execute(text("DELETE FROM dbo.IngestionJobs WHERE JobID = :jid"), {"jid": jid})
-				ok += 1
+				result = conn.execute(text("DELETE FROM dbo.IngestionJobs WHERE JobID = :jid"), {"jid": jid})
+				if (getattr(result, "rowcount", 0) or 0) > 0:
+					ok += 1
+				else:
+					fail += 1
 			except Exception:
 				fail += 1
 	return ok, fail
@@ -328,10 +357,11 @@ def classify_feedback_and_get_source(fid, failure_type, correct_answer, reviewer
 
 def delete_feedback(fid):
 	with engine.begin() as conn:
-		conn.execute(
+		result = conn.execute(
 			text("DELETE FROM FeedbackReview WHERE FeedbackID = :fid"),
 			{"fid": fid},
 		)
+		return (result.rowcount or 0) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -445,9 +475,9 @@ def list_documents(allowed_departments=None, max_security_level="public", allowe
 	q = f"""
         SELECT d.DocID, d.TenFile AS OriginalFileName, d.ThuMuc AS Department, d.Domain, d.SecurityLevel,
                d.Title, d.Tags, d.Summary, d.VersionNo, d.IsCurrent AS IsCurrentVersion,
-               d.UploadedBy, d.NgayTaiLen AS CreatedAt, d.ExpiryDate, d.EffectiveStatus,
+               d.UploadedBy, d.NgayTaiLen AS CreatedAt, d.ExpiryDate, d.EffectiveStatus, d.LastReviewedAt,
                d.EffectiveDate AS EffectiveDateStart, d.ReviewDate, d.OwnerSigner, d.DocLanguage AS Language,
-               d.DocNumber, d.Site, d.VariantGroup, d.VariantCode AS BranchLabel, d.LifecycleStatus, d.ReviewStatus
+               d.DocNumber, d.Site, d.VariantGroup, d.VariantCode AS BranchLabel, d.LifecycleStatus, d.ReviewStatus, d.IssuedDate
         FROM TaiLieu d
         {where_clause}
         ORDER BY d.NgayTaiLen DESC
@@ -513,21 +543,30 @@ def mark_document_expired(doc_id, reviewer=None):
 	return True
 
 
-def list_expiring_documents():
+def list_expiring_documents(allowed_departments=None, max_security_level="public",
+                            allowed_sites=None, global_read_admin=False):
+	params = {}
+	filters = _document_access_filters(
+		allowed_departments=allowed_departments,
+		max_security_level=max_security_level,
+		allowed_sites=allowed_sites,
+		global_read_admin=global_read_admin,
+		params=params,
+	)
+	filters.append("""((d.ExpiryDate IS NOT NULL AND d.ExpiryDate <= DATEADD(day, 60, GETDATE()))
+		OR (d.ReviewDate IS NOT NULL AND d.ReviewDate <= DATEADD(day, 60, GETDATE())))""")
+	filters.append("d.LifecycleStatus <> 'deleting'")
+	where_clause = " AND ".join(filters)
 	with engine.connect() as conn:
-		q = text("""
-                    SELECT DocID, TenFile AS OriginalFileName, ThuMuc AS Department, EffectiveStatus,
-                           ExpiryDate, ReviewDate, IsCurrent AS IsCurrentVersion
-                    FROM TaiLieu
-                    WHERE (
-                        (ExpiryDate IS NOT NULL AND ExpiryDate <= DATEADD(day, 60, GETDATE()))
-                        OR (ReviewDate IS NOT NULL AND ReviewDate <= DATEADD(day, 60, GETDATE()))
-                    )
-                    AND IsCurrent = 1
-                    AND LifecycleStatus <> 'deleting'
-                    ORDER BY ExpiryDate ASC
+		q = text(f"""
+                    SELECT d.DocID, d.TenFile AS OriginalFileName, d.ThuMuc AS Department,
+                           d.EffectiveStatus, d.ExpiryDate, d.ReviewDate,
+                           d.IsCurrent AS IsCurrentVersion
+                    FROM TaiLieu d
+                    WHERE {where_clause}
+                    ORDER BY d.ExpiryDate ASC
                 """)
-		return conn.execute(q).fetchall()
+		return conn.execute(q, params).fetchall()
 
 
 # ---------------------------------------------------------------------------
@@ -549,6 +588,8 @@ def list_pending_review_docs():
                 FROM dbo.TaiLieu pending
                 WHERE pending.TenFile = j.TenFile
                   AND pending.ThuMuc = j.ThuMuc
+                  AND pending.FilePath = j.FilePath
+                  AND NULLIF(LTRIM(RTRIM(j.FilePath)), '') IS NOT NULL
                   AND pending.ReviewStatus = 'pending_review'
                   AND pending.LifecycleStatus <> 'deleting'
                 ORDER BY pending.DocID DESC
@@ -563,6 +604,8 @@ def list_pending_review_docs():
                   FROM dbo.TaiLieu published
                   WHERE published.TenFile = j.TenFile
                     AND published.ThuMuc = j.ThuMuc
+                  AND published.FilePath = j.FilePath
+                  AND NULLIF(LTRIM(RTRIM(j.FilePath)), '') IS NOT NULL
                     AND published.LifecycleStatus <> 'deleting'
                     AND published.ReviewStatus = 'approved'
                     AND published.PublicationState = 'published'
@@ -590,8 +633,18 @@ def reject_ingestion_job(job_id, reason, *, db_engine=None):
 def mark_job_pending_review(job_id):
 	with engine.begin() as conn:
 		res = conn.execute(text("""
-                    UPDATE IngestionJobs SET Status = 'pending_review', UpdatedAt = GETDATE() WHERE JobID = :jid
-                """), {"jid": job_id})
+                    UPDATE dbo.IngestionJobs SET Status = 'pending_review', UpdatedAt = GETDATE()
+                    WHERE JobID = :jid
+                      AND Status = 'failed'
+                      AND LockedBy IS NULL AND LockedAt IS NULL
+                      AND QualityStatus IN ('ready_for_review', 'needs_review')
+                      AND EXISTS (
+                          SELECT 1 FROM dbo.TaiLieu d
+                          WHERE d.TenFile = IngestionJobs.TenFile AND d.ThuMuc = IngestionJobs.ThuMuc
+                            AND d.ReviewStatus = 'pending_review' AND d.PublicationState = 'draft'
+                            AND d.Servable = 0
+                      )
+                """ + JOB_CONTROL_DOCUMENT_GUARD), {"jid": job_id})
 	return (getattr(res, "rowcount", 0) or 0) > 0
 
 
@@ -611,16 +664,20 @@ def delete_ingestion_job(job_id, *, db_engine=None):
 	return (getattr(res, "rowcount", 0) or 0) > 0
 
 
-def list_bulk_action_jobs():
+def list_bulk_action_jobs(job_id=None):
 	with engine.connect() as conn:
 		return conn.execute(text("""
-            SELECT j.JobID, j.TenFile, j.ThuMuc, j.Status, j.UpdatedAt, d.DocID
+            SELECT j.JobID, j.TenFile, j.ThuMuc, j.Status, j.UpdatedAt, d.DocID,
+                   j.UploadedBy, COALESCE(d.SecurityLevel, j.SecurityLevel) AS SecurityLevel,
+                   COALESCE(d.Site, j.Site) AS Site
             FROM IngestionJobs j
             OUTER APPLY (
                 SELECT TOP 1 pending.DocID
                 FROM dbo.TaiLieu pending
                 WHERE pending.TenFile = j.TenFile
                   AND pending.ThuMuc = j.ThuMuc
+                  AND pending.FilePath = j.FilePath
+                  AND NULLIF(LTRIM(RTRIM(j.FilePath)), '') IS NOT NULL
                   AND pending.ReviewStatus = 'pending_review'
                   AND pending.LifecycleStatus <> 'deleting'
                 ORDER BY pending.DocID DESC
@@ -630,13 +687,16 @@ def list_bulk_action_jobs():
                 FROM dbo.TaiLieu latest
                 WHERE latest.TenFile = j.TenFile
                   AND latest.ThuMuc = j.ThuMuc
-                  AND latest.LifecycleStatus <> 'deleting'
+                  AND latest.FilePath = j.FilePath
+                  AND NULLIF(LTRIM(RTRIM(j.FilePath)), '') IS NOT NULL
+                  AND (latest.LifecycleStatus <> 'deleting' OR :job_id IS NOT NULL)
                 ORDER BY latest.DocID DESC
             ) latest
             LEFT JOIN TaiLieu d
               ON d.DocID = latest.DocID
-             AND d.LifecycleStatus <> 'deleting'
-            WHERE j.Status IN ('pending_review', 'failed', 'rejected', 'publishing')
+             AND (d.LifecycleStatus <> 'deleting' OR :job_id IS NOT NULL)
+            WHERE (:job_id IS NOT NULL AND j.JobID = :job_id)
+               OR (:job_id IS NULL AND j.Status IN ('pending_review', 'failed', 'rejected', 'publishing')
               AND (
                   j.Status <> 'pending_review'
                   OR NOT EXISTS (
@@ -644,6 +704,8 @@ def list_bulk_action_jobs():
                       FROM dbo.TaiLieu published
                       WHERE published.TenFile = j.TenFile
                         AND published.ThuMuc = j.ThuMuc
+                  AND published.FilePath = j.FilePath
+                  AND NULLIF(LTRIM(RTRIM(j.FilePath)), '') IS NOT NULL
                         AND published.LifecycleStatus <> 'deleting'
                         AND published.ReviewStatus = 'approved'
                         AND published.PublicationState = 'published'
@@ -655,8 +717,9 @@ def list_bulk_action_jobs():
                         AND published.DocID >= COALESCE(pending.DocID, 0)
                   )
               )
+              )
             ORDER BY j.UpdatedAt ASC
-        """)).fetchall()
+        """), {"job_id": job_id}).fetchall()
 
 
 def mark_job_rejected(job_id, *, db_engine=None):
@@ -668,7 +731,8 @@ def mark_job_rejected(job_id, *, db_engine=None):
 	return (getattr(res, "rowcount", 0) or 0) > 0
 
 
-def list_docs_for_bulk_meta(dept=None, domain=None):
+def list_docs_for_bulk_meta(dept=None, domain=None, *, allowed_departments=None,
+							 allowed_sites=None, max_security_level="public", global_read_admin=False):
 	q = """
 		SELECT t.DocID, t.TenFile, t.ThuMuc, t.Domain
 		FROM TaiLieu t
@@ -691,6 +755,30 @@ def list_docs_for_bulk_meta(dept=None, domain=None):
 	if domain:
 		q += " AND t.Domain = :domain"
 		params["domain"] = domain
+	if not global_read_admin:
+		departments = sorted({str(value).strip() for value in (allowed_departments or []) if str(value).strip()})
+		sites = sorted({str(value).strip() for value in (allowed_sites or []) if str(value).strip()})
+		if not departments or not sites:
+			q += " AND 1 = 0"
+		else:
+			dept_keys = []
+			for index, value in enumerate(departments):
+				key = f"allowed_dept_{index}"
+				dept_keys.append(f":{key}")
+				params[key] = value
+			q += " AND EXISTS (SELECT 1 FROM dbo.PhongBanChiaSe pb WHERE pb.DocID = t.DocID AND pb.DeptCode IN (" + ", ".join(dept_keys) + "))"
+			site_keys = []
+			for index, value in enumerate(sites):
+				key = f"allowed_site_{index}"
+				site_keys.append(f":{key}")
+				params[key] = value
+			q += " AND t.Site IN (" + ", ".join(site_keys) + ")"
+			level_keys = []
+			for index, value in enumerate(_allowed_security_levels(max_security_level)):
+				key = f"allowed_level_{index}"
+				level_keys.append(f":{key}")
+				params[key] = value
+			q += " AND COALESCE(NULLIF(LOWER(LTRIM(RTRIM(t.SecurityLevel))), ''), 'confidential') IN (" + ", ".join(level_keys) + ")"
 	q += " ORDER BY t.ThuMuc, t.TenFile"
 	with engine.connect() as conn:
 		return conn.execute(text(q), params).fetchall()
@@ -928,13 +1016,16 @@ def delete_user_account(user_id, actor_username=None, actor_id=None):
 	return {"ok": bool(deleted), "deleted": deleted, "message": "Đã xóa tài khoản." if deleted else "Xóa tài khoản thất bại."}
 
 
-def update_user_password(user_id, password_hash):
+def update_user_password(user_id, password_hash, *, on_password_updated=None):
 	with engine.begin() as conn:
 		res = conn.execute(
 			text("UPDATE Users SET PasswordHash = :p WHERE UserID = :uid"),
 			{"p": password_hash, "uid": user_id},
 		)
-	return (getattr(res, "rowcount", 0) or 0) > 0
+		updated = (getattr(res, "rowcount", 0) or 0) > 0
+		if updated and on_password_updated is not None:
+			on_password_updated(conn)
+	return updated
 
 
 def create_user_with_roles(username, password_hash, display_name, department, selected_roles, depts):

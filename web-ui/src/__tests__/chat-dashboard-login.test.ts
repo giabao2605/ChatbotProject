@@ -160,6 +160,7 @@ function button(wrapper: VueWrapper, label: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  sessionStorage.clear();
   routerState.query = {};
   vi.mocked(api.listSessions).mockResolvedValue([]);
   vi.mocked(api.loadHistory).mockResolvedValue([]);
@@ -589,6 +590,67 @@ describe("ChatView public behavior", () => {
     expect(vi.mocked(api.sendChatMessage).mock.calls.at(-1)![0].image_token).toBe('ready-token');
   });
 
+  it("opens an available OCR source image without claiming vision content", async () => {
+    sessionStorage.setItem("chat-active-session", "session-ocr");
+    vi.mocked(api.listSessions).mockResolvedValue([{ session_id: "session-ocr", cau_hoi: "OCR source question" }]);
+    vi.mocked(api.loadHistory).mockResolvedValue([{
+      role: "assistant",
+      content: "OCR answer [SRC:D42P7]",
+      citations: [{
+        doc_id: 42, page_no: 7, file_name: "scan.pdf", version_no: 1,
+        has_vision: false, page_url: "/api/files/documents/42/pages/7",
+        original_url: "/api/files/documents/42/original",
+      }],
+    }]);
+    const { wrapper } = mountWithPinia(ChatView);
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("OCR answer");
+    const preview = wrapper.find(".citation-preview-link");
+    expect(preview.exists()).toBe(true);
+    expect(preview.attributes("href")).toBe("/api/files/documents/42/pages/7");
+    expect(preview.attributes("target")).toBe("_blank");
+    expect(preview.find("img").attributes("src")).toBe(preview.attributes("href"));
+    await preview.trigger("click");
+    expect(wrapper.find(".citation-download").attributes("href"))
+      .toBe("/api/files/documents/42/original");
+    wrapper.unmount();
+  });
+
+  it("restores the active conversation after a page reload", async () => {
+    vi.mocked(api.listSessions).mockResolvedValue([
+      { session_id: "session-a", cau_hoi: "Câu hỏi A" },
+    ]);
+    vi.mocked(api.loadHistory).mockResolvedValue([
+      { role: "assistant", content: "Câu trả lời đã lưu" },
+    ]);
+    const first = mountWithPinia(ChatView).wrapper;
+    await flushPromises();
+    await button(first, "Lịch sử").trigger("click");
+    await first.find(".history-title").trigger("click");
+    await flushPromises();
+    first.unmount();
+
+    const second = mountWithPinia(ChatView).wrapper;
+    await flushPromises();
+    expect(api.loadHistory).toHaveBeenCalledTimes(2);
+    expect(useChatStore().sessionId).toBe("session-a");
+    expect(second.text()).toContain("Câu trả lời đã lưu");
+
+    await button(second, "Cuộc trò chuyện mới").trigger("click");
+    expect(sessionStorage.getItem("chat-active-session")).toBeNull();
+  });
+
+  it("does not restore a session missing from the current user's history", async () => {
+    sessionStorage.setItem("chat-active-session", "another-user-session");
+    const { wrapper } = mountWithPinia(ChatView);
+    await flushPromises();
+
+    expect(api.loadHistory).not.toHaveBeenCalled();
+    expect(wrapper.find(".empty-state").exists()).toBe(true);
+    expect(sessionStorage.getItem("chat-active-session")).toBeNull();
+  });
+
   it("loads, opens, and removes sessions while keeping the active session valid", async () => {
     const sessions = [
       { session_id: "session-a", cau_hoi: "Câu hỏi A" },
@@ -705,6 +767,7 @@ describe("ChatView public behavior", () => {
       currentPartIds: ["P-101"],
       conversationContext: { active: "manual" },
     });
+    expect(sessionStorage.getItem("chat-active-session")).toBe(originalSession);
 
     await button(wrapper, "Hữu ích").trigger("click");
     await flushPromises();
@@ -768,6 +831,36 @@ describe("ChatView public behavior", () => {
     expect(wrapper.text()).toContain(expected);
     expect(wrapper.find(".progress-list li.error").exists()).toBe(true);
     expect(wrapper.find(".tag").text()).toBe("Sẵn sàng");
+    expect(wrapper.find(".thinking-row").exists()).toBe(false);
+  });
+
+  it("discards an interrupted answer and leaves the question ready to retry", async () => {
+    vi.mocked(api.sendChatMessage).mockImplementation(async (_payload, callbacks) => {
+      callbacks.onDelta("QA_PARTIAL_STREAM");
+      throw new Error("Phản hồi chưa hoàn tất. Vui lòng thử lại.");
+    });
+    const { wrapper } = mountWithPinia(ChatView);
+    await flushPromises();
+
+    await wrapper.find("textarea").setValue("P-101?");
+    await button(wrapper, "Gửi").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Phản hồi chưa hoàn tất. Vui lòng thử lại.");
+    expect(wrapper.text()).not.toContain("QA_PARTIAL_STREAM");
+    expect((wrapper.find("textarea").element as HTMLTextAreaElement).value).toBe("P-101?");
+    expect(wrapper.find(".progress-list li.error").exists()).toBe(true);
+    expect(wrapper.find(".tag").text()).toBe("Sẵn sàng");
+
+    vi.mocked(api.sendChatMessage).mockImplementationOnce(async (_payload, callbacks) => {
+      callbacks.onDone({ chat_id: 43 });
+    });
+    await button(wrapper, "Gửi").trigger("click");
+    await flushPromises();
+    expect(api.sendChatMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ question: "P-101?", chat_history: [] }),
+      expect.any(Object),
+    );
   });
 
   it("ignores an empty file selection and can clear a selected upload", async () => {
@@ -801,6 +894,47 @@ describe("ChatView public behavior", () => {
 });
 
 describe("DashboardView public behavior", () => {
+  it("does not claim recent documents are empty when the group is unavailable", async () => {
+    vi.mocked(api.loadDashboard).mockResolvedValue({
+      document_lifecycle: { effective: 0 },
+    } as Awaited<ReturnType<typeof api.loadDashboard>>);
+    const pinia = newPinia();
+    useAuthStore().user = { ...user, roles: ["platform_admin"] };
+    const wrapper = mount(DashboardView, {
+      global: { ...global, plugins: [pinia] },
+    });
+    await flushPromises();
+
+    expect(wrapper.text()).not.toContain("Tài liệu gần đây");
+  });
+
+  it.each(["platform_admin", "security_admin"])(
+    "does not offer document or queue links without route access for %s",
+    async (role) => {
+      vi.mocked(api.loadDashboard).mockResolvedValue({
+        stats: {},
+        document_lifecycle: { effective: 3 },
+        ingestion: { running: 2 },
+        recent_documents: [],
+        recent_failed_jobs: [],
+      });
+      const pinia = newPinia();
+      useAuthStore().user = { ...user, roles: [role] };
+      const wrapper = mount(DashboardView, {
+        global: { ...global, plugins: [pinia] },
+      });
+      await flushPromises();
+
+      const cards = wrapper.findAll(".metric-card");
+      expect(cards.length).toBe(2);
+      for (const card of cards) {
+        expect(card.classes()).not.toContain("actionable");
+        await card.trigger("click");
+      }
+      expect(routerState.push).not.toHaveBeenCalled();
+    },
+  );
+
   it("renders grouped metrics and recent activity, then opens actionable metrics", async () => {
     vi.mocked(api.loadDashboard).mockResolvedValue({
       stats: { ignored: 99 },
@@ -821,13 +955,13 @@ describe("DashboardView public behavior", () => {
       ],
     });
     const pinia = newPinia();
-    useAuthStore().user = { ...user, roles: ["platform_admin"] };
+    useAuthStore().user = { ...user, roles: ["admin"] };
     const wrapper = mount(DashboardView, {
       global: { ...global, plugins: [pinia] },
     });
     await flushPromises();
 
-    expect(wrapper.text()).toContain("Toàn cảnh vận hành hệ thống");
+    expect(wrapper.text()).toContain("Công việc tài liệu và quản trị nội dung");
     expect(wrapper.text()).toContain("Ingest");
     expect(wrapper.text()).toContain("Job đang chạy");
     expect(wrapper.text()).toContain("Chờ duyệt");

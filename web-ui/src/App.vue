@@ -1,13 +1,33 @@
 <script setup lang="ts">
-import { computed } from "vue";
-import { RouterLink, RouterView, useRouter } from "vue-router";
-import { useAuthStore } from "@/stores/auth";
+import { computed, onMounted, onUnmounted, watch } from "vue";
+import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
+import { SESSION_UNAUTHORIZED_EVENT } from "@/api/client";
+import { LOGOUT_STORAGE_KEY, useAuthStore } from "@/stores/auth";
 import { t, currentLocale } from "@/i18n";
 import type { Locale } from "@/i18n";
 import { visibleNavigationItems } from "@/authorization";
 
 const auth = useAuthStore();
 const router = useRouter();
+const route = useRoute();
+
+function receiveLogout(event: StorageEvent) {
+  if (event.key === LOGOUT_STORAGE_KEY && event.newValue && event.storageArea === localStorage) {
+    auth.invalidateSession();
+  }
+}
+function receiveUnauthorized() { auth.invalidateSession(); }
+onMounted(() => {
+  window.addEventListener("storage", receiveLogout);
+  window.addEventListener(SESSION_UNAUTHORIZED_EVENT, receiveUnauthorized);
+});
+onUnmounted(() => {
+  window.removeEventListener("storage", receiveLogout);
+  window.removeEventListener(SESSION_UNAUTHORIZED_EVENT, receiveUnauthorized);
+});
+watch(() => auth.user, user => {
+  if (!user && !route.meta.public) void router.replace("/login");
+});
 
 const navItems = computed(() => visibleNavigationItems(auth.user?.roles));
 
@@ -81,7 +101,7 @@ async function doLogout() {
     </aside>
 
     <main class="main-panel">
-      <RouterView />
+      <RouterView v-if="auth.user || route.meta.public" />
     </main>
   </div>
 </template>

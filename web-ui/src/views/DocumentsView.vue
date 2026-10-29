@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watchEffect } from "vue";
+import { computed, reactive, ref, watch, watchEffect } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import ResourcePage from "@/components/ResourcePage.vue";
 import StructuredEvidenceReview from "@/components/StructuredEvidenceReview.vue";
@@ -78,7 +78,10 @@ const EFFECTIVE_STATUSES = ["draft", "effective", "superseded", "expired", "with
 const editVisible = ref(false);
 const editBusy = ref(false);
 const editError = ref("");
+const linkError = ref("");
 const editDocId = ref<number | null>(null);
+const editPending = ref(false);
+const variantCode = ref("");
 const editValues = reactive<Record<string, string>>({});
 let resolveEdit: (() => void) | null = null;
 let rejectEdit: ((e: unknown) => void) | null = null;
@@ -93,6 +96,8 @@ function openEdit(row: ApiRow): Promise<void> {
     resolveEdit = resolve;
     rejectEdit = reject;
     editDocId.value = num(row, "DocID");
+    editPending.value = pickStr(row, ["ReviewStatus"]) === "pending_review";
+    variantCode.value = pickStr(row, ["BranchLabel", "VariantCode"]);
     editError.value = "";
     for (const f of META_FIELDS) {
       let val = pickStr(row, [f.key, f.key.replace(/_/g, "")]);
@@ -102,6 +107,20 @@ function openEdit(row: ApiRow): Promise<void> {
     editVisible.value = true;
   });
 }
+
+watch(() => route.query.doc, async (value) => {
+  const id = Number(value);
+  if (!canManage.value || !Number.isSafeInteger(id) || id <= 0) return;
+  linkError.value = "";
+  try {
+    const data = await apiGet<{ documents: ApiRow[] }>("/api/documents/pending-review");
+    const row = (data.documents ?? []).find((item) => num(item, "DocID") === id);
+    if (row) void openEdit({ ...row, ReviewStatus: "pending_review" }).catch(() => {});
+    else linkError.value = "Không tìm thấy tài liệu chờ duyệt được phép sửa.";
+  } catch {
+    linkError.value = "Không thể mở tài liệu chờ duyệt này.";
+  }
+}, { immediate: true });
 
 async function submitEdit() {
   if (editDocId.value === null) return;
@@ -125,6 +144,30 @@ async function submitEdit() {
     rejectEdit = null;
   } catch (err) {
     editError.value = err instanceof Error ? err.message : "Lỗi";
+  } finally {
+    editBusy.value = false;
+  }
+}
+
+async function submitVariantCode() {
+  if (editDocId.value === null) return;
+  const code = variantCode.value.trim();
+  if (!code || code.toLowerCase() === "default") {
+    editError.value = "Nhập mã biến thể riêng, khác default.";
+    return;
+  }
+  editBusy.value = true;
+  editError.value = "";
+  try {
+    const result = await apiSend<{ ok: boolean }>(`/api/documents/${editDocId.value}/variant-code`, "PATCH", { variant_code: code });
+    if (result?.ok !== true) throw new Error("Không lưu được mã biến thể");
+    editVisible.value = false;
+    resolveEdit?.();
+    resolveEdit = null;
+    rejectEdit = null;
+    void router.push({ path: "/review" });
+  } catch (err) {
+    editError.value = err instanceof Error ? err.message : "Không lưu được mã biến thể";
   } finally {
     editBusy.value = false;
   }
@@ -192,11 +235,13 @@ const rowActions = computed(() => canManage.value ? managementActions : viewerAc
 const bulk = reactive({ visible: false, busy: false, error: "", ids: "" });
 let resolveBulk: (() => void) | null = null;
 let rejectBulk: ((e: unknown) => void) | null = null;
+let bulkChanged = false;
 
 function openBulkDelete(): Promise<void> {
   return new Promise((resolve, reject) => {
     resolveBulk = resolve;
     rejectBulk = reject;
+    bulkChanged = false;
     bulk.ids = "";
     bulk.error = "";
     bulk.visible = true;
@@ -216,7 +261,9 @@ async function submitBulkDelete() {
   bulk.error = "";
   try {
     for (const id of ids) {
-      await apiSend(`/api/documents/${id}`, "DELETE");
+      const result = await apiSend<{ ok: boolean }>(`/api/documents/${id}`, "DELETE");
+      if (!result.ok) throw new Error(`Không xóa được DocID ${id}.`);
+      bulkChanged = true;
     }
     bulk.visible = false;
     resolveBulk?.();
@@ -231,7 +278,8 @@ async function submitBulkDelete() {
 
 function cancelBulkDelete() {
   bulk.visible = false;
-  rejectBulk?.(new Error(""));
+  if (bulkChanged) resolveBulk?.();
+  else rejectBulk?.(new Error(""));
   resolveBulk = null;
   rejectBulk = null;
 }
@@ -244,6 +292,7 @@ const toolbar = computed<ToolbarAction[]>(() => canManage.value ? [
 <template>
   <section class="content-page document-tabs-shell">
     <header class="page-header"><div><div class="eyebrow">Document library</div><h1>Kho tài liệu</h1><p class="page-subtitle">Tài liệu được phân loại theo trạng thái hiệu lực.</p></div></header>
+    <Message v-if="linkError" severity="error" v-text="linkError"></Message>
     <nav class="view-tabs" aria-label="Trạng thái tài liệu">
       <Button label="Còn hiệu lực" :outlined="activeTab !== 'effective'" @click="selectTab('effective')" />
       <template v-if="canManage">
@@ -279,8 +328,16 @@ const toolbar = computed<ToolbarAction[]>(() => canManage.value ? [
     <StructuredEvidenceReview v-if="evidenceDialog.visible && canManage && evidenceDialog.docId" :key="evidenceDialog.docId" :doc-id="evidenceDialog.docId" />
   </Dialog>
 
-  <Dialog v-model:visible="editVisible" header="Sửa metadata tài liệu" modal :style="{ width: '560px' }">
+  <Dialog v-model:visible="editVisible" header="Sửa metadata tài liệu" modal :style="{ width: '560px' }" @after-hide="cancelEdit">
     <Message v-if="editError" severity="error" v-text="editError"></Message>
+    <div v-if="editPending" class="stack-form">
+      <p class="muted-text">Mã biến thể được lưu riêng trước khi xuất bản.</p>
+      <label class="stack-field">
+        <span>Mã biến thể mới</span>
+        <InputText v-model="variantCode" maxlength="255" :disabled="editBusy" />
+      </label>
+      <Button type="button" label="Lưu mã biến thể" :loading="editBusy" @click="submitVariantCode" />
+    </div>
     <p class="muted-text" style="margin-top: 0">Để trống = giữ nguyên giá trị hiện tại.</p>
     <form class="stack-form" @submit.prevent="submitEdit">
       <label v-for="f in META_FIELDS" :key="f.key" class="stack-field">
@@ -307,13 +364,13 @@ const toolbar = computed<ToolbarAction[]>(() => canManage.value ? [
         <InputText v-else v-model="editValues[f.key]" />
       </label>
       <div class="form-actions">
-        <Button type="button" label="Huỷ" severity="secondary" outlined :disabled="editBusy" @click="cancelEdit" />
-        <Button type="submit" label="Lưu" :loading="editBusy" />
+        <Button type="button" label="Huỷ" severity="secondary" outlined :disabled="editBusy" @click="editVisible = false" />
+        <Button type="submit" :label="editPending ? 'Lưu thông tin khác' : 'Lưu'" :loading="editBusy" />
       </div>
     </form>
   </Dialog>
 
-  <Dialog v-model:visible="bulk.visible" header="Xóa nhiều tài liệu" modal :style="{ width: '460px' }" @hide="cancelBulkDelete">
+  <Dialog v-model:visible="bulk.visible" :closable="!bulk.busy" :close-on-escape="!bulk.busy" header="Xóa nhiều tài liệu" modal :style="{ width: '460px' }" @after-hide="cancelBulkDelete">
     <div class="stack-form">
       <Message v-if="bulk.error" severity="error" v-text="bulk.error"></Message>
       <label class="stack-field">
@@ -323,7 +380,7 @@ const toolbar = computed<ToolbarAction[]>(() => canManage.value ? [
       <p class="muted-text">Thao tác xóa vĩnh viễn tài liệu và vector liên quan.</p>
     </div>
     <template #footer>
-      <Button label="Huỷ" severity="secondary" outlined :disabled="bulk.busy" @click="cancelBulkDelete" />
+      <Button label="Huỷ" severity="secondary" outlined :disabled="bulk.busy" @click="bulk.visible = false" />
       <Button label="Xóa" severity="danger" :loading="bulk.busy" @click="submitBulkDelete" />
     </template>
   </Dialog>

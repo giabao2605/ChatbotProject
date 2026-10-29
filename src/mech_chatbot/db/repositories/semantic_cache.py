@@ -2,6 +2,8 @@
 Loi goi cheo module dung tham chieu _r_<module>.<ten> (tranh circular import).
 KHONG sua tay truc tiep neu chua doc AGENTS; day la mot phan cua package db/repositories.
 """
+import json
+
 from sqlalchemy import text
 from ..engine import _ensure_engine, engine
 from mech_chatbot.config.logging import logger
@@ -11,6 +13,7 @@ __all__ = [
     '_invalidate_semantic_cache',
     'sc_clear_all',
     'sc_delete',
+    'sc_delete_for_docs',
     'sc_docs_all_current',
     'sc_get_exact',
     'sc_get_candidates',
@@ -165,6 +168,25 @@ def sc_delete(cache_id):
             conn.execute(text("DELETE FROM dbo.SemanticCache WHERE CacheID = :id"), {"id": cache_id})
     except Exception as e:
         logger.error(f"sc_delete loi: {e}", exc_info=True)
+
+
+def sc_delete_for_docs(doc_ids, *, connection):
+    """Delete only cache entries citing changed documents in the caller's transaction."""
+    ids = sorted({int(doc_id) for doc_id in doc_ids})
+    if not ids:
+        return 0
+    result = connection.execute(text("""
+        DELETE cache
+        FROM dbo.SemanticCache AS cache
+        WHERE EXISTS (
+            SELECT 1
+            FROM OPENJSON(CASE WHEN ISJSON(cache.SourceDocIDs) = 1
+                               THEN cache.SourceDocIDs ELSE N'[]' END) AS source
+            JOIN OPENJSON(:doc_ids) AS selected
+              ON TRY_CONVERT(BIGINT, source.value) = TRY_CONVERT(BIGINT, selected.value)
+        )
+    """), {"doc_ids": json.dumps(ids)})
+    return getattr(result, "rowcount", 0) or 0
 
 
 def sc_record_hit(cache_id, cost):

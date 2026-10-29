@@ -121,6 +121,17 @@ def reject_document(
     qdrant_client=None,
     collection_name=None,
 ):
+    with resolve_engine(db_engine).connect() as conn:
+        jobs = conn.execute(text("""
+            SELECT TOP 2 j.JobID FROM TaiLieu AS d
+            JOIN IngestionJobs AS j ON j.FilePath = d.FilePath AND j.ThuMuc = d.ThuMuc
+            WHERE d.DocID = :id AND j.Status IN ('pending_review', 'published', 'rejected')
+            ORDER BY j.JobID DESC
+        """), {"id": doc_id}).fetchall()
+    if len(jobs) != 1:
+        logger.error("reject_document: DocID %s has %s matching jobs", doc_id, len(jobs))
+        return False
+    job_id = int(jobs[0][0])
     qdrant_kwargs = (
         {
             "qdrant_client": qdrant_client,
@@ -148,6 +159,10 @@ def reject_document(
                 PublicationState = 'failed', PublicationUpdatedAt = GETDATE()
             WHERE DocID = :id
         """), {"id": doc_id, "rev": reviewer})
+        conn.execute(text("""
+            UPDATE IngestionJobs SET Status = 'rejected', UpdatedAt = GETDATE()
+            WHERE JobID = :job_id
+        """), {"job_id": job_id})
 
     audit_kwargs = {"db_engine": db_engine} if db_engine is not None else {}
     _r_audit.write_audit_log(

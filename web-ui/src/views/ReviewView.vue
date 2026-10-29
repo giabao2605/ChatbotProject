@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from "vue";
+import { nextTick, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import ResourcePage from "@/components/ResourcePage.vue";
 import StructuredEvidenceReview from "@/components/StructuredEvidenceReview.vue";
@@ -11,6 +11,13 @@ type ContractIssue = { field?: string; code?: string; message?: string };
 const router = useRouter();
 const contractDialog = reactive({ visible: false, docId: 0, issues: [] as ContractIssue[] });
 const evidenceDialog = reactive({ visible: false, docId: 0 });
+let contractTrigger: HTMLElement | null = null;
+
+async function onContractAfterHide() {
+  await nextTick();
+  if (document.activeElement === document.body && contractTrigger?.isConnected) contractTrigger.focus();
+  contractTrigger = null;
+}
 
 async function load(): Promise<ApiRow[]> {
   const data = await apiGet<{ documents: ApiRow[] }>("/api/documents/pending-review");
@@ -23,12 +30,12 @@ async function load(): Promise<ApiRow[]> {
 
 const columns: ResourceColumn[] = [
   { field: "JobID", header: "Job", width: "72px" },
-  { field: "TenFile", header: "Tệp", width: "24%" },
+  { field: "TenFile", header: "Tệp", width: "240px" },
   { field: "ThuMuc", header: "Phòng ban", width: "120px" },
   { field: "UploadedBy", header: "Người tải", width: "110px" },
   { field: "UpdatedAt", header: "Cập nhật", width: "145px" },
-  { field: "ExtractionSummary", header: "Kết quả ingest", width: "28%" },
-  { field: "QualityDetails", header: "Chi tiết chất lượng", width: "26%" },
+  { field: "ExtractionSummary", header: "Kết quả ingest", width: "280px" },
+  { field: "QualityDetails", header: "Chi tiết chất lượng", width: "260px" },
   { field: "Domain", header: "Domain", width: "110px" },
   { field: "SecurityLevel", header: "Mức mật", kind: "tag", width: "110px" },
   { field: "Site", header: "Site", width: "90px" },
@@ -92,11 +99,17 @@ function qualityDetails(row: ApiRow): string {
   const policy = String(report.quality_policy_version ?? report.policy_version ?? "chưa ghi phiên bản");
   const rawReasons = report.quality_reasons ?? report.reason_codes ?? report.reasons;
   const reasons = Array.isArray(rawReasons)
-    ? rawReasons.map((item) => typeof item === "string" ? item : JSON.stringify(item)).filter(Boolean)
+    ? rawReasons.map((item) => typeof item === "string" ? item : item?.message ?? JSON.stringify(item)).filter(Boolean)
     : [];
   const rawComponents = report.quality_components ?? report.score_components;
+  const labels: Record<string, string> = {
+    extraction_coverage: "Độ đầy đủ trích xuất",
+    chunks: "Đoạn nội dung",
+    metadata_classification: "Metadata và phân loại",
+    domain_signal: "Tín hiệu loại tài liệu",
+  };
   const components = rawComponents && typeof rawComponents === "object" && !Array.isArray(rawComponents)
-    ? Object.entries(rawComponents as Record<string, unknown>).map(([key, value]) => `${key}: ${String(value)}`)
+    ? Object.entries(rawComponents as Record<string, unknown>).map(([key, value]) => `${labels[key] ?? key}: ${String(value)}`)
     : [];
   return [...warnings, `Chính sách ${policy}`, ...components, ...reasons].join("; ");
 }
@@ -149,6 +162,7 @@ async function reviewAction(
   }
 
   if (opts.requireDoc && doc !== null) {
+    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const validation = await apiGet<{
       valid?: boolean;
       ok?: boolean;
@@ -156,6 +170,7 @@ async function reviewAction(
     }>(`/api/documents/${doc}/publish-contract`);
     const issues = validation.issues ?? [];
     if (validation.valid === false || validation.ok === false || issues.length) {
+      contractTrigger = trigger;
       contractDialog.docId = doc;
       contractDialog.issues = issues.length ? issues : [{ code: "invalid_contract", message: "Tài liệu chưa đáp ứng publish contract." }];
       contractDialog.visible = true;
@@ -197,6 +212,22 @@ const rowActions: RowAction[] = [
       if (id === null) throw new Error("Chưa có tài liệu để kiểm tra dữ liệu.");
       evidenceDialog.docId = id;
       evidenceDialog.visible = true;
+    },
+  },
+  {
+    label: "Xem trước",
+    run: async (row) => {
+      const doc = docId(row);
+      if (doc === null) throw new Error("Chưa tạo được tài liệu để xem trước.");
+      window.open(`/api/files/review/documents/${doc}/pages/1`, "_blank");
+    },
+  },
+  {
+    label: "Sửa metadata",
+    run: async (row) => {
+      const doc = docId(row);
+      if (doc === null) throw new Error("Chưa tạo được tài liệu để sửa metadata.");
+      await router.push({ path: "/documents", query: { tab: "effective", doc } });
     },
   },
   {
@@ -298,7 +329,7 @@ async function runBulk(action: "publish" | "reject" | "delete") {
     const result = await apiSend<{
       updated: number;
       failed: number;
-      failures?: Array<{ error?: string; validation?: { issues?: Array<{ message?: string }> } }>;
+      failures?: Array<{ job_id?: number | null; doc_id?: number | null; error?: string; validation?: { issues?: Array<{ message?: string }> } }>;
     }>("/api/documents/review/bulk", "POST", {
       items,
       action,
@@ -309,7 +340,12 @@ async function runBulk(action: "publish" | "reject" | "delete") {
     if (result.failures?.length) {
       const messages = result.failures.flatMap((failure) => {
         const issues = failure.validation?.issues?.map((issue) => issue.message).filter(Boolean) ?? [];
-        return issues.length ? issues : [failure.error || "Publish thất bại"];
+        const ids = [
+          failure.job_id != null ? `JobID ${failure.job_id}` : "",
+          failure.doc_id != null ? `DocID ${failure.doc_id}` : "",
+        ].filter(Boolean).join(" / ");
+        const fallback = { publish: "Publish thất bại", reject: "Reject thất bại", delete: "Xóa thất bại" }[action];
+        return (issues.length ? issues : [failure.error || fallback]).map((message) => ids ? `${ids}: ${message}` : message);
       });
       bulk.error = messages.join("; ");
     }
@@ -361,7 +397,6 @@ async function applyBulkMeta() {
       .map(([k, v]) => [k, String(v ?? "").trim()])
       .filter(([, v]) => v),
   );
-  if (bmeta.domain) metadata.domain = bmeta.domain;
   if (!Object.keys(metadata).length) {
     bmeta.error = "Nhập ít nhất một metadata để cập nhật.";
     return;
@@ -531,7 +566,7 @@ onMounted(async () => {
     />
   </div>
 
-  <Dialog v-model:visible="contractDialog.visible" header="Không thể publish" modal :style="{ width: '680px' }">
+  <Dialog v-model:visible="contractDialog.visible" header="Không thể publish" modal :style="{ width: '680px' }" @after-hide="onContractAfterHide">
     <Message severity="warn">Tài liệu chưa đáp ứng hợp đồng metadata bắt buộc. Hãy sửa các trường dưới đây rồi kiểm tra lại.</Message>
     <div class="contract-table-wrap">
       <table class="contract-table">

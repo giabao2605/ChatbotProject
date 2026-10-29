@@ -22,6 +22,7 @@ ProtectedFileKind = Literal[
     "document_page",
     "document_original",
     "document_review_original",
+    "review_page",
     "chat_image",
 ]
 
@@ -122,6 +123,10 @@ class ProtectedFileReference:
         return cls(kind="document_page", doc_id=int(doc_id), page_no=int(page_no), expected_version=expected_version)
 
     @classmethod
+    def review_page(cls, doc_id: int, page_no: int) -> "ProtectedFileReference":
+        return cls(kind="review_page", doc_id=int(doc_id), page_no=int(page_no))
+
+    @classmethod
     def chat_image(cls, image_id: str) -> "ProtectedFileReference":
         return cls(kind="chat_image", image_id=str(image_id or ""))
 
@@ -152,6 +157,8 @@ class ProtectedFileError(Exception):
 
 class ProtectedFileStore(Protocol):
     def load_document(self, doc_id: int) -> DocumentAccessRecord | None: ...
+
+    def has_page(self, doc_id: int, page_no: int) -> bool: ...
 
     def load_page_image(self, doc_id: int, page_no: int) -> str | None: ...
 
@@ -187,6 +194,12 @@ def evaluate_document_access(
 
     security_level = normalize_security_level(record.security_level)
     review_preview_decision: AccessDecision | None = None
+    if allow_review_preview and (
+        str(record.review_status or "").strip().lower() != "pending_review"
+        or str(record.publication_state or "").strip().lower() != "draft"
+        or record.servable
+    ):
+        return AccessDecision(False, "document_not_pending_review", security_level)
     if not is_currently_servable(
         {
             "servable": record.servable,
@@ -319,6 +332,7 @@ class ProtectedFileResolver:
             "document_page",
             "document_original",
             "document_review_original",
+            "review_page",
         }:
             return self._resolve_document(reference, actor)
         raise ProtectedFileError("not_found", "File not found")
@@ -334,7 +348,7 @@ class ProtectedFileResolver:
             actor,
             record,
             strict_site_filter=self._strict_site_filter,
-            allow_review_preview=reference.kind == "document_review_original",
+            allow_review_preview=reference.kind in {"document_review_original", "review_page"},
         )
         if reference.expected_version is not None and (
             reference.expected_version < 1 or record is None or not decision.allowed
@@ -344,15 +358,19 @@ class ProtectedFileResolver:
         if not decision.allowed or record is None:
             raise ProtectedFileError("unauthorized", decision.reason)
 
-        if reference.kind == "document_page":
+        if reference.kind in {"document_page", "review_page"}:
             page_no = int(reference.page_no or 0)
+            if page_no < 1 or not self._store.has_page(doc_id, page_no):
+                raise ProtectedFileError("not_found", "Page not found")
             stored_path = self._store.load_page_image(doc_id, page_no)
             path = (self._storage.resolve_page_image(stored_path, allow_fallback=False)
                     if reference.expected_version is not None else self._storage.resolve_page_image(stored_path))
-            if "admin" in actor.roles or decision.security_level == "confidential":
+            if reference.kind == "review_page" or "admin" in actor.roles or decision.security_level == "confidential":
                 self._record_audit(
                     actor,
-                    "admin_global_read_citation"
+                    "view_pending_page"
+                    if reference.kind == "review_page"
+                    else "admin_global_read_citation"
                     if "admin" in actor.roles
                     else "view_citation_page",
                     doc_id,

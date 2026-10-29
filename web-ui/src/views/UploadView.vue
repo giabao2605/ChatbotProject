@@ -245,7 +245,7 @@ async function submit() {
               <input
                 type="file"
                 multiple
-                accept=".pdf,.docx,.doc,.xlsx,.xls,.txt,.md,.csv,.pptx,.png,.jpg,.jpeg,.bmp,.gif,.webp,.tif,.tiff"
+                accept=".pdf,.docx,.xlsx,.xls,.txt,.md,.csv,.pptx,.png,.jpg,.jpeg,.bmp,.gif,.webp,.tif,.tiff"
                 @change="onFileChange"
               />
               <span>Chọn file</span>

@@ -19,6 +19,7 @@ import {
   type ChatStreamCallbacks,
 } from "@/api/client";
 import type { UserProfile } from "@/types";
+import { setLocale } from "@/i18n";
 
 const sampleAccessValue = ["test", "only", "value"].join("-");
 
@@ -144,7 +145,7 @@ describe("extended API client behavior", () => {
 
     const failure = apiGet("/api/auth/me");
     await expect(failure).rejects.toThrow(
-      "Dịch vụ đang tạm thời không khả dụng. Vui lòng thử lại.",
+      "Đã xảy ra lỗi (HTTP 502). Tải lại.",
     );
     await expect(failure).rejects.not.toThrow("ngrok 3004");
   });
@@ -270,7 +271,7 @@ describe("extended API client behavior", () => {
 
     await expect(listSessions()).resolves.toEqual(sessions);
     await expect(listSessions()).resolves.toEqual([]);
-    await expect(loadHistory("s-1")).resolves.toEqual(messages);
+    await expect(loadHistory("s-1")).resolves.toEqual(messages.map((message) => ({ ...message, feedback: null })));
     await expect(loadHistory("s-2")).resolves.toEqual([]);
 
     expect(request(fetchMock, 2)).toEqual([
@@ -280,6 +281,23 @@ describe("extended API client behavior", () => {
         body: JSON.stringify({ session_id: "s-1" }),
       }),
     ]);
+  });
+
+  it.each([
+    [1, undefined, 1],
+    [-1, undefined, -1],
+    [null, undefined, null],
+    [0, undefined, null],
+    ["1", undefined, null],
+    [true, undefined, null],
+    [1, -1, -1],
+  ])("restores history rating %s without inventing a vote", async (danh_gia, feedback, expected) => {
+    const message = { role: "assistant", content: "QA answer", chat_id: 12, danh_gia, ...(feedback === undefined ? {} : { feedback }) };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ messages: [message] })));
+
+    const result = await loadHistory("qa-session");
+
+    expect(result[0]).toEqual({ ...message, feedback: expected });
   });
 
   it("encodes session identifiers before deletion", async () => {
@@ -371,6 +389,43 @@ describe("extended API client behavior", () => {
     ]);
   });
 
+  it("rejects a partial answer when the SSE connection closes without a terminal event", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('event: delta\ndata: {"text":"QA_PARTIAL_STREAM"}\n\n'));
+        controller.close();
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(stream, { status: 200 })));
+    const callbacks = {
+      onThinking: vi.fn(),
+      onDelta: vi.fn(),
+      onWarning: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    } satisfies ChatStreamCallbacks;
+
+    await expect(sendChatMessage({ question: "P-101?" }, callbacks)).rejects.toThrow("Phản hồi chưa hoàn tất");
+    expect(callbacks.onDelta).toHaveBeenCalledWith("QA_PARTIAL_STREAM");
+    expect(callbacks.onDone).not.toHaveBeenCalled();
+  });
+
+  it("accepts an explicit SSE error as a terminal event", async () => {
+    const body = 'event: error\ndata: {"message":"RAG unavailable"}\n\n';
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, { status: 200 })));
+    const callbacks = {
+      onThinking: vi.fn(),
+      onDelta: vi.fn(),
+      onWarning: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    } satisfies ChatStreamCallbacks;
+
+    await expect(sendChatMessage({}, callbacks)).resolves.toBeUndefined();
+    expect(callbacks.onError).toHaveBeenCalledWith("RAG unavailable");
+    expect(callbacks.onDone).not.toHaveBeenCalled();
+  });
+
   it.each([
     [
       "backend rejection",
@@ -435,5 +490,77 @@ describe("extended API client behavior", () => {
       }),
     ]);
     expect(request(fetchMock, 1)[0]).toBe("/api/dashboard");
+  });
+
+  it("clears CSRF and signals expiry for a protected API 401", async () => {
+    setCsrfToken("old-csrf");
+    const signal = vi.spyOn(window, "dispatchEvent");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ detail: "Session expired" }, 401)));
+    await expect(apiGet("/api/documents")).rejects.toThrow("Session expired");
+    expect(getCsrfToken()).toBe("");
+    expect(signal).toHaveBeenCalledWith(expect.objectContaining({ type: "mech-chatbot.unauthorized" }));
+  });
+
+  it.each([401, 403, 503])("keeps the current session on login rejection %i", async status => {
+    setCsrfToken("current-csrf"); const signal = vi.spyOn(window, "dispatchEvent");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ detail: "Login rejected" }, status)));
+    await expect(login("alice", "wrong-test-password")).rejects.toThrow("Login rejected");
+    expect(getCsrfToken()).toBe("current-csrf"); expect(signal).not.toHaveBeenCalled();
+  });
+
+  it.each([403, 503])("does not invalidate a session on protected API %i", async status => {
+    setCsrfToken("current-csrf"); const signal = vi.spyOn(window, "dispatchEvent");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ detail: "Denied" }, status)));
+    await expect(apiGet("/api/documents")).rejects.toThrow("Denied");
+    expect(getCsrfToken()).toBe("current-csrf"); expect(signal).not.toHaveBeenCalled();
+  });
+
+  it("signals expiry for direct chat HTTP 401 without reading a stream", async () => {
+    setCsrfToken("old-csrf"); const signal = vi.spyOn(window, "dispatchEvent");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ detail: "Session expired" }, 401)));
+    const callbacks = { onThinking: vi.fn(), onDelta: vi.fn(), onWarning: vi.fn(), onDone: vi.fn(), onError: vi.fn() };
+    await expect(sendChatMessage({ question: "test only" }, callbacks)).rejects.toThrow("Session expired");
+    expect(getCsrfToken()).toBe(""); expect(signal).toHaveBeenCalledWith(expect.objectContaining({ type: "mech-chatbot.unauthorized" }));
+    expect(callbacks.onDone).not.toHaveBeenCalled(); expect(callbacks.onDelta).not.toHaveBeenCalled();
+  });
+
+  it("does not invalidate a new login when an older request returns 401", async () => {
+    let finish!: (response: Response) => void;
+    const oldResponse = new Promise<Response>(resolve => { finish = resolve; });
+    setCsrfToken("old-csrf"); const signal = vi.spyOn(window, "dispatchEvent");
+    vi.stubGlobal("fetch", vi.fn().mockReturnValueOnce(oldResponse).mockResolvedValueOnce(jsonResponse({ user: profile("new-csrf") })));
+    const oldRequest = apiGet("/api/documents");
+    await login("alice", "new-test-password");
+    finish(jsonResponse({ detail: "Session expired" }, 401));
+    await expect(oldRequest).rejects.toThrow("Session expired");
+    expect(getCsrfToken()).toBe("new-csrf"); expect(signal).not.toHaveBeenCalled();
+  });
+
+  it.each([loadMe, refreshSession])("does not overwrite new login CSRF with a late session read", async readSession => {
+    let finish!: (response: Response) => void;
+    const oldResponse = new Promise<Response>(resolve => { finish = resolve; });
+    setCsrfToken("old-csrf");
+    vi.stubGlobal("fetch", vi.fn().mockReturnValueOnce(oldResponse).mockResolvedValueOnce(jsonResponse({ user: profile("new-csrf") })));
+    const oldRequest = readSession(); await login("alice", "new-test-password");
+    finish(jsonResponse({ user: profile("old-csrf") })); await oldRequest;
+    expect(getCsrfToken()).toBe("new-csrf");
+  });
+
+  it.each([
+    ["vi", "Đã xảy ra lỗi (HTTP 502). Tải lại."],
+    ["en", "Something went wrong (HTTP 502). Refresh."],
+  ] as const)("keeps an HTML proxy login error concise in %s", async (locale, expected) => {
+    setLocale(locale);
+    const html = "  <!DOCTYPE html><html><body>ERR_NGROK_3004 upstream failed</body></html>";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(html, { status: 502, headers: { "Content-Type": "text/html" } })));
+    try {
+      await expect(login("alice", "test-only-password")).rejects.toThrow(expected);
+    } finally { setLocale("vi"); }
+  });
+
+  it("also handles a proxy HTML root without a doctype", async () => {
+    setLocale("vi");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("\n<HTML lang='en'><body>Proxy unavailable</body></HTML>", { status: 503 })));
+    await expect(apiGet("/api/documents")).rejects.toThrow("Đã xảy ra lỗi (HTTP 503). Tải lại.");
   });
 });

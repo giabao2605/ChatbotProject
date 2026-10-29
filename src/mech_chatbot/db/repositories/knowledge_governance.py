@@ -16,6 +16,7 @@ from sqlalchemy import text
 
 from ..engine import _ensure_engine, engine, resolve_engine as _resolve_engine
 from . import audit as _r_audit
+from .publication import SUPPORTED_REQUIRED_METADATA_FIELDS
 from . import qdrant as _r_qdrant
 from . import semantic_cache as _r_semantic_cache
 
@@ -294,6 +295,9 @@ def upsert_department_domain_profile(
         raise ValueError("document_types phai co it nhat mot gia tri")
     if not required:
         raise ValueError("required_metadata phai co it nhat mot gia tri")
+    unsupported = sorted({field for field in required if field.lower() not in SUPPORTED_REQUIRED_METADATA_FIELDS})
+    if unsupported:
+        raise ValueError(f"required_metadata khong ho tro: {', '.join(unsupported)}")
 
     _ensure_engine()
     params = {

@@ -16,6 +16,7 @@ from qdrant_client import models
 from mech_chatbot.config.logging import logger
 from mech_chatbot.llm.external_ai import ExternalAICallCancelled
 from mech_chatbot.llm.llm_client import cohere_invoke
+from mech_chatbot.rag.conversation_state import has_missing_referent
 from mech_chatbot.rag.entity_resolver import extract_explicit_codes
 from mech_chatbot.rag.execution import RequestBudgetExceeded
 from mech_chatbot.rag.rbac import (
@@ -536,6 +537,8 @@ def _previous_user_request_scope(chat_history):
             if _reference_has_subject(reference) or extract_explicit_codes(previous):
                 return None
             continue
+        if has_missing_referent(previous):
+            return None
         # The shared splitter can retain several uncertain subjects as one intent;
         # require one clause here instead of guessing which subject was meant.
         clauses = [part for part in _INTENT_SEPARATOR.split(previous) if part.strip()]
@@ -561,14 +564,14 @@ def analyze_context(user_question, chat_history=None, current_part_ids=None, act
     tat tinh nang, chua co ngu canh, loi parse hoac timeout.
     """
     fallback = {"context_action": "continue", "standalone_question": user_question, "llm_resolved": False}
-    needs_reference = has_context_reference(user_question) and not extract_explicit_codes(user_question)
+    needs_reference = (has_context_reference(user_question) or has_missing_referent(user_question)) and not extract_explicit_codes(user_question)
     reference = _context_reference(user_question)
     subject_candidate = _reference_has_subject(reference) if reference else False
     if needs_reference:
         fallback = {**fallback, 'clarification_required': True}
     if runtime is not None and not runtime.query_rewrite_enabled:
         return fallback
-    if needs_reference and not subject_candidate and not pending_candidates:
+    if needs_reference and reference is not None and not subject_candidate and not pending_candidates:
         previous_scope = _previous_user_request_scope(chat_history)
         if previous_scope:
             return {
@@ -598,6 +601,7 @@ def analyze_context(user_question, chat_history=None, current_part_ids=None, act
     _has_followup_signal = (
         needs_reference or any(m in _q_ctx for m in _followup_markers)
         or len(_q_ctx.split()) <= 6
+        or has_missing_referent(user_question)
     )
     # Coi active_doc_refs nhu mot "neo" -> van cho LLM chay de phan biet continue /
     # switch_topic ke ca voi cau dai KHONG co tu khoa tiep dien.
@@ -676,7 +680,7 @@ Quy tac:
         standalone = parsed.get("standalone_question") or user_question
         if not isinstance(standalone, str) or not standalone.strip():
             standalone = user_question
-        if needs_reference and has_context_reference(standalone) and not extract_explicit_codes(standalone):
+        if needs_reference and (has_context_reference(standalone) or has_missing_referent(standalone)) and not extract_explicit_codes(standalone):
             return {**fallback, 'clarification_required': True}
         return {"context_action": action, "standalone_question": standalone.strip(), "llm_resolved": True}
     except concurrent.futures.TimeoutError:

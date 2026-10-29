@@ -304,6 +304,8 @@ def set_department_status(code, status, actor="System", force=False):
     archived chi cho phep khi khong con user va job pending, tru khi force=True.
     Phong ban da archived khong cho mo lai qua UI de tranh vo lifecycle.
     """
+    if str(status or "").strip().lower() not in {"active", "disabled", "archived"}:
+        return {"ok": False, "message": "Trạng thái phòng ban không hợp lệ"}
     summary = get_department_summary(code)
     if not summary:
         return {"ok": False, "message": f"Khong tim thay phong ban '{code}'."}
@@ -370,16 +372,22 @@ def reassign_department_data(source_code, target_code, actor="System", move_user
         return {"ok": False, "message": f"Phong nguon '{source_code}' da archived, khong reassign qua flow nay."}
 
     updated_doc_payloads = []
+    staged_doc_servability = []
     qdrant_failures = []
+    sql_committed = False
     try:
         with engine.begin() as conn:
             # 1) TaiLieu (E1: chia se phong ban nam o bang dbo.PhongBanChiaSe)
             doc_rows = conn.execute(text("""
-                SELECT DISTINCT t.DocID, t.ThuMuc
+                SELECT DISTINCT t.DocID, t.ThuMuc, t.Servable
                 FROM dbo.TaiLieu t
                 WHERE t.ThuMuc = :src
                    OR EXISTS (SELECT 1 FROM dbo.PhongBanChiaSe pbc WHERE pbc.DocID = t.DocID AND pbc.DeptCode = :src)
             """), {"src": source_code}).fetchall()
+            for doc_id, _thu_muc, servable in doc_rows:
+                if not _r_qdrant.update_qdrant_metadata(doc_id, {"servable": False}):
+                    raise RuntimeError("Không thể tạm ẩn tài liệu trên Qdrant trước khi chuyển phòng ban.")
+                staged_doc_servability.append((doc_id, bool(servable)))
             for row in doc_rows:
                 doc_id, thu_muc = row[0], row[1]
                 new_thu_muc = target_code if thu_muc == source_code else thu_muc
@@ -437,17 +445,28 @@ def reassign_department_data(source_code, target_code, actor="System", move_user
             else:
                 moved_users = 0
 
+            _r_semantic_cache.sc_delete_for_docs(
+                [doc_id for doc_id, _ in updated_doc_payloads], connection=conn
+            )
+        sql_committed = True
+
         # 4) Qdrant payload (ngoai transaction SQL)
+        original_servable = dict(staged_doc_servability)
         for doc_id, phong_ban_quyen in updated_doc_payloads:
             ok_meta = _r_qdrant.update_qdrant_metadata(doc_id, {
                 "phong_ban_quyen": phong_ban_quyen,
                 "department": (phong_ban_quyen[0] if phong_ban_quyen else target_code),
+                "servable": original_servable[doc_id],
             })
             if not ok_meta:
                 qdrant_failures.append(doc_id)
 
         # 5) Disable phong nguon sau khi move
-        status_res = set_department_status(source_code, "disabled", actor=actor, force=True)
+        status_res = (
+            {"ok": False, "message": "Qdrant chưa cập nhật đủ; phòng nguồn vẫn hoạt động."}
+            if qdrant_failures else
+            set_department_status(source_code, "disabled", actor=actor, force=True)
+        )
         _r_audit.write_audit_log(actor or "System", "department_reassign", "Departments", None, {
             "source": source_code,
             "to": target_code,
@@ -455,17 +474,22 @@ def reassign_department_data(source_code, target_code, actor="System", move_user
             "docs": len(updated_doc_payloads),
             "qdrant_failures": qdrant_failures,
         })
-        _r_semantic_cache._invalidate_semantic_cache("dept.reassign")
+        complete = not qdrant_failures and isinstance(status_res, dict) and status_res.get("ok") is True
         return {
-            "ok": True,
+            "ok": complete,
             "source": source_code,
             "target": target_code,
             "moved_docs": len(updated_doc_payloads),
             "moved_users": moved_users,
             "qdrant_failures": qdrant_failures,
             "status_result": status_res,
+            **({"message": "Chuyển phòng ban chưa hoàn tất; cần kiểm tra SQL và Qdrant trước khi thử lại."} if not complete else {}),
         }
     except Exception as e:
+        if not sql_committed:
+            for doc_id, servable in staged_doc_servability:
+                if not _r_qdrant.update_qdrant_metadata(doc_id, {"servable": servable}):
+                    logger.error("Không thể khôi phục trạng thái phục vụ Qdrant cho DocID %s", doc_id)
         logger.error(f"reassign_department_data loi {source_code}->{target_code}: {e}", exc_info=True)
         return {"ok": False, "message": str(e)}
 

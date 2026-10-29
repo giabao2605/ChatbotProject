@@ -6,6 +6,7 @@ from sqlalchemy import text
 from ..engine import _ensure_engine, engine
 from mech_chatbot.config.logging import logger
 from . import audit as _r_audit
+from . import publication as _r_publication
 from . import qdrant as _r_qdrant
 from . import semantic_cache as _r_semantic_cache
 
@@ -18,6 +19,7 @@ __all__ = [
     'get_document_metadata',
     'set_document_attributes',
     'update_document_common_metadata',
+    'update_pending_variant_code',
 ]
 
 # ==========================================================================
@@ -265,8 +267,10 @@ def update_document_common_metadata(doc_id, reviewer="System", attributes=None, 
             sets.append(f"{col} = :{k}")
         if ("parent_section" in fields or "parent_page" in fields) and "parent_applicable" not in fields:
             sets.append("ParentApplicable = 1")
-        if sets:
-            with engine.begin() as conn:
+        with engine.begin() as conn:
+            if conn.execute(text("SELECT 1 FROM TaiLieu WHERE DocID = :d"), {"d": doc_id}).fetchone() is None:
+                return False
+            if sets:
                 conn.execute(text("UPDATE TaiLieu SET " + ", ".join(sets) + " WHERE DocID = :d"), params)
 
         if attributes is not None:
@@ -293,6 +297,46 @@ def update_document_common_metadata(doc_id, reviewer="System", attributes=None, 
     except Exception as e:
         logger.error(f"Loi update_document_common_metadata doc_id={doc_id}: {e}", exc_info=True)
         return False
+
+
+def update_pending_variant_code(doc_id, variant_code, reviewer="System"):
+    """Set a distinct variant code before review publication, keeping vectors in sync."""
+    code = variant_code.strip() if isinstance(variant_code, str) else ""
+    if not code or len(code) > 255:
+        return {"ok": False, "error": "Mã biến thể phải có từ 1 đến 255 ký tự"}
+    _ensure_engine()
+    previous_code = None
+    vector_attempted = False
+    try:
+        with engine.begin() as conn:
+            row = conn.execute(text("""
+                SELECT BaseCode, VariantCode, ReviewStatus, IsCurrent, Servable
+                FROM dbo.TaiLieu WITH (UPDLOCK, HOLDLOCK) WHERE DocID = :doc_id
+            """), {"doc_id": doc_id}).mappings().first()
+            if not row or row["ReviewStatus"] != "pending_review" or row["IsCurrent"] or row["Servable"]:
+                return {"ok": False, "error": "Chỉ sửa mã biến thể của tài liệu đang chờ duyệt"}
+            previous_code = row["VariantCode"] or "default"
+            error = _r_publication._new_variant_error(
+                conn, doc_id, {"BaseCode": row["BaseCode"], "VariantCode": code}
+            )
+            if error:
+                return {"ok": False, "error": error}
+            if code == previous_code:
+                return {"ok": True, "variant_code": code}
+            vector_attempted = True
+            if not _r_qdrant.update_qdrant_metadata(doc_id, {"variant_code": code}, require_points=True):
+                _r_qdrant.update_qdrant_metadata(doc_id, {"variant_code": previous_code}, require_points=True)
+                return {"ok": False, "error": "Không đồng bộ được mã biến thể với dữ liệu tìm kiếm"}
+            conn.execute(text("UPDATE dbo.TaiLieu SET VariantCode = :variant_code WHERE DocID = :doc_id"),
+                         {"doc_id": doc_id, "variant_code": code})
+    except Exception:
+        logger.exception("Lỗi cập nhật mã biến thể DocID %s", doc_id)
+        if vector_attempted and previous_code:
+            _r_qdrant.update_qdrant_metadata(doc_id, {"variant_code": previous_code}, require_points=True)
+        return {"ok": False, "error": "Không lưu được mã biến thể"}
+    _r_audit.write_audit_log(reviewer, "update_variant_code", "TaiLieu", doc_id,
+                             {"variant_code": code})
+    return {"ok": True, "variant_code": code}
 
 
 def get_common_metadata_for_rag(doc_ids):

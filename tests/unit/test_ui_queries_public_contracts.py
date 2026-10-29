@@ -155,6 +155,11 @@ def test_viewer_dashboard_only_exposes_effective_documents_and_own_usage(monkeyp
         "get_document_lifecycle_counts",
         lambda **_kwargs: {"effective": 12, "expired": 2, "needs_review": 1},
     )
+    monkeypatch.setattr(
+        ui_queries,
+        "list_recent_documents",
+        lambda **_kwargs: [(1155, "QA_20260925_dashboard_delta.md", "QA_20260919_R1_B", "published")],
+    )
 
     result = ui_queries.get_role_dashboard({
         "roles": ["viewer"],
@@ -167,7 +172,31 @@ def test_viewer_dashboard_only_exposes_effective_documents_and_own_usage(monkeyp
     assert result == {
         "document_lifecycle": {"effective": 12},
         "usage": {"today_questions": 6, "recent_questions": 9},
+        "recent_documents": [{
+            "DocID": 1155,
+            "OriginalFileName": "QA_20260925_dashboard_delta.md",
+            "Department": "QA_20260919_R1_B",
+            "LifecycleStatus": "published",
+        }],
     }
+
+
+def test_recent_dashboard_documents_apply_serving_and_actor_scope(monkeypatch):
+    connection = install_engine(monkeypatch, lambda *_args: FakeResult(rows=[]))
+
+    ui_queries.list_recent_documents(
+        allowed_departments=["QA_20260919_R1_B"],
+        max_security_level="internal",
+        allowed_sites=["QA_20260919_R1_B"],
+    )
+
+    sql, params = connection.calls[-1]
+    assert "TOP 10" in sql
+    assert "d.Servable = 1" in sql
+    assert "PhongBanChiaSe" in sql
+    assert "d.Site IN" in sql
+    assert params["allowed_dept_0"] == "QA_20260919_R1_B"
+    assert params["allowed_site_0"] == "QA_20260919_R1_B"
 
 
 def test_reviewer_uploader_dashboard_applies_department_and_site_scope(monkeypatch):
@@ -181,6 +210,7 @@ def test_reviewer_uploader_dashboard_applies_department_and_site_scope(monkeypat
         "get_document_lifecycle_counts",
         lambda **_kwargs: {"effective": 4, "expired": 1},
     )
+    monkeypatch.setattr(ui_queries, "list_recent_documents", lambda **_kwargs: [])
 
     result = ui_queries.get_role_dashboard({
         "roles": ["uploader", "reviewer"],
@@ -215,7 +245,7 @@ def test_platform_admin_dashboard_exposes_rollout_counts(monkeypatch):
     monkeypatch.setattr(
         ui_queries,
         "get_document_lifecycle_counts",
-        lambda **_kwargs: {"effective": 3},
+        lambda **_kwargs: {"effective": 3, "expired": 2, "expiring_soon": 1, "needs_review": 4},
     )
 
     result = ui_queries.get_role_dashboard({
@@ -223,6 +253,7 @@ def test_platform_admin_dashboard_exposes_rollout_counts(monkeypatch):
         "username": "ops",
     })
 
+    assert result["document_lifecycle"] == {"effective": 3}
     assert result["ingestion"] == {"running": 9, "failed": 9}
     assert result["rollout"] == {
         "departments_total": 9,
@@ -247,6 +278,7 @@ def test_reviewer_dashboard_handles_global_admin_and_missing_site_scope(
         "get_document_lifecycle_counts",
         lambda **_kwargs: {"effective": 1},
     )
+    monkeypatch.setattr(ui_queries, "list_recent_documents", lambda **_kwargs: [])
 
     result = ui_queries.get_role_dashboard({
         "roles": roles,
@@ -329,6 +361,12 @@ def test_bulk_delete_counts_each_success_and_failure(monkeypatch):
     assert [params["jid"] for _, params in connection.calls] == [1, 2, 3]
 
 
+def test_bulk_delete_counts_missing_job_as_failure(monkeypatch):
+    install_engine(monkeypatch, lambda *_args: FakeResult(rowcount=0))
+
+    assert ui_queries.bulk_delete_ingestion_jobs([2147483647]) == (0, 1)
+
+
 def test_feedback_mutations_return_source_and_use_expected_params(monkeypatch):
     source = (42, "MFG", "HCM")
 
@@ -350,6 +388,13 @@ def test_feedback_mutations_return_source_and_use_expected_params(monkeypatch):
         "fid": 7,
     }
     assert connection.calls[-1][1] == {"fid": 7}
+
+
+@pytest.mark.parametrize(("rowcount", "expected"), [(1, True), (0, False)])
+def test_delete_feedback_reports_whether_a_row_was_deleted(monkeypatch, rowcount, expected):
+    install_engine(monkeypatch, lambda *_args: FakeResult(rowcount=rowcount))
+
+    assert ui_queries.delete_feedback(7) is expected
 
 
 def test_feedback_list_can_include_already_reviewed_rows(monkeypatch):
@@ -396,6 +441,13 @@ def test_list_documents_applies_normalized_rbac_and_filters(monkeypatch):
         "bucket": "expiring_soon",
         "kw": "%pump%",
     }
+
+
+def test_document_list_projects_issued_date_for_metadata_prefill(monkeypatch):
+    connection = install_engine(monkeypatch, lambda *_args: FakeResult(rows=[]))
+    ui_queries.list_documents(global_read_admin=True)
+    projection = connection.calls[-1][0].split("FROM TaiLieu", 1)[0]
+    assert "d.IssuedDate" in projection
 
 
 def test_list_documents_fail_closed_without_scope_and_rejects_unknown_bucket(monkeypatch):
@@ -564,9 +616,72 @@ def test_update_user_roles_writes_status_then_role_deltas(monkeypatch):
         7, False, ["reviewer"], ["viewer"]
     ) is True
 
-    assert connection.calls[0][1] == {"active": 0, "uid": 7}
-    assert connection.calls[1][1] == {"uid": 7, "role": "reviewer"}
-    assert connection.calls[2][1] == {"uid": 7, "role": "viewer"}
+    writes = [
+        params for sql, params in connection.calls
+        if sql.lstrip().startswith(("UPDATE", "INSERT", "DELETE"))
+    ]
+    assert writes == [
+        {"active": 0, "uid": 7},
+        {"uid": 7, "role": "reviewer"},
+        {"uid": 7, "role": "viewer"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("is_active", "del_roles"),
+    [(True, ["admin"]), (False, []), (True, ["ADMIN"]), (True, ["admin "])],
+    ids=["demote-last-admin", "disable-last-admin-through-roles", "uppercase-admin", "padded-admin"],
+)
+def test_update_user_roles_rejects_removing_last_active_admin(
+    monkeypatch, is_active, del_roles
+):
+    def resolver(sql, _params, _index):
+        if "COUNT(*)" in sql:
+            return FakeResult(one=(0,))
+        if "RoleName = 'admin'" in sql:
+            return FakeResult(one=(1,))
+        return FakeResult(rowcount=1)
+
+    connection = install_engine(monkeypatch, resolver)
+
+    result = ui_queries.update_user_active_and_roles(7, is_active, [], del_roles)
+
+    assert result is False, connection.calls
+    assert not any(
+        sql.lstrip().startswith(("UPDATE", "INSERT", "DELETE"))
+        for sql, _params in connection.calls
+    )
+
+
+@pytest.mark.parametrize(
+    ("is_active", "del_roles", "other_admins"),
+    [(False, ["admin"], 1), (True, ["viewer"], 0)],
+    ids=["another-active-admin", "last-admin-keeps-admin-role"],
+)
+def test_update_user_roles_allows_safe_admin_changes(
+    monkeypatch, is_active, del_roles, other_admins
+):
+    def resolver(sql, params, _index):
+        if "COUNT(*)" in sql:
+            return FakeResult(one=(other_admins,))
+        if "RoleName = 'admin'" in sql:
+            if "role" in params:
+                return FakeResult(one=(1,) if params["role"].rstrip().casefold() == "admin" else None)
+            return FakeResult(one=(1,))
+        return FakeResult(rowcount=1)
+
+    connection = install_engine(monkeypatch, resolver)
+
+    assert ui_queries.update_user_active_and_roles(7, is_active, ["reviewer"], del_roles) is True
+    writes = [
+        params for sql, params in connection.calls
+        if sql.lstrip().startswith(("UPDATE", "INSERT", "DELETE"))
+    ]
+    assert writes == [
+        {"active": int(is_active), "uid": 7},
+        {"uid": 7, "role": "reviewer"},
+        {"uid": 7, "role": del_roles[0]},
+    ]
 
 
 @pytest.mark.parametrize(

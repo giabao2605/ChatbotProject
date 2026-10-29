@@ -306,22 +306,38 @@ def mark_job_waiting_quota(job_id, error_message, retry_after_hours=24, *, db_en
         logger.error(f"Loi danh dau waiting_quota job {job_id}: {e}", exc_info=True)
 
 
+# Keep the document check inside the UPDATE so a concurrent publication wins.
+JOB_CONTROL_DOCUMENT_GUARD = """
+    AND NOT EXISTS (
+        SELECT 1 FROM dbo.TaiLieu d
+        WHERE d.TenFile = IngestionJobs.TenFile AND d.ThuMuc = IngestionJobs.ThuMuc
+          AND (d.Servable = 1 OR d.PublicationState IN ('published', 'publishing')
+               OR d.ReviewStatus = 'approved'
+               OR d.LifecycleStatus IN ('published', 'archived', 'superseded', 'deleting'))
+    )
+"""
+
+
 def set_job_priority(job_id, priority):
     """Dat do uu tien cho job (nho hon = uu tien hon). Vd: 10 = gap, 100 = thuong."""
     _ensure_engine()
     try:
         with engine.begin() as conn:
-            conn.execute(text(
-                "UPDATE dbo.IngestionJobs SET Priority = :p, UpdatedAt = GETDATE() WHERE JobID = :id"
+            res = conn.execute(text(
+                """UPDATE dbo.IngestionJobs SET Priority = :p, UpdatedAt = GETDATE()
+                   WHERE JobID = :id
+                     AND Status IN ('pending', 'pending_retry', 'waiting_quota', 'failed', 'rejected')
+                     AND LockedBy IS NULL AND LockedAt IS NULL
+                """ + JOB_CONTROL_DOCUMENT_GUARD
             ), {"p": int(priority), "id": job_id})
-        return True
+        return res.rowcount > 0
     except Exception as e:
         logger.error(f"set_job_priority loi: {e}", exc_info=True)
         return False
 
 
 def cancel_job(job_id, canceled_by="System"):
-    """Huy 1 job dang cho/loi. Khong huy job dang chay giua chung neu da publish."""
+    """Cancel an unlocked waiting/failed job; workers do not support cooperative cancellation."""
     _ensure_engine()
     try:
         with engine.begin() as conn:
@@ -332,8 +348,9 @@ def cancel_job(job_id, canceled_by="System"):
                     ErrorMessage = ISNULL(ErrorMessage, '') + ' [Huy boi ' + :by + ']',
                     LockedBy = NULL, LockedAt = NULL, UpdatedAt = GETDATE()
                 WHERE JobID = :id
-                  AND Status NOT IN ('published', 'pending_review', 'publishing')
-            """), {"by": canceled_by, "id": job_id})
+                  AND Status IN ('pending', 'pending_retry', 'waiting_quota', 'failed')
+                  AND LockedBy IS NULL AND LockedAt IS NULL
+            """ + JOB_CONTROL_DOCUMENT_GUARD), {"by": canceled_by, "id": job_id})
         return res.rowcount > 0
     except Exception as e:
         logger.error(f"cancel_job loi: {e}", exc_info=True)
@@ -345,14 +362,17 @@ def requeue_job(job_id):
     _ensure_engine()
     try:
         with engine.begin() as conn:
-            conn.execute(text("""
+            res = conn.execute(text("""
                 UPDATE dbo.IngestionJobs
                 SET Status = 'pending', ErrorMessage = NULL, FailureType = NULL,
                     NextRetryAt = NULL, RetryCount = 0, LockedBy = NULL, LockedAt = NULL,
                     ProgressPercent = 0, CanceledBy = NULL, CanceledAt = NULL, UpdatedAt = GETDATE()
                 WHERE JobID = :id
-            """), {"id": job_id})
-        return True
+                  AND Status IN ('failed', 'rejected')
+                  AND LockedBy IS NULL AND LockedAt IS NULL
+                  AND (FailureType IS NULL OR FailureType <> 'vision_quota')
+            """ + JOB_CONTROL_DOCUMENT_GUARD), {"id": job_id})
+        return res.rowcount > 0
     except Exception as e:
         logger.error(f"requeue_job loi: {e}", exc_info=True)
         return False

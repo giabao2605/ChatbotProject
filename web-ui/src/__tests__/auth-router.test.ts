@@ -46,6 +46,36 @@ describe("auth store", () => {
     expect(document.documentElement.getAttribute("lang")).toBe("en");
   });
 
+  it("aborts a pending restore when another tab invalidates the session", async () => {
+    let finish!: (value: UserProfile) => void;
+    vi.mocked(api.loadMe).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const auth = useAuthStore();
+    const pending = auth.loadMe();
+    const signal = vi.mocked(api.loadMe).mock.calls[0][0];
+    auth.invalidateSession();
+    expect(signal?.aborted).toBe(true);
+    finish(user);
+    await pending;
+    expect(auth.user).toBeNull();
+    expect(auth.ready).toBe(true);
+  });
+
+  it("does not restore the previous user when an old logout fails after a new login", async () => {
+    vi.mocked(api.loadMe).mockResolvedValue(user);
+    const auth = useAuthStore();
+    await auth.loadMe();
+    let failLogout!: (reason: Error) => void;
+    vi.mocked(api.logout).mockImplementation(() => new Promise((_resolve, reject) => { failLogout = reject; }));
+    const oldLogout = auth.logout();
+    const rejected = expect(oldLogout).rejects.toThrow("offline");
+    vi.mocked(api.login).mockResolvedValue({ ...user, username: "bob" });
+    await auth.login("bob", "test-only");
+    failLogout(new Error("offline"));
+    await rejected;
+    expect(auth.user?.username).toBe("bob");
+    expect(localStorage.getItem("mech-chatbot.logout")).toBeNull();
+  });
+
   it("returns false when refresh fails", async () => {
     vi.mocked(api.refreshSession).mockRejectedValue(new Error("expired"));
     const auth = useAuthStore();
@@ -116,6 +146,49 @@ describe("auth store", () => {
     await restore;
 
     expect(auth.user?.username).toBe("bob");
+  });
+
+  it.each(["loadMe", "refresh"] as const)("does not restore the session from late %s after local logout", async action => {
+    vi.mocked(api.loadMe).mockResolvedValue(user);
+    const auth = useAuthStore(); await auth.loadMe();
+    let complete!: (value: UserProfile) => void;
+    const pending = new Promise<UserProfile>(resolve => { complete = resolve; });
+    if (action === "refresh") vi.mocked(api.refreshSession).mockReturnValue(pending);
+    else vi.mocked(api.loadMe).mockReturnValue(pending);
+    const request = auth[action]();
+    vi.mocked(api.logout).mockResolvedValue(undefined);
+    await auth.logout(); complete(user); await request;
+    expect(auth.user).toBeNull();
+  });
+
+  it("keeps the session and emits no signal when server logout fails", async () => {
+    vi.mocked(api.loadMe).mockResolvedValue(user);
+    const auth = useAuthStore(); await auth.loadMe();
+    vi.mocked(api.logout).mockRejectedValueOnce(new Error("offline"));
+    await expect(auth.logout()).rejects.toThrow("offline");
+    expect(auth.user?.username).toBe("alice");
+    expect(localStorage.getItem("mech-chatbot.logout")).toBeNull();
+  });
+
+  it("still clears the local session when logout notification storage is unavailable", async () => {
+    vi.mocked(api.loadMe).mockResolvedValue(user);
+    const auth = useAuthStore(); await auth.loadMe();
+    vi.mocked(api.logout).mockResolvedValue(undefined);
+    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("storage unavailable"); });
+    try { await expect(auth.logout()).resolves.toBeUndefined(); expect(auth.user).toBeNull(); }
+    finally { setItem.mockRestore(); }
+  });
+
+  it("does not clear a new login when an older loadMe fails after logout", async () => {
+    const auth = useAuthStore();
+    let fail!: (error: Error) => void;
+    vi.mocked(api.loadMe).mockReturnValue(new Promise((_resolve, reject) => { fail = reject; }));
+    const oldRequest = auth.loadMe();
+    vi.mocked(api.logout).mockResolvedValue(undefined); await auth.logout();
+    vi.mocked(api.login).mockResolvedValue({ ...user, username: "new-user" });
+    await auth.login("new-user", "test-only");
+    fail(new Error("old request expired")); await oldRequest;
+    expect(auth.user?.username).toBe("new-user");
   });
 });
 
@@ -235,5 +308,32 @@ describe("route guards", () => {
     expect(api.loadMe).toHaveBeenCalledTimes(1);
     expect(router.currentRoute.value.name).toBe("login");
     expect(router.currentRoute.value.query.next).toBe("/documents?tab=expired");
+  });
+
+  it.each([
+    ["security_admin", "/access", "access"],
+    ["platform_admin", "/analytics", "analytics"],
+    ["reviewer", "/analytics", "analytics"],
+    ["admin", "/analytics", "analytics"],
+    ["viewer", "/analytics", "dashboard"],
+    ["security_admin", "/analytics", "dashboard"],
+    ["platform_admin", "/access", "dashboard"],
+  ])("routes pure %s visiting %s to %s", async (role, path, expected) => {
+    vi.mocked(api.loadMe).mockResolvedValue({ ...user, roles: [role] });
+    const router = createAppRouter(createMemoryHistory());
+    await router.push(path);
+    await router.isReady();
+    expect(router.currentRoute.value.name).toBe(expected);
+  });
+
+  it("shows a not-found route instead of an empty page for unknown URLs", async () => {
+    vi.mocked(api.loadMe).mockResolvedValue(user);
+    const router = createAppRouter(createMemoryHistory());
+
+    await router.push("/QA_missing_route");
+    await router.isReady();
+
+    expect(router.currentRoute.value.name).toBe("not-found");
+    expect(router.currentRoute.value.path).toBe("/QA_missing_route");
   });
 });

@@ -127,19 +127,36 @@ def test_publish_wrappers_forward_identity_and_boolean_result(monkeypatch, opera
 
 
 def test_reject_document_fails_closed_before_sql_when_qdrant_cannot_be_disabled(monkeypatch):
-    fake = _install(monkeypatch)
+    fake = _install(monkeypatch, (Result(rows=((21,),)),))
     version._r_qdrant.update_qdrant_metadata.return_value = False
 
     assert version.reject_document(7, reviewer="rv") is False
-    assert fake.connection.calls == []
+    assert not any("UPDATE" in sql for sql, _ in fake.connection.calls)
     version._r_audit.write_audit_log.assert_not_called()
 
 
+@pytest.mark.parametrize("matches", [(), ((21,), (22,))])
+def test_reject_document_requires_one_exact_job_before_any_mutation(monkeypatch, matches):
+    fake = _install(monkeypatch, (Result(rows=matches),))
+
+    assert version.reject_document(7, reviewer="rv") is False
+    sql, params = fake.connection.calls[0]
+    assert "j.FilePath = d.FilePath" in sql
+    assert "j.ThuMuc = d.ThuMuc" in sql
+    assert params == {"id": 7}
+    assert not any("UPDATE" in query for query, _ in fake.connection.calls)
+    version._r_qdrant.update_qdrant_metadata.assert_not_called()
+
+
 def test_reject_document_disables_serving_then_updates_sql_and_invalidates_cache(monkeypatch):
-    fake = _install(monkeypatch, (Result(),))
+    fake = _install(monkeypatch, (Result(rows=((21,),)), Result(), Result()))
 
     assert version.reject_document(7, reviewer="rv") is True
-    assert fake.connection.calls[0][1] == {"id": 7, "rev": "rv"}
+    assert fake.connection.calls[1][1] == {"id": 7, "rev": "rv"}
+    job_sql, job_params = fake.connection.calls[2]
+    assert "UPDATE IngestionJobs" in job_sql
+    assert "WHERE JobID = :job_id" in job_sql
+    assert job_params == {"job_id": 21}
     version._r_qdrant.update_qdrant_metadata.assert_called_once_with(
         7,
         {

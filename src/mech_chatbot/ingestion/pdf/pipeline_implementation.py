@@ -148,8 +148,8 @@ def _legacy_ingestion_persistence() -> IngestionPersistence:
     )
 
 
-def _load_governed_document(ten_file, thu_muc, *, persistence):
-    doc_id = persistence.reset_document_metadata(ten_file, thu_muc)
+def _load_governed_document(ten_file, thu_muc, *, persistence, source_file_path):
+    doc_id = persistence.reset_document_metadata(ten_file, thu_muc, source_file_path=source_file_path)
     if not doc_id:
         raise RuntimeError(
             "Khong tao duoc document identity; dung ingest truoc khi goi dich vu ngoai."
@@ -574,6 +574,18 @@ def _delete_vectors_for_file(
     )
 
 
+def _read_pdf_page_text(page, *, dpi):
+    text = page.get_text("text")
+    if text.strip():
+        return text, False
+    try:
+        text_page = page.get_textpage_ocr(language="eng+vie", dpi=dpi, full=True)
+        return page.get_text(textpage=text_page), True
+    except Exception as error:
+        logger.warning("Không OCR được trang PDF scan: %s", error)
+        return "", True
+
+
 def process_and_ingest_pdf(
     pdf_path,
     ten_file,
@@ -646,6 +658,7 @@ def process_and_ingest_pdf(
             ten_file,
             thu_muc,
             persistence=persistence,
+            source_file_path=pdf_path,
         )
         doc_id = governed_document.doc_id
         doc_info = governed_document.info
@@ -699,7 +712,9 @@ def process_and_ingest_pdf(
             )
             try:
                 page = doc.load_page(page_num)
-                text = page.get_text("text")
+                text, scanned_page = _read_pdf_page_text(
+                    page, dpi=runtime_config.pdf_render_dpi,
+                )
 
                 # Render image truoc de kip phan tich
                 pix = page.get_pixmap(dpi=runtime_config.pdf_render_dpi)
@@ -714,10 +729,17 @@ def process_and_ingest_pdf(
                     with open(img_path,'rb') as image_source:
                         report['source_page_hashes'][page_num+1]=hashlib.file_digest(image_source,'sha256').hexdigest()
 
+                if scanned_page and len(text.strip()) < 20:
+                    report["failed_pages"].append(page_num + 1)
+                    report["warnings"].append(
+                        f"Trang {page_num+1}: OCR không xác minh được nội dung PDF scan."
+                    )
+                    continue
+
                 image_summary = ""
                 vision_metadata = {}
                 is_text_heavy = len(text.strip()) > 1500  # Chi bo qua trang van ban thuan
-                if len(text.strip()) > 100:
+                if len(text.strip()) > 100 or (scanned_page and len(text.strip()) >= 20):
                     report["pages_text_extracted"].append(page_num + 1)
 
                 # Phan tich anh qua GPT-5.4 Vision khi can.
@@ -725,7 +747,10 @@ def process_and_ingest_pdf(
                 _is_mech_domain_vision = _gh_vision(domain).vision_always
                 # P0: chi day anh/scan qua GPT Vision. Trang co lop text day (van ban thuan)
                 # thuoc domain phi co khi thi doc truc tiep tu text layer, tiet kiem quota Vision.
-                vision_required = os.path.exists(img_path) and (_is_mech_domain_vision or not is_text_heavy)
+                vision_required = (
+                    not scanned_page and os.path.exists(img_path)
+                    and (_is_mech_domain_vision or not is_text_heavy)
+                )
                 vision_failed = False
                 vision_data = {}
 
@@ -1291,6 +1316,7 @@ def process_and_ingest_file(
             ten_file,
             thu_muc,
             persistence=persistence,
+            source_file_path=file_path,
         )
         doc_id = governed_document.doc_id
         doc_info = governed_document.info

@@ -66,6 +66,63 @@ def test_session_token_round_trip():
     assert verified.csrf == payload.csrf
 
 
+def test_logout_revokes_copied_session_and_its_refresh_family():
+    settings = _app_settings()
+    original, payload = security.create_session_token(
+        user_id=71, username="logout-qa", settings=settings
+    )
+    refreshed, _ = security.create_session_token(
+        user_id=71, username="logout-qa", session_id=payload.session_id, settings=settings
+    )
+
+    security.revoke_session(original, session_id=payload.session_id, expires_at=payload.exp, settings=settings)
+
+    for token in (original, refreshed):
+        with pytest.raises(HTTPException) as error:
+            security.verify_session_token(token, settings=settings)
+        assert error.value.status_code == 401
+    with pytest.raises(HTTPException):
+        security.create_session_token(
+            user_id=71, username="logout-qa", session_id=payload.session_id, settings=settings
+        )
+
+
+def test_password_reset_revokes_existing_sessions_but_allows_new_login():
+    settings = _app_settings()
+    old_token, _ = security.create_session_token(
+        user_id=72, username="reset-qa", settings=settings
+    )
+
+    security.revoke_user_sessions(72)
+
+    with pytest.raises(HTTPException) as error:
+        security.verify_session_token(old_token, settings=settings)
+    assert error.value.status_code == 401
+    new_token, _ = security.create_session_token(
+        user_id=72, username="reset-qa", settings=settings
+    )
+    assert security.verify_session_token(new_token, settings=settings).user_id == 72
+
+
+def test_tokens_verify_across_processes_with_shared_secret():
+    settings = _app_settings()
+    token, _ = security.create_session_token(
+        user_id=73, username="restart-qa", settings=settings
+    )
+    script = (
+        "from types import SimpleNamespace; "
+        "from mech_chatbot.api.app_security import verify_session_token; "
+        "settings=SimpleNamespace(session_secret='test-secret', session_ttl_seconds=60); "
+        f"assert verify_session_token({token!r}, settings=settings).user_id == 73"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[2] / "src",
+        capture_output=True, text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_session_token_rejects_tampering():
     settings = _app_settings()
     token, _payload = security.create_session_token(

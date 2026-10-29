@@ -231,6 +231,41 @@ def test_page_has_vision_requires_summary_and_existing_approved_image(monkeypatc
     assert file_access.page_has_vision(9, 1) is True
 
 
+@pytest.mark.parametrize("image_root", ["processed", "ingestion"])
+def test_ocr_page_preview_uses_approved_image_without_vision_summary(monkeypatch, tmp_path, image_root):
+    processed = tmp_path / "data" / "processed"
+    ingestion = tmp_path / "src" / "data" / "processed"
+    processed.mkdir(parents=True)
+    ingestion.mkdir(parents=True)
+    image = (processed if image_root == "processed" else ingestion) / "ocr-page.png"
+    image.write_bytes(b"png")
+    monkeypatch.setattr(file_access, "project_root", lambda: tmp_path)
+    monkeypatch.setattr(file_access, "data_processed_root", lambda: processed)
+    monkeypatch.setattr(
+        file_access, "engine", _Engine(page=(str(image),), vision=("", str(image)))
+    )
+
+    assert file_access.page_has_vision(9, 1) is False
+    assert file_access.page_has_preview(9, 1) is True
+
+
+@pytest.mark.parametrize("outcome", ["missing", "outside", "broken"])
+def test_page_preview_fails_closed_without_an_approved_image(monkeypatch, tmp_path, outcome):
+    processed = tmp_path / "processed"
+    processed.mkdir()
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(b"png")
+    monkeypatch.setattr(file_access, "data_processed_root", lambda: processed)
+    connection = (
+        {"error": RuntimeError("database unavailable")}
+        if outcome == "broken"
+        else {"page": (str(outside),) if outcome == "outside" else None}
+    )
+    monkeypatch.setattr(file_access, "engine", _Engine(**connection))
+
+    assert file_access.page_has_preview(9, 1) is False
+
+
 def test_chat_image_accepts_plain_filename_but_rejects_empty_identifier(monkeypatch, tmp_path):
     raw_root = tmp_path / "raw"
     monkeypatch.setattr(file_access, "data_raw_root", lambda: raw_root)

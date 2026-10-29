@@ -253,6 +253,8 @@ class IngestionRunner:
             return IngestionResult("waiting_quota", report, "quota_exceeded", message)
         if str(report.get("quality_status") or "").lower() == "blocked":
             block_message = _quality_block_message(report)
+            if message and message != block_message:
+                block_message = f"{block_message}. {message}"
             self._job_store.mark_failed(job, block_message)
             return IngestionResult(
                 "blocked",

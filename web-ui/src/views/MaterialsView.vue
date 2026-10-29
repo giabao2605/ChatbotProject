@@ -52,6 +52,8 @@ const synMatName = ref("");
 const synList = ref<Syn[]>([]);
 const newSyn = ref("");
 let resolveSyn: (() => void) | null = null;
+let rejectSyn: ((err: unknown) => void) | null = null;
+let synChanged = false;
 
 async function reloadSyns() {
   const data = await apiGet<{ materials: ApiRow[] }>("/api/materials");
@@ -60,8 +62,10 @@ async function reloadSyns() {
 }
 
 function openSyn(row: ApiRow): Promise<void> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     resolveSyn = resolve;
+    rejectSyn = reject;
+    synChanged = false;
     synMatId.value = mid(row);
     synMatName.value = String(row.display ?? row.code ?? "");
     synList.value = synonymsOf(row);
@@ -78,6 +82,7 @@ async function addSyn() {
   synError.value = "";
   try {
     await apiSend(`/api/materials/${synMatId.value}/synonyms`, "POST", { synonym: s });
+    synChanged = true;
     newSyn.value = "";
     await reloadSyns();
   } catch (err) {
@@ -92,6 +97,7 @@ async function removeSyn(s: Syn) {
   synError.value = "";
   try {
     await apiSend(`/api/materials/synonyms/${s.synonym_id}`, "DELETE");
+    synChanged = true;
     await reloadSyns();
   } catch (err) {
     synError.value = err instanceof Error ? err.message : "Lỗi";
@@ -102,8 +108,10 @@ async function removeSyn(s: Syn) {
 
 function closeSyn() {
   synVisible.value = false;
-  resolveSyn?.();
+  if (synChanged) resolveSyn?.();
+  else rejectSyn?.(new Error(""));
   resolveSyn = null;
+  rejectSyn = null;
 }
 
 const rowActions: RowAction[] = [
@@ -118,12 +126,13 @@ const rowActions: RowAction[] = [
     eyebrow="Materials"
     description="Danh mục vật tư và từ đồng nghĩa."
     :columns="columns"
+    data-key="material_id"
     :load="load"
     :create-form="createForm"
     :row-actions="rowActions"
   />
 
-  <Dialog v-model:visible="synVisible" :header="`Đồng nghĩa — ${synMatName}`" modal :style="{ width: '480px' }">
+  <Dialog v-model:visible="synVisible" :header="`Đồng nghĩa — ${synMatName}`" modal :style="{ width: '480px' }" @after-hide="closeSyn">
     <Message v-if="synError" severity="error" v-text="synError"></Message>
     <ul v-if="synList.length" class="syn-list">
       <li
@@ -141,7 +150,7 @@ const rowActions: RowAction[] = [
       <Button type="submit" label="Thêm" :disabled="synBusy || !newSyn.trim()" />
     </form>
     <div class="form-actions" style="margin-top: 12px">
-      <Button label="Đóng" severity="secondary" outlined @click="closeSyn" />
+      <Button label="Đóng" severity="secondary" outlined @click="synVisible = false" />
     </div>
   </Dialog>
 </template>

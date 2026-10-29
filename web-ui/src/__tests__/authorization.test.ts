@@ -18,12 +18,20 @@ describe("role-aware navigation policy", () => {
     expect(isRoleAllowed(["admin"], ["admin"])).toBe(true);
   });
 
+  it("exposes access management to a pure security admin", () => {
+    const visibleRoutes = visibleNavigationItems(["security_admin"]).map((item) => item.to);
+    expect(visibleRoutes).toContain("/access");
+    expect(visibleRoutes).toContain("/users");
+    expect(visibleRoutes).not.toContain("/analytics");
+  });
+
   it("reserves platform control-plane access for explicit platform admins", () => {
     expect(isRoleAllowed(["admin"], ["platform_admin"])).toBe(false);
     expect(isRoleAllowed(["platform_admin"], ["platform_admin"])).toBe(true);
     expect(visibleNavigationItems(["admin"]).map((item) => item.to)).not.toContain("/org");
     const platformRoutes = visibleNavigationItems(["platform_admin"]).map((item) => item.to);
     expect(platformRoutes).toContain("/org");
+    expect(platformRoutes).toContain("/analytics");
     expect(platformRoutes).not.toContain("/chat");
     expect(platformRoutes).not.toContain("/documents");
     expect(platformRoutes).not.toContain("/access");

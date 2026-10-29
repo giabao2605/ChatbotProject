@@ -8,10 +8,13 @@ are eligible for retrieval.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from contextlib import contextmanager
 from datetime import datetime
+import hashlib
 import json
 
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from ..engine import _ensure_engine, engine, resolve_engine as _resolve_engine
 from mech_chatbot.config.constants import EVALUATION_SOURCE_COLLECTIONS
@@ -121,26 +124,32 @@ def _default_policy() -> RepositoryPolicySettings:
     )
 
 
+_REQUIRED_METADATA_COLUMNS = {
+    "owner_department": "OwnerDepartment",
+    "shared_departments": "DeptCount",
+    "domain": "Domain",
+    "source_system": "SourceSystem",
+    "site": "Site",
+    "security_level": "SecurityLevel",
+    "classification_rationale": "ClassificationRationale",
+    "classification_model": "ClassificationModel",
+    "external_processing_policy": "ExternalProcessingPolicy",
+    "taxonomy_version": "TaxonomyVersion",
+    "knowledge_owner_user_id": "KnowledgeOwnerUserID",
+    "knowledge_approver_user_id": "KnowledgeApproverUserID",
+    "version": "VersionNo",
+    "parent_section": "ParentSection",
+    "parent_page": "ParentPage",
+}
+SUPPORTED_REQUIRED_METADATA_FIELDS = frozenset(_REQUIRED_METADATA_COLUMNS) | {"document_type"}
+
+
 def _required_metadata_value(field_name, row, doc_type):
-    values = {
-        "owner_department": row["OwnerDepartment"],
-        "shared_departments": row["DeptCount"],
-        "domain": row["Domain"],
-        "document_type": doc_type,
-        "source_system": row["SourceSystem"],
-        "site": row["Site"],
-        "security_level": row["SecurityLevel"],
-        "classification_rationale": row["ClassificationRationale"],
-        "classification_model": row["ClassificationModel"],
-        "external_processing_policy": row["ExternalProcessingPolicy"],
-        "taxonomy_version": row["TaxonomyVersion"],
-        "knowledge_owner_user_id": row["KnowledgeOwnerUserID"],
-        "knowledge_approver_user_id": row["KnowledgeApproverUserID"],
-        "version": row["VersionNo"],
-        "parent_section": row["ParentSection"],
-        "parent_page": row["ParentPage"],
-    }
-    return values.get(_clean(field_name).lower())
+    field = _clean(field_name).lower()
+    if field == "document_type":
+        return doc_type
+    column = _REQUIRED_METADATA_COLUMNS.get(field)
+    return row[column] if column else None
 
 
 def validate_publish_contract(doc_id, *, db_engine=None) -> ValidationResult:
@@ -471,6 +480,33 @@ def validate_publish_actor(
     return ValidationResult(doc_id=normalized_doc_id, valid=not issues, issues=tuple(issues))
 
 
+def _new_variant_error(conn, doc_id, doc=None):
+    if doc is None:
+        doc = conn.execute(
+            text("SELECT BaseCode, VariantCode FROM dbo.TaiLieu WHERE DocID = :doc_id"),
+            {"doc_id": doc_id},
+        ).mappings().first()
+    if not doc:
+        return "Không tìm thấy tài liệu"
+    base_code = _clean(doc["BaseCode"])
+    variant_code = _clean(doc["VariantCode"])
+    if not base_code or not variant_code or variant_code.lower() == "default":
+        return "Chọn mã biến thể riêng trước khi xuất bản biến thể mới"
+    collision = conn.execute(
+        text(
+            """
+            SELECT TOP 1 DocID FROM dbo.TaiLieu WITH (UPDLOCK, HOLDLOCK)
+            WHERE BaseCode = :base_code AND VariantCode = :variant_code
+              AND IsCurrent = 1 AND DocID <> :doc_id
+            """
+        ),
+        {"base_code": base_code, "variant_code": variant_code, "doc_id": doc_id},
+    ).mappings().first()
+    if collision:
+        return "Mã biến thể đã được xuất bản; chọn mã khác"
+    return None
+
+
 def _create_outbox_event(
     doc_id,
     action,
@@ -555,6 +591,17 @@ def _create_outbox_event(
                 validation=validation,
             )
 
+        if action == "new_variant":
+            variant_error = _new_variant_error(conn, doc_id)
+            if variant_error:
+                return PublicationResult(
+                    ok=False,
+                    doc_id=doc_id,
+                    state="validation_failed",
+                    error=variant_error,
+                    validation=validation,
+                )
+
         existing = conn.execute(
             text(
                 """
@@ -604,6 +651,15 @@ def _create_outbox_event(
         else:
             target_version = int(state["PublicationVersion"] or 0) + 1
             idempotency_key = f"publication:{doc_id}:{action}:{target_version}"
+            previous = conn.execute(
+                text("""
+                    SELECT TOP 1 OutboxID FROM dbo.PublicationOutbox WITH (UPDLOCK, HOLDLOCK)
+                    WHERE DocID = :doc_id AND Action = :action ORDER BY OutboxID DESC
+                """),
+                {"doc_id": doc_id, "action": action},
+            ).mappings().first()
+            if previous:
+                idempotency_key += f":after:{previous['OutboxID']}"
             outbox_row = conn.execute(
                 text(
                     """
@@ -765,7 +821,58 @@ def _mark_outbox_failure(
     )
 
 
+@contextmanager
+def _variant_publish_lock(selected_engine, doc_id):
+    with selected_engine.begin() as conn:
+        doc = conn.execute(
+            text("SELECT BaseCode, VariantCode FROM dbo.TaiLieu WHERE DocID = :doc_id"),
+            {"doc_id": doc_id},
+        ).mappings().first()
+        if not doc:
+            raise RuntimeError("Không tìm thấy tài liệu")
+        identity = json.dumps(
+            [str(doc["BaseCode"] or "").casefold(), str(doc["VariantCode"] or "default").casefold()],
+            ensure_ascii=False,
+        )
+        resource = "publish_variant:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
+        result = conn.execute(
+            text(
+                """
+                DECLARE @lock_result int;
+                EXEC @lock_result = sys.sp_getapplock
+                    @Resource = :resource, @LockMode = 'Exclusive',
+                    @LockOwner = 'Transaction', @LockTimeout = 10000;
+                SELECT @lock_result;
+                """
+            ),
+            {"resource": resource},
+        ).fetchone()
+        if not result or int(result[0]) < 0:
+            raise RuntimeError("Không khóa được lượt xuất bản biến thể; thử lại sau")
+        yield
+
+
 def _publish_event(
+    event,
+    *,
+    db_engine=None,
+    policy: RepositoryPolicySettings | None = None,
+    qdrant_client=None,
+    collection_name=None,
+):
+    kwargs = {
+        "db_engine": db_engine,
+        "policy": policy,
+        "qdrant_client": qdrant_client,
+        "collection_name": collection_name,
+    }
+    if _clean(event["Action"]) != "new_variant":
+        return _publish_event_unlocked(event, **kwargs)
+    with _variant_publish_lock(resolve_engine(db_engine), int(event["DocID"])):
+        return _publish_event_unlocked(event, **kwargs)
+
+
+def _publish_event_unlocked(
     event,
     *,
     db_engine=None,
@@ -812,6 +919,10 @@ def _publish_event(
         ).mappings().first()
         if not doc:
             raise RuntimeError(f"Khong tim thay DocID {doc_id}")
+        if action == "new_variant":
+            variant_error = _new_variant_error(conn, doc_id, doc)
+            if variant_error:
+                raise RuntimeError(variant_error)
         old_rows = []
         if action == "new_version" and _clean(doc["BaseCode"]):
             old_rows = conn.execute(
@@ -1045,7 +1156,7 @@ def process_publication_outbox_once(
             doc_id=int(event["DocID"]),
             outbox_id=int(event["OutboxID"]),
             state="failed",
-            error=str(exc),
+            error="Xuất bản thất bại; kiểm tra trạng thái và thử lại" if isinstance(exc, SQLAlchemyError) else str(exc),
         )
 
 
@@ -1101,9 +1212,25 @@ def publish_document(
         process_kwargs["db_engine"] = db_engine
     if policy is not None:
         process_kwargs["policy"] = policy
-    return process_publication_outbox_once(
+    processed = process_publication_outbox_once(
         **process_kwargs,
     )
+    if processed is None:
+        # The event may have been claimed, completed, or exhausted elsewhere.
+        with resolve_engine(db_engine).connect() as conn:
+            row = conn.execute(
+                text("SELECT Status FROM dbo.PublicationOutbox WHERE OutboxID = :outbox_id"),
+                {"outbox_id": queued.outbox_id},
+            ).fetchone()
+        status = row[0] if row else None
+        return PublicationResult(
+            ok=status in {"pending", "processing", "done"},
+            doc_id=normalized_doc_id,
+            outbox_id=queued.outbox_id,
+            state={"pending": "publishing", "processing": "processing", "done": "published"}.get(status, "failed"),
+            error=None if status in {"pending", "processing", "done"} else "Xuất bản thất bại; kiểm tra trạng thái",
+        )
+    return processed
 
 
 def reconcile_publications(

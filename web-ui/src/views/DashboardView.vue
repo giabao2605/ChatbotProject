@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { loadDashboard } from "@/api/client";
 import { useAuthStore } from "@/stores/auth";
+import { isRoleAllowed, NAVIGATION_ITEMS } from "@/authorization";
 import { dashboardMetricLabel, dashboardMetricTarget } from "@/utils/dashboard";
 import type { ApiRow } from "@/types";
 
@@ -50,7 +51,12 @@ const groups = computed(() => {
 });
 
 function label(key: string) { return dashboardMetricLabel(key); }
-function target(key: string): string | null { return dashboardMetricTarget(key); }
+function target(key: string): string | null {
+  const to = dashboardMetricTarget(key);
+  if (!to) return null;
+  const item = NAVIGATION_ITEMS.find((nav) => to === nav.to || to.startsWith(`${nav.to}?`));
+  return item && !isRoleAllowed(roles.value, item.roles) ? null : to;
+}
 function openMetric(key: string) { const to = target(key); if (to) void router.push(to); }
 function cell(row: ApiRow, ...keys: string[]) {
   const value = keys.map((key) => row[key]).find((item) => item !== null && item !== undefined && item !== "");
@@ -79,8 +85,8 @@ onMounted(async () => {
           </Card>
         </div>
       </section>
-      <div class="two-column">
-        <Card><template #title>Tài liệu gần đây</template><template #content>
+      <div v-if="payload.recent_documents || payload.recent_failed_jobs" class="two-column">
+        <Card v-if="payload.recent_documents"><template #title>Tài liệu gần đây</template><template #content>
           <ul v-if="payload.recent_documents?.length" class="activity-list"><li v-for="(row, i) in payload.recent_documents" :key="i"><strong>{{ cell(row, 'TenFile', 'OriginalFileName', 'file') }}</strong><span>{{ cell(row, 'Department', 'ThuMuc', 'dept') }} · {{ cell(row, 'LifecycleStatus', 'effective_status') }}</span></li></ul>
           <p v-else class="muted-text">Không có dữ liệu.</p>
         </template></Card>

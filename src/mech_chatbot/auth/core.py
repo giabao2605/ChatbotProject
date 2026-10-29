@@ -245,7 +245,7 @@ def load_user_profile(user_id=None, username=None, *, strict=False):
         return None
 
 
-def authenticate_user(username, password):
+def authenticate_user(username, password, *, session_generation_reader=None):
     """Xac thuc nguoi dung. Tra ve dict thong tin user neu hop le, nguoc lai None.
 
     Thuan logic - khong dung Streamlit. Loi truy van DB duoc log qua logger.
@@ -277,7 +277,16 @@ def authenticate_user(username, password):
                 rate_limit.record_failure(engine, username)
                 return None
 
+            session_generation = None
             stored_hash = user[5]
+            if session_generation_reader is not None:
+                session_generation = session_generation_reader(int(user[0]))
+                # Read credentials after the epoch, so a concurrent reset cannot
+                # validate the old hash and mint a token in the new epoch.
+                stored_hash = conn.execute(
+                    text("SELECT PasswordHash FROM Users WHERE UserID = :uid AND IsActive = 1"),
+                    {"uid": int(user[0])},
+                ).scalar()
 
             # Verify bcrypt hash
             try:
@@ -296,7 +305,8 @@ def authenticate_user(username, password):
                 return None
 
             rate_limit.clear_failures(engine, username)  # Dang nhap thanh cong -> xoa bo dem
-            return _build_user_profile(conn, user)
+            profile = _build_user_profile(conn, user)
+            return {**profile, "session_generation": session_generation} if session_generation is not None else profile
     except Exception as e:
         logger.error(f"Loi truy van khi xac thuc user '{username}': {e}", exc_info=True)
         return None

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from io import BytesIO
 
 import pytest
+from PIL import Image
 
 from mech_chatbot.application import document_upload as upload_module
 from mech_chatbot.application.document_review import (
@@ -146,6 +148,67 @@ def test_upload_preflight_rejects_department_and_extension_before_reading_bytes(
     assert invalid is not None and invalid.code == "invalid_extension"
 
 
+def test_legacy_doc_is_rejected_before_job_creation_with_conversion_guidance() -> None:
+    storage = Storage()
+    jobs = Jobs()
+    upload = DocumentUpload(storage=storage, job_store=jobs)
+
+    with pytest.raises(UploadRejected) as raised:
+        upload.enqueue(_command(file_name="legacy.doc"), _actor())
+
+    assert raised.value.failure.code == "invalid_extension"
+    assert "DOCX" in raised.value.failure.message
+    assert storage.stored == []
+    assert jobs.calls == []
+
+
+def test_xls_without_reader_is_rejected_before_job_creation(monkeypatch) -> None:
+    storage = Storage()
+    jobs = Jobs()
+    upload = DocumentUpload(storage=storage, job_store=jobs)
+    monkeypatch.setattr(upload_module.importlib.util, "find_spec", lambda name: None if name == "xlrd" else object())
+
+    with pytest.raises(UploadRejected) as raised:
+        upload.enqueue(_command(file_name="legacy.xls"), _actor())
+
+    assert raised.value.failure.code == "missing_dependency"
+    assert "XLS" in raised.value.failure.message
+    assert storage.stored == []
+    assert jobs.calls == []
+
+
+def test_multipage_tiff_is_rejected_before_job_creation() -> None:
+    content = BytesIO()
+    Image.new("RGB", (2, 2), "white").save(
+        content,
+        format="TIFF",
+        save_all=True,
+        append_images=[Image.new("RGB", (2, 2), "black")],
+    )
+    storage = Storage()
+    jobs = Jobs()
+    upload = DocumentUpload(storage=storage, job_store=jobs)
+
+    with pytest.raises(UploadRejected) as raised:
+        upload.enqueue(_command(file_name="drawing.tiff", content=content.getvalue()), _actor())
+
+    assert raised.value.failure.code == "unsupported_multipage_image"
+    assert "TIFF" in raised.value.failure.message
+    assert storage.stored == []
+    assert jobs.calls == []
+
+
+def test_single_page_tiff_still_enqueues() -> None:
+    content = BytesIO()
+    Image.new("RGB", (2, 2), "white").save(content, format="TIFF")
+
+    receipt = DocumentUpload(storage=Storage(), job_store=Jobs()).enqueue(
+        _command(file_name="drawing.tif", content=content.getvalue()), _actor()
+    )
+
+    assert receipt.job_id == 91
+
+
 def test_single_upload_rejects_oversized_content(monkeypatch) -> None:
     monkeypatch.setattr(upload_module, "MAX_UPLOAD_BYTES", 2)
 
@@ -256,11 +319,12 @@ def test_batch_unexpected_failure_does_not_expose_internal_exception() -> None:
 
 
 class Publication:
-    def __init__(self, outcomes):
+    def __init__(self, outcomes, documents=None):
         self.outcomes = iter(outcomes)
+        self.documents = documents
 
-    def resolve_latest_doc_id(self, _job_id):
-        return 42
+    def resolve_latest_doc_id(self, job_id):
+        return self.documents.get(job_id) if self.documents is not None else 42
 
     def publish_document(self, command, actor):
         return next(self.outcomes)
@@ -291,11 +355,11 @@ class ReviewStore:
         self.calls.append(("delete_job", job_id))
 
 
-def _review(publication=()):
+def _review(publication=(), *, documents=None):
     store = ReviewStore()
     use_case = ReviewDocuments(
         review_store=store,
-        publication=PublicationCoordinator(publication=Publication(publication)),
+        publication=PublicationCoordinator(publication=Publication(publication, documents)),
     )
     return use_case, store
 
@@ -306,7 +370,8 @@ def test_bulk_publish_preserves_published_pending_and_failed_accounting() -> Non
             PublicationOutcome(True, "published", {"ok": True}),
             PublicationOutcome(True, "processing", {"ok": True, "state": "processing"}),
             PublicationOutcome(False, "failed", {"ok": False, "error": "failed"}, "failed"),
-        )
+        ),
+        documents={1: 11, 2: 12, 3: 13},
     )
 
     result = use_case.execute(
@@ -322,17 +387,17 @@ def test_bulk_publish_preserves_published_pending_and_failed_accounting() -> Non
     assert (result.updated, result.pending, result.failed) == (1, 1, 1)
     assert result.failures == (
         {"ok": True, "state": "processing"},
-        {"ok": False, "error": "failed"},
+        {"ok": False, "error": "failed", "job_id": 3, "doc_id": 13, "code": "publish_contract_failed"},
     )
 
 
-def test_bulk_reject_preserves_fallback_and_delete_without_ids_is_updated() -> None:
+def test_bulk_reject_preserves_fallback_and_delete_without_ids_fails() -> None:
     reject, store = _review()
     rejected = reject.execute(
         ReviewDocumentsCommand("reject", "standalone", "duplicate", (ReviewItem(9, 42),)),
         _actor(roles=("reviewer",)),
     )
-    delete, _ = _review()
+    delete, delete_store = _review()
     deleted = delete.execute(
         ReviewDocumentsCommand("delete", "standalone", "", (ReviewItem(None, None),)),
         _actor(roles=("reviewer",)),
@@ -344,7 +409,9 @@ def test_bulk_reject_preserves_fallback_and_delete_without_ids_is_updated() -> N
         ("mark_rejected", 9),
         ("reject_doc", 42, "alice"),
     ]
-    assert deleted.updated == 1
+    assert (deleted.updated, deleted.failed, deleted.ok) == (0, 1, False)
+    assert delete_store.calls == []
+    assert deleted.failures == ({"job_id": None, "doc_id": None, "code": "missing_ids", "error": "Thiếu DocID hoặc JobID"},)
 
 
 def test_bulk_reject_without_document_id_updates_only_the_job() -> None:
@@ -502,3 +569,58 @@ def test_publication_coordinator_rejects_actor_without_review_role() -> None:
 
     assert outcome.ok is False
     assert outcome.state == "unauthorized"
+
+
+@pytest.mark.parametrize("action, item, code", [
+    ("publish", ReviewItem(1161, None), "missing_doc_id"),
+    ("publish", ReviewItem(None, 1165), "missing_job_id"),
+    ("reject", ReviewItem(None, 1165), "missing_job_id"),
+    ("delete", ReviewItem(None, None), "missing_ids"),
+])
+def test_bulk_failure_missing_ids_are_reported_without_io(action, item, code):
+    use_case, store = _review()
+    result = use_case.execute(ReviewDocumentsCommand(action, "standalone", "QA", (item,)), _actor(roles=("reviewer",)))
+    assert (result.updated, result.pending, result.failed, result.ok) == (0, 0, 1, False)
+    assert store.calls == []
+    assert len(result.failures) == 1
+    assert result.failures[0]["job_id"] == item.job_id
+    assert result.failures[0]["doc_id"] == item.doc_id
+    assert result.failures[0]["code"] == code
+    assert result.failures[0]["error"]
+
+
+def test_bulk_failure_preserves_validation_and_pending_payload_without_mutation():
+    pending = {"ok": True, "state": "processing", "error": "Đang xử lý"}
+    validation = {"ok": False, "state": "validation_failed", "validation": {"issues": [{"message": "Thiếu title"}, {"message": "Thiếu owner"}]}, "job_id": 999, "doc_id": 999, "code": "stale", "error": "stale"}
+    use_case, _ = _review((PublicationOutcome(True, "processing", pending), PublicationOutcome(False, "validation_failed", validation, "Metadata không hợp lệ")), documents={1: 11, 2: 12})
+    result = use_case.execute(ReviewDocumentsCommand("publish", "standalone", "", (ReviewItem(1, 11), ReviewItem(2, 12))), _actor(roles=("reviewer",)))
+    assert (result.updated, result.pending, result.failed) == (0, 1, 1)
+    assert result.failures[0] == pending
+    assert result.failures[1] == {**validation, "job_id": 2, "doc_id": 12, "code": "publish_contract_failed", "error": "Metadata không hợp lệ"}
+    assert validation["job_id"] == 999 and validation["error"] == "stale"
+
+
+@pytest.mark.parametrize("action,code,safe_error", [("publish", "publish_contract_failed", "Publish thất bại"), ("reject", "job_reject_failed", "Reject thất bại"), ("delete", "delete_failed", "Xóa thất bại")])
+def test_bulk_failure_exceptions_have_ids_safe_errors_and_internal_logs(action, code, safe_error, caplog):
+    internal_failure_detail = "SQL password=private-secret"
+    class BrokenStore(ReviewStore):
+        def reject_job(self, job_id, reason):
+            raise RuntimeError(internal_failure_detail)
+        def delete_document(self, doc_id, reviewer):
+            raise RuntimeError(internal_failure_detail)
+    class BrokenPublication(Publication):
+        def publish_document(self, command, actor):
+            raise RuntimeError(internal_failure_detail)
+    use_case = ReviewDocuments(review_store=BrokenStore(), publication=PublicationCoordinator(publication=BrokenPublication(())))
+    result = use_case.execute(ReviewDocumentsCommand(action, "standalone", "", (ReviewItem(9, 42),)), _actor(roles=("reviewer",)))
+    assert result.failures == ({"job_id": 9, "doc_id": 42, "code": code, "error": safe_error},)
+    assert internal_failure_detail not in repr(result.outcomes) and internal_failure_detail not in repr(result.failures)
+    assert internal_failure_detail in caplog.text
+
+
+def test_bulk_delete_mixed_missing_ids_preserves_valid_doc_job_and_both_paths():
+    use_case, store = _review()
+    result = use_case.execute(ReviewDocumentsCommand("delete", "standalone", "", (ReviewItem(None, None), ReviewItem(None, 7), ReviewItem(8, None), ReviewItem(9, 42))), _actor(roles=("reviewer",)))
+    assert (result.updated, result.pending, result.failed, result.ok) == (3, 0, 1, False)
+    assert result.failures == ({"job_id": None, "doc_id": None, "code": "missing_ids", "error": "Thiếu DocID hoặc JobID"},)
+    assert store.calls == [("delete_doc", 7, "alice"), ("delete_job", 8), ("delete_doc", 42, "alice"), ("delete_job", 9)]

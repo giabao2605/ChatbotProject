@@ -19,6 +19,7 @@ import requests
 from fastapi import FastAPI, Request
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from mech_chatbot.api import app_security
@@ -275,7 +276,9 @@ def _build_default_app_runtime(
                 _chat_actor_profile(actor),
             )
         ),
-        citation_resolver=_resolve_chat_citations,
+        citation_resolver=lambda docs, candidates, answer: _resolve_chat_citations(
+            docs, candidates, answer, db_engine=engine
+        ),
         raw_root=data_raw_root,
         create_ingestion_job=lambda **kwargs: production_create_ingestion_job(
             **kwargs,
@@ -304,6 +307,7 @@ def _build_default_app_runtime(
             db_engine=engine,
             qdrant_client=qdrant_client,
             collection_name=collection_name,
+            raw_root=data_raw_root,
         ),
         delete_ingestion_job=lambda *args, **kwargs: delete_ingestion_job(
             *args,
@@ -412,6 +416,16 @@ def create_app(
         version="0.1.0",
         lifespan=_lifespan,
     )
+
+    @application.exception_handler(Exception)
+    async def _unhandled_error(request: Request, error: Exception):
+        if request.url.path.startswith("/api/"):
+            return JSONResponse(
+                {"detail": "Internal Server Error"},
+                status_code=500,
+                headers={"Cache-Control": "private, no-store"},
+            )
+        return PlainTextResponse("Internal Server Error", status_code=500)
     application.state.process_settings = process
     application.state.settings_snapshot = settings_snapshot
     application.state.pilot_replays = pilot_replays
@@ -480,6 +494,9 @@ def create_app(
             ),
         ):
             response = await call_next(request)
+        if request.url.path.startswith("/api/"):
+            response.raw_headers = list(response.raw_headers)
+            response.headers["Cache-Control"] = "private, no-store"
         if production:
             response.headers["X-Content-Type-Options"] = "nosniff"
             response.headers["X-Frame-Options"] = "DENY"

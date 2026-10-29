@@ -191,6 +191,21 @@ def test_clear_all_returns_deleted_count_and_resets_stats(monkeypatch):
     assert len(fake.connection.calls) == 2
 
 
+def test_delete_for_docs_only_removes_entries_referencing_selected_ids(monkeypatch):
+    fake = _install(monkeypatch, (Result(rowcount=2),))
+
+    assert semantic_cache.sc_delete_for_docs([11, 11, 12], connection=fake.connection) == 2
+    assert len(fake.connection.calls) == 1
+    statement, params = fake.connection.calls[0]
+    assert "DELETE" in statement and "dbo.SemanticCache" in statement
+    assert "OPENJSON" in statement and "SourceDocIDs" in statement
+    assert "SemanticCacheStat" not in statement
+    assert params == {"doc_ids": "[11, 12]"}
+
+    assert semantic_cache.sc_delete_for_docs([], connection=fake.connection) == 0
+    assert len(fake.connection.calls) == 1
+
+
 def test_clear_all_returns_zero_for_unknown_count_or_database_error(monkeypatch):
     _install(monkeypatch, (Result(rowcount=0), Result()))
     assert semantic_cache.sc_clear_all() == 0

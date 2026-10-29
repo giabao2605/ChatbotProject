@@ -229,6 +229,15 @@ def test_upsert_domain_profile_rejects_invalid_boundary_input(kwargs, message):
         governance.upsert_department_domain_profile(router_patterns=[], **kwargs)
 
 
+@pytest.mark.parametrize("unsupported", ["doc_type", "base_code", "version_label", "unknown_field"])
+def test_upsert_domain_profile_rejects_metadata_publication_cannot_check(unsupported):
+    with pytest.raises(ValueError, match="required_metadata"):
+        governance.upsert_department_domain_profile(
+            "QA_A", document_types=["technical_manual"],
+            required_metadata=["site", unsupported], router_patterns=[],
+        )
+
+
 def test_upsert_domain_profile_deduplicates_values_and_audits(fake_db, monkeypatch):
     conn = fake_db(_Result(rowcount=1))
     audits = []

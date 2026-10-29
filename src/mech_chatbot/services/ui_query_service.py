@@ -37,12 +37,25 @@ from mech_chatbot.db.repositories.ui_queries import (
     set_user_active_status,
     delete_user_account,
     update_user_password,
-    create_user_with_roles,
+    create_user_with_roles as _create_user_with_roles,
     get_user_roles,
     get_user_departments,
     get_user_clearance,
     fetch_sources_meta_rows,
 )
+
+from sqlalchemy.exc import IntegrityError
+
+
+class UserAccountConflict(Exception):
+    pass
+
+
+def create_user_with_roles(**values):
+    try:
+        return _create_user_with_roles(**values)
+    except IntegrityError as exc:
+        raise UserAccountConflict from exc
 
 __all__ = [
     "is_engine_ready",

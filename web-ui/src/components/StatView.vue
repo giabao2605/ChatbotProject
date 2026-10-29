@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
-import { t } from "@/i18n";
+import { currentLocale, t } from "@/i18n";
 import type { ToolbarAction } from "@/types";
 
 const props = defineProps<{
@@ -30,23 +30,23 @@ type Section = TableSection | BarSection;
 const scalars = ref<Scalar[]>([]);
 const sections = ref<Section[]>([]);
 
-const FIELD_LABELS: Record<string, string> = {
-  requests: "Số truy vấn",
-  today_questions: "Câu hỏi hôm nay",
-  recent_questions: "Câu hỏi gần đây",
-  total_questions: "Tổng số câu hỏi",
-  unique_users: "Người dùng duy nhất",
-  hit_rate: "Tỷ lệ cache hit",
-  cache_hit_rate: "Tỷ lệ cache hit",
-  cache_hits: "Cache hit",
-  cache_misses: "Cache miss",
-  p95_ms: "P95 (ms)",
-  avg_latency_ms: "Độ trễ trung bình (ms)",
-  error_rate: "Tỷ lệ lỗi",
+const reportLabels: Readonly<Record<string, string>> = {
+  today_questions: "Câu hỏi hôm nay", recent_questions: "Câu hỏi gần đây", unique_users: "Người dùng duy nhất",
+  cache_hit_rate: "Tỷ lệ cache hit", cache_hits: "Cache hit", cache_misses: "Cache miss", p95_ms: "P95 (ms)", error_rate: "Tỷ lệ lỗi",
+  days: "Số ngày", total_questions: "Tổng câu hỏi", total_sessions: "Tổng phiên", total_users: "Tổng người dùng",
+  no_answer_count: "Câu hỏi chưa có đáp án", no_answer_rate: "Tỷ lệ chưa có đáp án", likes: "Thích", dislikes: "Không thích",
+  top_questions: "Câu hỏi phổ biến", question: "Câu hỏi", count: "Số lượng", daily: "Theo ngày", date: "Ngày",
+  top_documents: "Tài liệu được sử dụng nhiều", document: "Tài liệu", department: "Phòng ban", by_department: "Theo phòng ban",
+  owned_total: "Tài liệu sở hữu", shared_access: "Tài liệu được chia sẻ", total: "Tổng số", pending_review: "Chờ duyệt",
+  published: "Đã xuất bản", confidential: "Tài liệu mật", failed_jobs: "Job lỗi", running_jobs: "Job đang chạy",
+  entries: "Mục cache", lookups: "Lượt tra cache", hits: "Lượt trúng cache", hit_rate: "Tỷ lệ trúng cache", cost_saved: "Chi phí tiết kiệm",
+  total_requests: "Tổng yêu cầu", total_cost: "Tổng chi phí", avg_latency_ms: "Độ trễ trung bình (ms)", refusal_rate: "Tỷ lệ từ chối",
+  requests: "Yêu cầu", tokens_in: "Token đầu vào", tokens_out: "Token đầu ra", cost: "Chi phí",
+  step_latency: "Độ trễ từng bước", refusals: "Yêu cầu bị từ chối", reason: "Lý do", top_costly: "Yêu cầu có chi phí cao nhất",
 };
 
-function labelForKey(key: string): string {
-  return FIELD_LABELS[key] ?? key;
+function reportLabel(key: string): string {
+  return currentLocale() === "vi" ? reportLabels[key] ?? key : key;
 }
 
 function isScalar(v: unknown): boolean {
@@ -71,13 +71,13 @@ function fmt(v: unknown): string {
 
 // Bang tu mang cac object: cot so se co thanh bar ty le theo gia tri lon nhat cot do.
 function buildTable(key: string, arr: Record<string, unknown>[]): TableSection {
-  const fields: string[] = [];
+  const columns: string[] = [];
   for (const item of arr) {
-    for (const k of Object.keys(item ?? {})) if (!fields.includes(k)) fields.push(k);
+    for (const k of Object.keys(item ?? {})) if (!columns.includes(k)) columns.push(k);
   }
   const maxByCol: Record<string, number> = {};
   const numericCol: Record<string, boolean> = {};
-  for (const col of fields) {
+  for (const col of columns) {
     let allNum = true;
     let hasNum = false;
     let max = 0;
@@ -96,7 +96,7 @@ function buildTable(key: string, arr: Record<string, unknown>[]): TableSection {
     maxByCol[col] = max || 1;
   }
   const rows: Cell[][] = arr.map((item) =>
-    fields.map((col) => {
+    columns.map((col) => {
       const raw = item?.[col];
       const n = numericCol[col] ? toNumber(raw) : null;
       return {
@@ -105,11 +105,11 @@ function buildTable(key: string, arr: Record<string, unknown>[]): TableSection {
       };
     }),
   );
-  return { kind: "table", key: labelForKey(key), columns: fields.map(labelForKey), rows };
+  return { kind: "table", key, columns, rows };
 }
 
 function buildBars(key: string, obj: Record<string, unknown>): BarSection {
-  const entries = Object.entries(obj).map(([label, v]) => ({ label: labelForKey(label), n: toNumber(v) ?? 0, raw: v }));
+  const entries = Object.entries(obj).map(([label, v]) => ({ label, n: toNumber(v) ?? 0, raw: v }));
   const max = Math.max(1, ...entries.map((e) => Math.abs(e.n)));
   const items: BarItem[] = entries
     .sort((a, b) => Math.abs(b.n) - Math.abs(a.n))
@@ -135,7 +135,7 @@ function addSection(key: string, value: unknown) {
       sections.value.push(buildBars(key, obj));
     } else {
       // Object long -> bang key/value.
-      sections.value.push(buildTable(key, Object.entries(obj).map(([k, v]) => ({ key: labelForKey(k), value: fmt(v) }))));
+      sections.value.push(buildTable(key, Object.entries(obj).map(([k, v]) => ({ key: k, value: fmt(v) }))));
     }
   }
 }
@@ -151,7 +151,7 @@ async function refresh() {
       addSection(props.title, result);
     } else if (result && typeof result === "object") {
       for (const [key, value] of Object.entries(result as Record<string, unknown>)) {
-        if (isScalar(value)) scalars.value.push({ key: labelForKey(key), value: fmt(value) });
+        if (isScalar(value)) scalars.value.push({ key, value: fmt(value) });
         else addSection(key, value);
       }
     }
@@ -209,13 +209,13 @@ onMounted(refresh);
     <template v-else>
       <div v-if="scalars.length" class="stat-grid">
         <Card v-for="item in scalars" :key="item.key">
-          <template #title><span v-text="item.key"></span></template>
+          <template #title><span v-text="reportLabel(item.key)"></span></template>
           <template #content><strong class="stat-number" v-text="item.value"></strong></template>
         </Card>
       </div>
 
       <Card v-for="section in sections" :key="section.key">
-        <template #title><span v-text="section.key"></span></template>
+        <template #title><span v-text="reportLabel(section.key)"></span></template>
         <template #content>
           <!-- Bieu do cot ngang cho map so lieu -->
           <div v-if="section.kind === 'bars'" class="bar-chart">
@@ -230,7 +230,7 @@ onMounted(refresh);
             <table class="stat-table">
               <thead>
                 <tr>
-                  <th v-for="col in section.columns" :key="col" v-text="col"></th>
+                  <th v-for="col in section.columns" :key="col" v-text="reportLabel(col)"></th>
                 </tr>
               </thead>
               <tbody>

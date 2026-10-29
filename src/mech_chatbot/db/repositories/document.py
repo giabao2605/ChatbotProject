@@ -4,6 +4,7 @@ KHONG sua tay truc tiep neu chua doc AGENTS; day la mot phan cua package db/repo
 """
 import json
 import os
+from pathlib import Path
 from sqlalchemy import text
 from ..engine import _ensure_engine, engine, resolve_engine as _resolve_engine
 from mech_chatbot.config.logging import logger
@@ -11,7 +12,6 @@ from ._shared import _sanitize_date, _sanitize_int, _sanitize_text, normalize_ba
 from . import audit as _r_audit
 from . import catalog as _r_catalog
 from . import doc_metadata as _r_doc_metadata
-from . import feedback as _r_feedback
 from . import qdrant as _r_qdrant
 from . import semantic_cache as _r_semantic_cache
 
@@ -43,12 +43,22 @@ def _get_or_create_doc(
     thu_muc,
     *,
     classification_model=None,
+    source_file_path=None,
 ):
     # Fetch classification json tu IngestionJobs (neu co) de update metadata
+    job_params = {"f": file_name, "t": thu_muc}
+    source_filter = ""
+    if source_file_path is not None:
+        if not str(source_file_path).strip():
+            raise ValueError("Thiếu đường dẫn nguồn upload; dừng ingest để bảo toàn dữ liệu.")
+        source_filter = " AND FilePath = :source_file_path"
+        job_params["source_file_path"] = str(source_file_path)
     job = conn.execute(
-        text("SELECT TOP 1 ClassificationJson, FilePath, UploadMetaJson, Site FROM dbo.IngestionJobs WHERE TenFile = :f AND ThuMuc = :t ORDER BY CreatedAt DESC"),
-        {"f": file_name, "t": thu_muc}
+        text("SELECT TOP 1 ClassificationJson, FilePath, UploadMetaJson, Site FROM dbo.IngestionJobs WHERE TenFile = :f AND ThuMuc = :t" + source_filter + " ORDER BY CreatedAt DESC"),
+        job_params,
     ).fetchone()
+    if source_file_path is not None and not job:
+        raise ValueError("Không tìm thấy job đúng đường dẫn nguồn upload; dừng ingest để bảo toàn dữ liệu.")
     
     cls_data = {}
     if job and job[0]:
@@ -130,7 +140,7 @@ def _get_or_create_doc(
         text(
             """
             SELECT DocID, LifecycleStatus, ReviewStatus, PublicationState,
-                   Servable, IsCurrent
+                   Servable, IsCurrent, FilePath
             FROM TaiLieu
             WHERE TenFile = :f AND ThuMuc = :t
             """
@@ -139,7 +149,7 @@ def _get_or_create_doc(
     ).fetchone()
     
     if row:
-        doc_id, lifecycle_status, review_status, publication_state, servable, is_current = row
+        doc_id, lifecycle_status, review_status, publication_state, servable, is_current, existing_path = row
         is_published = str(lifecycle_status or "").strip().lower() == "published"
         is_public = str(publication_state or "").strip().lower() == "published"
         if is_published or is_public or bool(servable):
@@ -147,6 +157,12 @@ def _get_or_create_doc(
                 f"Tài liệu {file_name} đã được published/servable. "
                 "Không cho phép re-ingest để bảo toàn dữ liệu."
             )
+        incoming_path = source_file_path if source_file_path is not None else (job[1] if job else None)
+        if incoming_path is not None and (
+            not existing_path
+            or os.path.normcase(os.path.abspath(existing_path)) != os.path.normcase(os.path.abspath(incoming_path))
+        ):
+            raise ValueError(f"Tệp trùng tên {file_name} thuộc nguồn upload khác. Giữ nguyên tài liệu cũ; hãy đổi tên tệp mới.")
         # Update metadata neu re-ingest draft/rejected
         conn.execute(
             text("""UPDATE TaiLieu SET 
@@ -310,7 +326,7 @@ def mark_document_ingest_failed(
             doc_id, lifecycle_status, _review_status, publication_state, servable, _is_current = row
             is_published = str(lifecycle_status or "").strip().lower() == "published"
             is_public = str(publication_state or "").strip().lower() == "published"
-            if is_published or is_public or bool(servable):
+            if is_published or is_public or bool(servable) or str(_review_status or "").strip().lower() == "approved":
                 logger.warning(
                     "Bo qua rollback ingest cho tai lieu da published/servable "
                     "doc_id=%s file=%s",
@@ -430,6 +446,7 @@ def delete_document_completely(
     db_engine=None,
     qdrant_client=None,
     collection_name=None,
+    raw_root=None,
 ):
     """Xoa VINH VIEN toan bo du lieu cua 1 tai lieu (safe 3-buoc).
 
@@ -447,7 +464,7 @@ def delete_document_completely(
     # Doc thong tin + trang thai hien tai (can de rollback)
     with selected_engine.connect() as conn:
         row = conn.execute(
-            text("SELECT TenFile, ThuMuc, LifecycleStatus FROM TaiLieu WHERE DocID = :id"),
+            text("SELECT TenFile, ThuMuc, LifecycleStatus, FilePath, IsCurrent FROM TaiLieu WHERE DocID = :id"),
             {"id": doc_id}
         ).fetchone()
 
@@ -455,7 +472,50 @@ def delete_document_completely(
         logger.warning(f"delete_document_completely: khong tim thay DocID {doc_id}")
         return False
 
-    ten_file, thu_muc, prev_status = row[0], row[1], row[2]
+    ten_file, thu_muc, prev_status, file_path, was_current = row
+
+    # Do not remove a job (or shared file) unless this document owns the path.
+    if not file_path or not thu_muc:
+        logger.warning("[delete] DocID %s has no unambiguous job path", doc_id)
+        return False
+    original_path = None
+    if raw_root is not None:
+        upload_root = (Path(raw_root()) / "Uploads").resolve()
+        original_path = Path(file_path).resolve()
+        if not original_path.is_relative_to(upload_root):
+            logger.warning("[delete] source path outside upload root for DocID %s", doc_id)
+            return False
+    with selected_engine.connect() as conn:
+        docs = conn.execute(
+            text("SELECT TOP 2 DocID FROM dbo.TaiLieu WHERE FilePath = :path AND ThuMuc = :dept"),
+            {"path": file_path, "dept": thu_muc},
+        ).fetchall()
+        jobs = conn.execute(
+            text("SELECT TOP 2 JobID, Status, LockedBy FROM dbo.IngestionJobs WHERE FilePath = :path AND ThuMuc = :dept"),
+            {"path": file_path, "dept": thu_muc},
+        ).fetchall()
+    if (len(docs) != 1 or docs[0][0] != doc_id or len(jobs) != 1
+            or jobs[0][1] not in {"published", "rejected", "failed", "pending_review"}):
+        logger.warning("[delete] DocID %s job/path link is ambiguous or active", doc_id)
+        return False
+    job_id = jobs[0][0]
+
+    # Graph rows have non-cascading document FKs. Stop before deleting vectors.
+    try:
+        with selected_engine.connect() as conn:
+            graph_refs = conn.execute(text("""
+                SELECT CASE WHEN
+                    EXISTS (SELECT 1 FROM dbo.KnowledgeGraphNode WHERE SourceDocID = :id)
+                    OR EXISTS (SELECT 1 FROM dbo.KnowledgeGraphEdge WHERE SourceDocID = :id)
+                    OR EXISTS (SELECT 1 FROM dbo.GraphExtractionProposal WHERE SourceDocID = :id)
+                THEN 1 ELSE 0 END
+            """), {"id": doc_id}).fetchone()
+    except Exception as e:
+        logger.warning("[delete] cannot verify protected references for DocID %s: %s", doc_id, e)
+        return False
+    if graph_refs and graph_refs[0]:
+        logger.warning("[delete] DocID %s has protected references", doc_id)
+        return False
 
     # ------------------------------------------------------------------
     # Buoc 1: SQL soft-delete — danh dau 'deleting'
@@ -481,6 +541,7 @@ def delete_document_completely(
             raise RuntimeError("Qdrant delete runtime is not configured")
         qdrant_client.delete(
             collection_name=collection_name,
+            wait=True,
             points_selector=models.FilterSelector(
                 filter=models.Filter(
                     must=[models.FieldCondition(key="metadata.doc_id", match=models.MatchValue(value=doc_id))]
@@ -496,8 +557,8 @@ def delete_document_completely(
         try:
             with selected_engine.begin() as conn:
                 conn.execute(
-                    text("UPDATE TaiLieu SET LifecycleStatus = :s, IsCurrent = 1 WHERE DocID = :id"),
-                    {"s": prev_status or "published", "id": doc_id}
+                    text("UPDATE TaiLieu SET LifecycleStatus = :s, IsCurrent = :current WHERE DocID = :id"),
+                    {"s": prev_status, "current": was_current, "id": doc_id}
                 )
             logger.info(f"[delete] Rollback OK — DocID {doc_id} khoi phuc ve '{prev_status}'")
         except Exception as rb_err:
@@ -525,13 +586,24 @@ def delete_document_completely(
             conn.execute(text("DELETE FROM DocumentPages       WHERE DocID = :id"), {"id": doc_id})
             conn.execute(text("DELETE FROM TechnicalAttributes WHERE DocID = :id"), {"id": doc_id})
             conn.execute(text("DELETE FROM DocumentAttributes  WHERE DocID = :id"), {"id": doc_id})  # (b) truoc day khong xoa
+            # Preserve unrelated feedback/history; detach only this document's references.
+            conn.execute(text("UPDATE GoldenAnswer SET SourceDocID = NULL WHERE SourceDocID = :id"), {"id": doc_id})
+            conn.execute(text("UPDATE FeedbackReview SET SourceDocID = NULL WHERE SourceDocID = :id"), {"id": doc_id})
+            conn.execute(text("UPDATE FeedbackReview SET CorrectSourceDocID = NULL WHERE CorrectSourceDocID = :id"), {"id": doc_id})
+            conn.execute(text("UPDATE FeedbackReview SET ResolvedByDocID = NULL WHERE ResolvedByDocID = :id"), {"id": doc_id})
+            conn.execute(text("UPDATE AnswerSource SET DocID = NULL WHERE DocID = :id"), {"id": doc_id})
+            conn.execute(text("""
+                UPDATE dbo.ChatEvidenceManifest SET IsComplete = 0, UpdatedAt = GETDATE()
+                WHERE ChatID IN (SELECT ChatID FROM dbo.AnswerEvidence WHERE DocID = :id)
+            """), {"id": doc_id})
+            conn.execute(text("DELETE FROM dbo.AnswerEvidence WHERE DocID = :id"), {"id": doc_id})
+            conn.execute(text("UPDATE RegressionQuestion SET ExpectedDocID = NULL WHERE ExpectedDocID = :id"), {"id": doc_id})
             # TaiLieuKyThuat + BangKeVatTu + PhongBanChiaSe + DocQualityScore tu xoa theo CASCADE
             conn.execute(text("DELETE FROM TaiLieu             WHERE DocID = :id"), {"id": doc_id})
-            if ten_file and thu_muc:
-                conn.execute(
-                    text("DELETE FROM dbo.IngestionJobs WHERE TenFile = :f AND ThuMuc = :t"),
-                    {"f": ten_file, "t": thu_muc},
-                )
+            conn.execute(
+                text("DELETE FROM dbo.IngestionJobs WHERE JobID = :job_id"),
+                {"job_id": job_id},
+            )
         logger.info(f"[delete] 3/3 OK — hard-delete SQL DocID {doc_id} ({ten_file})")
     except Exception as e:
         logger.error(
@@ -551,17 +623,14 @@ def delete_document_completely(
         except Exception as _e:
             logger.warning(f"[delete] khong xoa duoc anh {p}: {_e}")
 
-    # (d) Null hoa / don con tro mo coi o FeedbackReview/GoldenAnswer/AnswerSource/DocQualityScore
-    try:
-        _r_feedback.cleanup_dangling_records()
-    except Exception as _e:
-        logger.warning(f"[delete] cleanup_dangling_records loi: {_e}")
+    if original_path is not None:
+        try:
+            original_path.unlink(missing_ok=True)
+        except Exception as _e:
+            logger.warning("[delete] khong xoa duoc file goc DocID %s: %s", doc_id, _e)
 
-    # (e) Clear semantic cache lien quan (don gian nhat: clear all)
-    try:
-        _r_semantic_cache.sc_clear_all()
-    except Exception as _e:
-        logger.warning(f"[delete] sc_clear_all loi: {_e}")
+    # Cached answers revalidate their source DocIDs before use; a deleted source
+    # invalidates its own entries without clearing unrelated cache rows.
 
     audit_kwargs = {"db_engine": selected_engine} if db_engine is not None else {}
     _r_audit.write_audit_log(

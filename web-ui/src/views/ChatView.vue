@@ -14,6 +14,8 @@ type UiMessage = ChatMessage & {
   progressState?: "running" | "done" | "error";
 };
 
+const activeSessionKey = "chat-active-session";
+
 const chatStore = useChatStore();
 const authStore = useAuthStore();
 const sessions = ref<SessionItem[]>([]);
@@ -84,6 +86,7 @@ async function scrollToBottom() {
 async function newChat() {
   if (busy.value) return;
   chatStore.newSession();
+  sessionStorage.removeItem(activeSessionKey);
   resetView();
 }
 
@@ -109,6 +112,7 @@ async function openSession(id: string) {
     const loaded=await api.loadHistory(id);
     if (!current()) return;
     messages.value=loaded;historyOpen.value=false;
+    sessionStorage.setItem(activeSessionKey, id);
     const lastChatId=[...loaded].reverse().find(message=>message.role==='assistant')?.chat_id;
     if (lastChatId == null || chatStore.currentMemory.chatId !== lastChatId) chatStore.clearMemory(id);
     await scrollToBottom();
@@ -187,6 +191,9 @@ async function send() {
   input.value = "";
 
   const currentSession = sessionId.value;
+  if (messages.value.at(-1)?.progressState === "error" && messages.value.at(-2)?.role === "user") {
+    messages.value.splice(-2);
+  }
   const history = messages.value.map((message) => ({
     role: message.role,
     content: message.content,
@@ -245,7 +252,8 @@ async function send() {
           error.value = message;
           setAssistantProgress("Có lỗi khi xử lý câu hỏi", "error");
           const last = messages.value[messages.value.length - 1];
-          if (last?.role === "assistant" && !last.content) last.content = `Lỗi: ${message}`;
+          if (last?.role === "assistant") last.content = `Lỗi: ${message}`;
+          if (!imageToken) input.value = question;
         },
         onDone(data) {
           if (chatStore.memoryIdentity === actor) {
@@ -264,6 +272,7 @@ async function send() {
               ...message,chat_id:data.chat_id ?? null,ref_text:data.ref_text || '',
               citations:data.citations ?? [],advanced_rag:data.advanced_rag,
             } : message);
+          if (data.chat_id != null) sessionStorage.setItem(activeSessionKey, currentSession);
           refreshSessions();
         },
       },
@@ -272,6 +281,9 @@ async function send() {
     if (!current()) return;
     error.value = err instanceof Error ? err.message : "Gửi câu hỏi thất bại";
     setAssistantProgress("Có lỗi khi gửi câu hỏi", "error");
+    const last = messages.value[messages.value.length - 1];
+    if (last?.role === "assistant") last.content = `Lỗi: ${error.value}`;
+    if (!imageToken) input.value = question;
   } finally {
     if (chatStore.memoryIdentity === actor) {
       chatStore.pendingSessionIds=chatStore.pendingSessionIds.filter(id=>id!==currentSession);
@@ -289,13 +301,22 @@ async function rate(message: ChatMessage, rating: number) {
 watch(()=>chatStore.pendingSessionIds, pending=>{
   if (waitingSession.value && !pending.includes(waitingSession.value)) openSession(waitingSession.value);
 });
-watch(identity,(value,previous)=>{
+watch(identity,async(value,previous)=>{
   const restore=chatStore.memoryIdentity===value;
   catalogSerial++;sessions.value=[];input.value='';catalogError.value='';catalogLoading.value=false;
   chatStore.bindMemoryIdentity(value);
   resetView();
+  const request=contentSerial;
+  if (previous!==undefined) sessionStorage.removeItem(activeSessionKey);
   if (restore) openSession(sessionId.value);
-  if (authStore.user || previous===undefined) refreshSessions();
+  if (authStore.user || previous===undefined) {
+    await refreshSessions();
+    if (!restore && previous===undefined && request===contentSerial && value===identity.value) {
+      const savedSession=sessionStorage.getItem(activeSessionKey);
+      if (savedSession && sessions.value.some(session=>session.session_id===savedSession)) await openSession(savedSession);
+      else sessionStorage.removeItem(activeSessionKey);
+    }
+  }
 },{immediate:true});
 onBeforeUnmount(()=>{catalogSerial++;resetView();});
 </script>
@@ -400,7 +421,7 @@ onBeforeUnmount(()=>{catalogSerial++;resetView();});
                     :class="{ 'structured-citation':citation.citation_schema === 'source-locator-v2' }"
                   >
                     <a
-                      v-if="!isMarkdownSource(citation) && citation.has_vision && citation.page_url && !failedPreviews.includes(citation.page_url)"
+                      v-if="!isMarkdownSource(citation) && citation.page_url && !failedPreviews.includes(citation.page_url)"
                       :href="citation.page_url"
                       target="_blank"
                       class="citation-preview-link"
@@ -412,7 +433,7 @@ onBeforeUnmount(()=>{catalogSerial++;resetView();});
                     <div class="citation-card-body">
                       <p v-if="isMarkdownSource(citation)">Tài liệu văn bản không có ảnh trang. Mở bản gốc để đối chiếu.</p>
                       <p v-else-if="citation.page_url && failedPreviews.includes(citation.page_url)">Không tải được ảnh xem trước. Bạn có thể mở bản gốc để đối chiếu.</p>
-                      <p v-else-if="!citation.has_vision">Không có ảnh xem trước. Bạn có thể mở bản gốc để đối chiếu.</p>
+                      <p v-else-if="!citation.page_url">Không có ảnh xem trước. Bạn có thể mở bản gốc để đối chiếu.</p>
                       <span>
                         {{ citation.file_name || `Doc ${citation.doc_id}` }} · {{ sourceLocation(citation) }}
                         <template v-if="citation.version_no !== undefined && citation.version_no !== null">
