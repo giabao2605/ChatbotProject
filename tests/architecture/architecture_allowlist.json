@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "policy": "Only reviewed public or unknown-external compatibility debt may remain; current count must match exactly.",
+  "policy": "Only reviewed compatibility debt and exact deployed-27800dc integration debt may remain; current count must match exactly. New edges or occurrences are forbidden.",
   "entries": [
     {
       "rule": "service_flat_export",
@@ -329,6 +329,126 @@
       "count": 1,
       "removal_phase": "External deprecation decision",
       "reason": "Historical public RAG facade; typed executor is the internal path"
+    },
+    {
+      "rule": "api_direct_data_access",
+      "path": "api/file_access.py",
+      "dependency": "sqlalchemy.exc",
+      "count": 1,
+      "removal_phase": "API/application boundary follow-up",
+      "reason": "Reviewed integration baseline: present unchanged in deployed 27800dc5e850ea49538a5f6874274a0e402a8bc8. Existing reviewed source-pin lookup or fail-closed SQL error translation; API owner to move behind the evidence service boundary."
+    },
+    {
+      "rule": "api_direct_data_access",
+      "path": "api/routers/chat.py",
+      "dependency": "sqlalchemy.exc",
+      "count": 1,
+      "removal_phase": "API/application boundary follow-up",
+      "reason": "Reviewed integration baseline: present unchanged in deployed 27800dc5e850ea49538a5f6874274a0e402a8bc8. Existing reviewed source-pin lookup or fail-closed SQL error translation; API owner to move behind the evidence service boundary."
+    },
+    {
+      "rule": "api_direct_data_access",
+      "path": "api/routers/documents.py",
+      "dependency": "sqlalchemy.exc",
+      "count": 1,
+      "removal_phase": "API/application boundary follow-up",
+      "reason": "Reviewed integration baseline: present unchanged in deployed 27800dc5e850ea49538a5f6874274a0e402a8bc8. Existing reviewed source-pin lookup or fail-closed SQL error translation; API owner to move behind the evidence service boundary."
+    },
+    {
+      "rule": "api_direct_data_access",
+      "path": "api/routers/rag_evidence.py",
+      "dependency": "mech_chatbot.db.repositories.structured_evidence",
+      "count": 1,
+      "removal_phase": "API/application boundary follow-up",
+      "reason": "Reviewed integration baseline: present unchanged in deployed 27800dc5e850ea49538a5f6874274a0e402a8bc8. Existing reviewed source-pin lookup or fail-closed SQL error translation; API owner to move behind the evidence service boundary."
+    },
+    {
+      "rule": "api_direct_data_access",
+      "path": "api/routers/rag_evidence.py",
+      "dependency": "sqlalchemy.exc",
+      "count": 1,
+      "removal_phase": "API/application boundary follow-up",
+      "reason": "Reviewed integration baseline: present unchanged in deployed 27800dc5e850ea49538a5f6874274a0e402a8bc8. Existing reviewed source-pin lookup or fail-closed SQL error translation; API owner to move behind the evidence service boundary."
+    },
+    {
+      "rule": "api_direct_data_access",
+      "path": "api/source_file_pins.py",
+      "dependency": "mech_chatbot.db.repositories.graph_v2",
+      "count": 1,
+      "removal_phase": "API/application boundary follow-up",
+      "reason": "Reviewed integration baseline: present unchanged in deployed 27800dc5e850ea49538a5f6874274a0e402a8bc8. Existing reviewed source-pin lookup or fail-closed SQL error translation; API owner to move behind the evidence service boundary."
+    },
+    {
+      "rule": "api_direct_data_access",
+      "path": "api/source_file_pins.py",
+      "dependency": "mech_chatbot.db.repositories.source_page_images",
+      "count": 1,
+      "removal_phase": "API/application boundary follow-up",
+      "reason": "Reviewed integration baseline: present unchanged in deployed 27800dc5e850ea49538a5f6874274a0e402a8bc8. Existing reviewed source-pin lookup or fail-closed SQL error translation; API owner to move behind the evidence service boundary."
+    },
+    {
+      "rule": "api_direct_data_access",
+      "path": "api/source_file_pins.py",
+      "dependency": "mech_chatbot.db.repositories.structured_evidence",
+      "count": 1,
+      "removal_phase": "API/application boundary follow-up",
+      "reason": "Reviewed integration baseline: present unchanged in deployed 27800dc5e850ea49538a5f6874274a0e402a8bc8. Existing reviewed source-pin lookup or fail-closed SQL error translation; API owner to move behind the evidence service boundary."
+    },
+    {
+      "rule": "api_direct_data_access",
+      "path": "api/source_file_pins.py",
+      "dependency": "sqlalchemy.exc",
+      "count": 1,
+      "removal_phase": "API/application boundary follow-up",
+      "reason": "Reviewed integration baseline: present unchanged in deployed 27800dc5e850ea49538a5f6874274a0e402a8bc8. Existing reviewed source-pin lookup or fail-closed SQL error translation; API owner to move behind the evidence service boundary."
+    },
+    {
+      "rule": "db_upward_dependency",
+      "path": "db/repositories/graph_v2.py",
+      "dependency": "mech_chatbot.rag.graph_retrieval_v2",
+      "count": 5,
+      "removal_phase": "Graph domain ownership follow-up",
+      "reason": "Reviewed integration baseline: present unchanged in deployed 27800dc5e850ea49538a5f6874274a0e402a8bc8. Existing bounded Graph v2 traversal/limits shared by SQL readers; graph owner to move pure traversal contracts into domain."
+    },
+    {
+      "rule": "db_upward_dependency",
+      "path": "db/repositories/text_evidence.py",
+      "dependency": "mech_chatbot.rag.graph_retrieval_v2",
+      "count": 1,
+      "removal_phase": "Graph domain ownership follow-up",
+      "reason": "Reviewed integration baseline: present unchanged in deployed 27800dc5e850ea49538a5f6874274a0e402a8bc8. Existing bounded Graph v2 traversal/limits shared by SQL readers; graph owner to move pure traversal contracts into domain."
+    },
+    {
+      "rule": "evaluation_private_rag_dependency",
+      "path": "evaluation/grounded_math_v2.py",
+      "dependency": "mech_chatbot.rag.grounded_math_v2",
+      "count": 7,
+      "removal_phase": "Math and task-routing contract ownership follow-up",
+      "reason": "Reviewed integration baseline: present unchanged in deployed 27800dc5e850ea49538a5f6874274a0e402a8bc8. Existing evaluator reuse of deterministic evidence validation and routing contracts; math/query owner to extract the shared domain contract."
+    },
+    {
+      "rule": "evaluation_private_rag_dependency",
+      "path": "evaluation/grounded_math_v2.py",
+      "dependency": "mech_chatbot.rag.query_decomposition",
+      "count": 5,
+      "removal_phase": "Math and task-routing contract ownership follow-up",
+      "reason": "Reviewed integration baseline: present unchanged in deployed 27800dc5e850ea49538a5f6874274a0e402a8bc8. Existing evaluator reuse of deterministic evidence validation and routing contracts; math/query owner to extract the shared domain contract."
+    },
+    {
+      "rule": "evaluation_private_rag_dependency",
+      "path": "evaluation/scope_total.py",
+      "dependency": "mech_chatbot.rag.grounded_math_v2",
+      "count": 3,
+      "removal_phase": "Math and task-routing contract ownership follow-up",
+      "reason": "Reviewed integration baseline: present unchanged in deployed 27800dc5e850ea49538a5f6874274a0e402a8bc8. Existing evaluator reuse of deterministic evidence validation and routing contracts; math/query owner to extract the shared domain contract."
+    },
+    {
+      "rule": "ingestion_rag_dependency",
+      "path": "ingestion/pdf/chunking.py",
+      "dependency": "mech_chatbot.rag.text_utils",
+      "count": 1,
+      "removal_phase": "Shared text utility ownership follow-up",
+      "reason": "Reviewed integration baseline: present unchanged in deployed 27800dc5e850ea49538a5f6874274a0e402a8bc8. Existing shared lazy tokenizer lock prevents concurrent model initialization; ingestion/RAG owner to relocate the common tokenizer without duplicating the lock."
     }
   ]
 }

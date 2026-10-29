@@ -180,7 +180,8 @@ def test_old_literal_descriptor_hash_and_new_source_selector_stay_distinct():
     assert _candidate_payload(candidate)['bom_rollup'] == old
     branch = QueryBranch('materials', literal.question, bom_rollup=literal.bom_rollup)
     planned = replace(literal, bom_rollup=None, query_plan=QueryPlan((branch,)))
-    old_branch = {**asdict(branch), 'bom_rollup':old}
+    old_branch = {'branch_id':'materials', 'question':literal.question, 'scope_comparison':None,
+                  'graph_query':None, 'bom_rollup':old, 'depends_on':(), 'text_query':False}
     serialized = json.dumps([planned.question,planned.response_language,{'query_plan':{'branches':(old_branch,)}}],ensure_ascii=False,sort_keys=True,separators=(',',':'))
     assert _request_key(planned) == sha256(serialized.encode()).hexdigest()
     nested = {'graph':old['graph'], 'quantity_scope':'order', 'rounding_scope':'policy'}

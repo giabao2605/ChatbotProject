@@ -1,6 +1,7 @@
 # Phu thuoc rieng cho bo test. Cai trong venv cua project:
 #   pip install -r requirements-test.txt
-pytest>=8.0
+# pytest 9.2 breaks monkeypatch undo for Starlette State; lift when fixed upstream.
+pytest>=8.0,<9.2
 pytest-cov>=5.0        # bao phu code: pytest --cov=mech_chatbot
 jsonschema>=4.0,<5     # validate structured planner output schemas in tests
 requests>=2.31         # goi RAG server trong test eval

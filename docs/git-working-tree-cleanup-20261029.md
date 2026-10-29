@@ -38,3 +38,11 @@ Sau khi các nhánh riêng đã được lưu, người dùng yêu cầu hợp n
 Đã chạy các nhóm kiểm tra bị ảnh hưởng về file/ingestion, quyền và phiên bản nguồn, RAG/provider/routing, ops, job/SQL, API/auth và giao diện. Các fixture cũ được cập nhật đúng hợp đồng kết hợp rồi kiểm tra lại ca lỗi; không hạ kiểm quyền hoặc bỏ pin để làm test đạt. Frontend typecheck/build đạt; 326 file Python thay đổi so với main cũ qua kiểm tra cú pháp. Review độc lập đã đóng các finding nêu trên.
 
 Không chạy lại toàn bộ suite, kiểm tải hoặc GUI trên bản hợp nhất. Không cập nhật dependency ngoài việc giữ các phiên bản từ hai nhánh đã rà; các advisory đã ghi ở trên vẫn là giới hạn còn mở. Không chạy migration hoặc triển khai: web tiếp tục dùng bản `27800dc`; phát hành commit main mới cần luồng triển khai riêng.
+
+## Chuẩn bị CI trước triển khai main
+
+CI sạch phát hiện các dependency đọc tài liệu chưa được khai báo, glob Vitest bị Bash mở rộng và fixture cũ chưa theo hợp đồng nguồn/timeout/OCR hiện hành. Đã khai báo các reader đang dùng, sửa lệnh Vitest và cập nhật fixture; không bỏ kiểm tra quyền, nguồn hoặc deadline. Giới hạn pytest dưới 9.2 sau khi tái hiện lỗi khôi phục thuộc tính Starlette State gây lỗi dây chuyền; 237 ca API/auth đạt với dependency giống CI và pytest 9.1.1. Pandas được giữ ở major 2 phù hợp môi trường service 2.3.3; file requirements.lock.txt vẫn là snapshot không canonical.
+
+Kiểm tra kiến trúc ghi nhận chính xác 15 cạnh phụ thuộc / 31 lần xuất hiện đã có trong commit triển khai `27800dc`, kèm trách nhiệm xử lý trong allowlist. Đây là nợ kiến trúc được ghi nhận, không phải đã refactor xong; scanner và giới hạn số lần xuất hiện vẫn giữ nguyên. Một import facade được đổi sang module cụ thể, không đổi hành vi.
+
+Các kiểm tra cục bộ chỉ xác nhận nhóm bị ảnh hưởng. Trạng thái CI cuối cùng và bản thực tế được triển khai phải đối chiếu theo đúng commit; phần này không tuyên bố CI toàn repo đã đạt hoặc web đã được nâng cấp.

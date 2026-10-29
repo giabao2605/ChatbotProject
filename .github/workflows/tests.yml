@@ -57,7 +57,7 @@ jobs:
 
       - name: Run fast tests (unit + security)
         run: |
-          python -m pytest -m "not integration and not eval" -v \
+          python -m pytest -m "not integration and not eval" -v --maxfail=1 \
             --cov=mech_chatbot \
             --cov-branch \
             --cov-report=json:reports/refactor/phase-0/coverage-backend-ci.json

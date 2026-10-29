@@ -167,18 +167,23 @@ def test_logout_revokes_replayed_cookie_and_rotated_session_token(
             headers={"X-CSRF-Token": first_csrf},
         )
         rotated_token = client.cookies.get(app_server.app_security.SESSION_COOKIE_NAME)
-        client.cookies.set(app_server.app_security.SESSION_COOKIE_NAME, first_token)
-        replayed_before_logout = client.get("/api/auth/me")
-        client.cookies.set(app_server.app_security.SESSION_COOKIE_NAME, rotated_token)
+        replayed_before_logout = client.get(
+            "/api/auth/me",
+            headers={"Cookie": f"{app_server.app_security.SESSION_COOKIE_NAME}={first_token}"},
+        )
         logged_out = client.post(
             "/api/auth/logout",
             headers={"X-CSRF-Token": refreshed.json()["user"]["csrf_token"]},
         )
 
-        client.cookies.set(app_server.app_security.SESSION_COOKIE_NAME, first_token)
-        replayed_first = client.get("/api/auth/me")
-        client.cookies.set(app_server.app_security.SESSION_COOKIE_NAME, rotated_token)
-        replayed_rotated = client.get("/api/auth/me")
+        replayed_first = client.get(
+            "/api/auth/me",
+            headers={"Cookie": f"{app_server.app_security.SESSION_COOKIE_NAME}={first_token}"},
+        )
+        replayed_rotated = client.get(
+            "/api/auth/me",
+            headers={"Cookie": f"{app_server.app_security.SESSION_COOKIE_NAME}={rotated_token}"},
+        )
 
     assert logged_in.status_code == 200
     assert refreshed.status_code == 200

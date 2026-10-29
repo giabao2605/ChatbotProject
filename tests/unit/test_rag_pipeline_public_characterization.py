@@ -32,6 +32,7 @@ def _offline_executor(documents, qdrant_calls, *, semantic_cache_enabled=False):
         client=object(),
         vectorstore=vectorstore,
         collection_name="test-knowledge",
+        qdrant_timeout_seconds=3,
         semantic_cache_enabled=semantic_cache_enabled,
         semantic_cache_sim_threshold=0.93,
         semantic_cache_ttl_hours=24.0,
@@ -54,6 +55,7 @@ def _offline_executor(documents, qdrant_calls, *, semantic_cache_enabled=False):
         vectorstore=vectorstore,
         client=runtime.client,
         collection_name=runtime.collection_name,
+        qdrant_timeout_seconds=runtime.qdrant_timeout_seconds,
     )
     provider = SimpleNamespace(
         invoke=lambda *_args, **_kwargs: SimpleNamespace(content="")
@@ -116,7 +118,11 @@ def offline_pipeline(monkeypatch):
     )
     monkeypatch.setattr(settings, "get_app_setting_int", lambda *_args: 5)
     monkeypatch.setattr(glossary, "get_active_glossary", lambda *_args: [])
-    monkeypatch.setattr(doc_metadata, "get_common_metadata_for_rag", lambda *_args: {})
+    monkeypatch.setattr(
+        doc_metadata, "get_common_metadata_for_rag",
+        lambda doc_ids: {doc.metadata["doc_id"]: dict(doc.metadata)
+                         for doc in documents if doc.metadata["doc_id"] in doc_ids},
+    )
     monkeypatch.setattr(
         document_pages, "get_technical_attributes_for_rag", lambda *_args, **_kwargs: []
     )
@@ -127,7 +133,7 @@ def offline_pipeline(monkeypatch):
     from langchain_core.runnables import RunnableLambda
     from contextlib import nullcontext
     executor._provider_adapter.settings = SimpleNamespace(model_name="offline", base_url="https://example.invalid")
-    executor._provider_adapter.client = RunnableLambda(lambda _: "Tài liệu không ghi chi phí. [SRC:D17P2]")
+    executor._provider_adapter.client = RunnableLambda(lambda _, **kwargs: "Tài liệu không ghi chi phí. [SRC:D17P2]")
     monkeypatch.setattr("mech_chatbot.rag.pipeline_steps.audited_external_call", lambda **_: nullcontext())
     return documents, qdrant_calls, executor, runtime
 
@@ -187,7 +193,7 @@ def test_math_query_flags_do_not_retain_decomposition_after_disable(offline_pipe
         runtime.grounded_math_enabled = enabled
         trace_id = "math-query-transition-" + ("on" if enabled else "off")
         with caplog.at_level(logging.INFO, logger="RagTrace"):
-            events = _run("Tổng BOM là bao nhiêu và phiên bản tài liệu hiện hành là gì?",
+            events = _run("Tổng BOM là bao nhiêu; phiên bản tài liệu hiện hành là gì?",
                           trace_id=trace_id, executor=executor)
         assert isinstance(events[-1], RagCompleted)
         phases = [event["phase"] for event in _trace_events(caplog, trace_id)
@@ -273,7 +279,7 @@ def test_cancelled_overflow_emits_cancellation_instead_of_clarification():
     assert not any(isinstance(event, RagToken) for event in events)
 
 
-def test_invalid_oversized_planner_output_uses_the_whole_original_query_in_public_pipeline(offline_pipeline,monkeypatch):
+def test_oversized_planner_output_clarifies_all_intents_before_retrieval(offline_pipeline,monkeypatch):
     _, _, executor, runtime = offline_pipeline
     runtime.query_decomposition_enabled = True
     planner_calls = []
@@ -295,9 +301,12 @@ def test_invalid_oversized_planner_output_uses_the_whole_original_query_in_publi
     monkeypatch.setattr('langchain_qdrant.QdrantVectorStore',Store)
     events = _run(question,trace_id='planner-bounds',executor=executor)
     assert isinstance(events[-1],RagCompleted) and events[-1].outcome=='refused'
+    assert events[-1].refusal_reason == 'intent_overflow'
     assert planner_calls == [True]
-    assert len(query_calls) == 2
-    assert all(query.replace('_',' ').casefold()==question.casefold() for query in query_calls)
+    assert query_calls == []
+    for intent in ('cách tổ chức đào tạo thứ nhất', 'cách tổ chức đào tạo thứ hai',
+                   'đào tạo nội bộ tổng quan', 'tìm thêm thông tin đào tạo'):
+        assert intent in _answer(events)
     assert events[-1].diagnostics.budget.planners == 1
     assert events[-1].diagnostics.budget.final_generations == 0
 
@@ -345,7 +354,7 @@ def test_retrieval_request_stop_never_starts_a_fallback_or_generation(offline_pi
         assert isinstance(events[-1], RagCancelled)
     else:
         assert isinstance(events[-1], RagFailed)
-        assert events[-1].code == ('TimeoutError' if stop == 'deadline' else 'RequestBudgetExceeded')
+        assert events[-1].code == ('RequestDeadlineExceeded' if stop == 'deadline' else 'RequestBudgetExceeded')
     prefix = ['dense','sparse'] if route == 'broad' else []
     assert calls == prefix + (['dense'] if stage == 'dense' else ['dense','sparse'])
     assert not any(isinstance(event,RagToken) for event in events)
@@ -464,6 +473,7 @@ def test_exact_cache_hit_returns_attributed_answer_without_retrieval(
         review_status="approved", departments=("HR",), version_no=3))
 
     _documents, qdrant_calls, executor, runtime = offline_pipeline
+    _documents.append(_document("Nhân viên thực hiện theo quy trình đã duyệt."))
     cache_reads = []
     source = {
         "file_goc": "hr-policy.pdf",
@@ -577,7 +587,7 @@ def test_negative_source_text_uses_normal_grounded_generation(
     calls = []
     executor._provider_adapter.settings = SimpleNamespace(model_name="offline", base_url="https://example.invalid")
     executor._provider_adapter.client = RunnableLambda(
-        lambda prompt: calls.append(prompt) or answer
+        lambda prompt, **kwargs: calls.append(prompt) or answer
     )
     monkeypatch.setattr(pipeline_steps, "audited_external_call", lambda **_: nullcontext())
 

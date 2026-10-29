@@ -1,6 +1,5 @@
 """Representative files retain answer text at the ingestion/context boundary."""
 from io import BytesIO
-import json
 from types import SimpleNamespace
 
 import fitz
@@ -23,7 +22,7 @@ def isolated_ingestion(tmp_path, monkeypatch):
     documents, pages = [], []
     noop = lambda *args, **kwargs: None
     persistence = IngestionPersistence(
-        reset_document_metadata=lambda *args: 907,
+        reset_document_metadata=lambda *args, source_file_path: 907,
         get_document_info=lambda *args: {
             'external_processing_policy': 'all_external', 'version_no': 2,
             'is_current': True, 'classification_failed': False,
@@ -88,7 +87,7 @@ def test_csv_preserves_table_values_and_conditions_in_context(tmp_path, isolated
 
     success, _, report = ingest(path)
 
-    assert success and report['pages_text_extracted'] == [1]
+    assert success and report['pages_table_extracted'] == [1]
     assert 'Permanent' in pages[0]['text_extract'] and 'after safety training' in pages[0]['text_extract']
     context = format_docs(documents)
     assert all(value in context for value in ('120', '75', 'after probation', 'after safety training'))
@@ -107,35 +106,31 @@ def _scan_pdf(path):
         document.save(path)
 
 
-def test_scanned_pdf_retains_supplied_ocr_response_and_source(tmp_path, isolated_ingestion):
+def test_scanned_pdf_retains_supplied_ocr_response_and_source(tmp_path, isolated_ingestion, monkeypatch):
     path = tmp_path / 'permit-scan.pdf'
     _scan_pdf(path)
-    calls = []
-
-    def generate_content(parts):
-        calls.append(parts)
-        return SimpleNamespace(text=json.dumps({
-            'technical_notes': ['Permit requires 2 supervisors before entry.'],
-            'uncertain_fields': [],
-        }))
+    # Supply local OCR output without depending on an installed OCR executable.
+    ocr_text = 'Permit requires 2 supervisors before entry.'
+    monkeypatch.setattr(pipeline, '_read_pdf_page_text', lambda _page, **_kwargs: (ocr_text, True))
 
     ingest, documents, pages = isolated_ingestion
-    success, _, report = ingest(path, SimpleNamespace(generate_content=generate_content))
+    success, _, report = ingest(path)
 
-    assert success and len(calls) == 1 and report['pages_vision_success'] == [1]
-    assert pages[0]['text_extract'] == ''
-    assert '2 supervisors before entry' in pages[0]['vision_summary']
+    assert success and report['pages_text_extracted'] == [1]
+    assert report['pages_vision_success'] == []
+    assert pages[0]['text_extract'] == ocr_text
     context = format_docs(documents)
     assert '2 supervisors before entry' in context and 'SOURCE_ID: D907P1' in context
 
 
-def test_scanned_pdf_without_ocr_is_not_silently_served(tmp_path, isolated_ingestion):
+def test_scanned_pdf_without_ocr_is_not_silently_served(tmp_path, isolated_ingestion, monkeypatch):
     path = tmp_path / 'unreadable-scan.pdf'
     _scan_pdf(path)
+    monkeypatch.setattr(pipeline, '_read_pdf_page_text', lambda _page, **_kwargs: ('', True))
     ingest, documents, pages = isolated_ingestion
 
     success, _, report = ingest(path)
 
     assert not success and report['failed_pages'] == [1]
     assert report['total_chunks'] == 0 and documents == [] and pages == []
-    assert report['vision_warnings'][0]['detail'] == 'no_vision_model'
+    assert any('OCR' in warning for warning in report['warnings'])

@@ -11,8 +11,8 @@ from mech_chatbot.api.evidence_contracts import ScopeComparisonRequest, require_
 from mech_chatbot.api.transport_utils import assert_any_role
 from mech_chatbot.api.request_limits import enforce_request_rate_limit
 from mech_chatbot.db.evidence_snapshot import EvidenceSnapshotLost
-from mech_chatbot.services import rag_evidence_service as service
-from mech_chatbot.services import graph_service
+import mech_chatbot.services.rag_evidence_service as service
+import mech_chatbot.services.graph_service as graph_service
 
 logger = logging.getLogger(__name__)
 

@@ -38,13 +38,15 @@ def _run_dependency(store, offline_pipeline, monkeypatch, *, fault='', independe
         guide = _document('The policy threshold is 999 VND. The comparison method checks comparable amounts.')
         guide = type(guide)(page_content=guide.page_content, metadata={**guide.metadata,'doc_id':18,
                                   'external_processing_policy':'all_external'})
+        docs.append(guide)
         class Store:
             def __init__(self, **_kwargs): pass
             def similarity_search(self, query, **_kwargs):
                 return [guide] if 'describe' in query.casefold() else [] if fault == 'missing_guide' else [docs[0]]
         monkeypatch.setattr('langchain_qdrant.QdrantVectorStore',Store)
     prompts, audits = [], []
-    def generate(prompt):
+    def generate(prompt, **kwargs):
+        assert kwargs['timeout'] > 0
         prompts.append(str(prompt))
         locators = list(dict.fromkeys(re.findall(r'D\d+L[0-9A-Fa-f]+', prompts[-1])))
         sources = ' '.join(f'[SRC:{locator}]' for locator in locators)
