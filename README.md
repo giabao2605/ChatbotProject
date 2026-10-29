@@ -63,7 +63,6 @@ An internal **Retrieval-Augmented Generation (RAG)** and knowledge-management pl
 ```text
 ChatBotProject/
 ├── CODEX.md                       # Agent engineering-skill configuration
-├── .agents/skills/                # Repository engineering skills
 ├── .env                           # Local environment variables; never commit secrets
 ├── docs/
 │   ├── agents/                    # Issue-tracker, triage and domain-doc rules
@@ -243,14 +242,14 @@ ChatBotProject/
 
 ## Engineering workflow
 
-Repository engineering skills are configured in `CODEX.md`.
+Engineering skills from `mattpocock/skills` are installed as personal skills in
+`~/.agents/skills/`. Repository-specific workflow settings remain in `CODEX.md`.
 
 - GitHub Issues is the tracker for implementation work.
 - `docs/agents/triage-labels.md` defines the shared triage vocabulary.
 - `docs/agents/domain.md` explains how agents consume `CONTEXT.md` and ADRs.
 
-The `.agents/skills/` directory is source-controlled. Only local agent cache
-and state directories are ignored.
+The skill files are managed outside this repository and shared across projects.
 
 ---
 
