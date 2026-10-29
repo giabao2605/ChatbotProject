@@ -154,6 +154,11 @@ archive/
 
 # ===== Empty components directory (legacy placeholder) =====
 components/
+!web-ui/src/components/
+!web-ui/src/components/StructuredEvidenceReview.vue
+!web-ui/src/components/TechnicalFieldReview.vue
+!web-ui/src/components/StructuredSourceFacts.vue
+/web-ui/coverage-query-ui/
 
 # Local audit exports, drawing inputs and generated runtime evidence
 /.project-audit/
@@ -165,3 +170,6 @@ components/
 /backend-acceptance-*.xml
 /frontend-acceptance-*.json
 /test-qa-acceptance.xml
+
+# Generated per-run coverage databases
+.coverage-*
