@@ -18,6 +18,7 @@ PreparedValues: TypeAlias = tuple[
 PreparationReason: TypeAlias = Literal[
     "prepared",
     "safety_block",
+    "missing_referent",
     "exact_cache_hit",
 ]
 RoutingReason: TypeAlias = Literal[

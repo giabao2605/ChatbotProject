@@ -66,11 +66,13 @@ const rowActions: RowAction[] = [
 const bulk = reactive({ visible: false, busy: false, error: "", ids: "" });
 let resolveBulk: (() => void) | null = null;
 let rejectBulk: ((e: unknown) => void) | null = null;
+let bulkChanged = false;
 
 function openBulk(): Promise<void> {
   return new Promise((resolve, reject) => {
     resolveBulk = resolve;
     rejectBulk = reject;
+    bulkChanged = false;
     bulk.ids = "";
     bulk.error = "";
     bulk.visible = true;
@@ -89,7 +91,8 @@ async function submitBulk() {
   bulk.busy = true;
   bulk.error = "";
   try {
-    const result = await apiSend<{ ok: boolean; failed: number }>("/api/ingestion/jobs/bulk-delete", "POST", { ids });
+    const result = await apiSend<{ ok: boolean; deleted: number; failed: number }>("/api/ingestion/jobs/bulk-delete", "POST", { ids });
+    bulkChanged ||= result.deleted > 0;
     if (!result.ok) throw new Error(`${result.failed} JobID không xóa được`);
     bulk.visible = false;
     resolveBulk?.();
@@ -104,7 +107,8 @@ async function submitBulk() {
 
 function cancelBulk() {
   bulk.visible = false;
-  rejectBulk?.(new Error(""));
+  if (bulkChanged) resolveBulk?.();
+  else rejectBulk?.(new Error(""));
   resolveBulk = null;
   rejectBulk = null;
 }
@@ -133,7 +137,7 @@ function formatEta() {
       :toolbar="toolbar"
     />
 
-    <Dialog v-model:visible="bulk.visible" header="Xoá nhiều job" modal :style="{ width: '460px' }" @hide="cancelBulk">
+    <Dialog v-model:visible="bulk.visible" :closable="!bulk.busy" :close-on-escape="!bulk.busy" header="Xoá nhiều job" modal :style="{ width: '460px' }" @after-hide="cancelBulk">
       <div class="stack-form">
         <Message v-if="bulk.error" severity="error" v-text="bulk.error"></Message>
         <label class="field">
@@ -143,7 +147,7 @@ function formatEta() {
         <p class="muted-text">Thao tác không thể hoàn tác; chỉ quản trị viên thực hiện được.</p>
       </div>
       <template #footer>
-        <Button label="Huỷ" severity="secondary" outlined :disabled="bulk.busy" @click="cancelBulk" />
+        <Button label="Huỷ" severity="secondary" outlined :disabled="bulk.busy" @click="bulk.visible = false" />
         <Button label="Xoá" severity="danger" :loading="bulk.busy" @click="submitBulk" />
       </template>
     </Dialog>

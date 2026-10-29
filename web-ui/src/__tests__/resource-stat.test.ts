@@ -392,6 +392,63 @@ describe("ResourcePage public behavior", () => {
     expect(wrapper.text()).toContain("Đã xảy ra lỗi");
   });
 
+  it.each([
+    ["success", "body"],
+    ["cancel", "body"],
+    ["success", "another input"],
+    ["cancel", "another input"],
+    ["success", "detached opener"],
+    ["cancel", "detached opener"],
+  ] as const)("restores %s action focus safely when focus is on %s", async (outcome, destination) => {
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve, reject) => {
+      finish = outcome === "success" ? resolve : () => reject(new Error(""));
+    });
+    const run = vi.fn(() => pending);
+    const host = document.createElement("div");
+    const input = document.createElement("input");
+    document.body.append(host, input);
+    const wrapper = mount(ResourcePage, {
+      attachTo: host,
+      global,
+      props: {
+        title: "Actions",
+        load: vi.fn().mockResolvedValue([{ id: 7 }]),
+        toolbar: outcome === "success" ? [{ label: "Open", run }] : [],
+        rowActions: outcome === "cancel" ? [{ label: "Open", run }] : [],
+      },
+    });
+    try {
+      await flushPromises();
+      const opener = button(wrapper, "Open").element as HTMLButtonElement;
+      opener.focus();
+      const focus = vi.spyOn(opener, "focus");
+      await button(wrapper, "Open").trigger("click");
+      expect(opener.disabled).toBe(true);
+      input.focus();
+      if (destination !== "another input") input.remove();
+      if (destination === "detached opener") wrapper.unmount();
+      finish();
+      await flushPromises();
+      if (destination === "detached opener") {
+        expect(opener.isConnected).toBe(false);
+      } else {
+        expect(opener.disabled).toBe(false);
+      }
+      if (destination === "body") {
+        expect(document.activeElement).toBe(opener);
+        expect(focus).toHaveBeenCalledOnce();
+      } else {
+        expect(document.activeElement).toBe(destination === "another input" ? input : document.body);
+        expect(focus).not.toHaveBeenCalled();
+      }
+    } finally {
+      if (destination !== "detached opener") wrapper.unmount();
+      host.remove();
+      input.remove();
+    }
+  });
+
   it("opens, cancels, submits, and reports errors from the create form", async () => {
     const load = vi.fn().mockResolvedValue([]);
     const submit = vi.fn().mockResolvedValue(undefined);
@@ -506,6 +563,25 @@ describe("ResourcePage public behavior", () => {
 });
 
 describe("StatView public behavior", () => {
+  it("labels report metrics in Vietnamese while preserving values, unknown keys, and English", async () => {
+    const load = vi.fn().mockResolvedValue({ total_questions: 7, hit_rate: 0.5, vendor_metric: 11, daily: [{ date: "2026-10-05", count: 3 }] });
+    const wrapper = mountStat({ title: "Metrics", load });
+    await flushPromises();
+    expect(wrapper.text()).toContain("Tổng câu hỏi");
+    expect(wrapper.text()).toContain("Tỷ lệ trúng cache");
+    expect(wrapper.text()).toContain("Theo ngày");
+    expect(wrapper.findAll("th").map(item => item.text())).toEqual(["Ngày", "Số lượng"]);
+    expect(wrapper.text()).toContain("vendor_metric");
+    expect(wrapper.text()).toContain("0.5");
+    expect(wrapper.text()).toContain("2026-10-05");
+    setLocale("en");
+    await nextTick();
+    expect(wrapper.text()).toContain("total_questions");
+    expect(wrapper.findAll("th").map(item => item.text())).toEqual(["date", "count"]);
+    expect(load).toHaveBeenCalledOnce();
+    wrapper.unmount();
+  });
+
   it("renders scalars, numeric bars, object tables, and inline metrics", async () => {
     const wrapper = mountStat({
       title: "Metrics",
@@ -530,7 +606,7 @@ describe("StatView public behavior", () => {
 
     expect(wrapper.text()).toContain("Operations");
     expect(wrapper.text()).toContain("Runtime statistics");
-    expect(wrapper.text()).toContain("count");
+    expect(wrapper.text()).toContain("Số lượng");
     expect(wrapper.text()).toContain("3");
     expect(wrapper.text()).toContain("ratio");
     expect(wrapper.text()).toContain("1.23");

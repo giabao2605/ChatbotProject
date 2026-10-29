@@ -43,12 +43,22 @@ def _get_or_create_doc(
     thu_muc,
     *,
     classification_model=None,
+    source_file_path=None,
 ):
     # Fetch classification json tu IngestionJobs (neu co) de update metadata
+    job_params = {"f": file_name, "t": thu_muc}
+    source_filter = ""
+    if source_file_path is not None:
+        if not str(source_file_path).strip():
+            raise ValueError("Thiếu đường dẫn nguồn upload; dừng ingest để bảo toàn dữ liệu.")
+        source_filter = " AND FilePath = :source_file_path"
+        job_params["source_file_path"] = str(source_file_path)
     job = conn.execute(
-        text("SELECT TOP 1 ClassificationJson, FilePath, UploadMetaJson, Site FROM dbo.IngestionJobs WHERE TenFile = :f AND ThuMuc = :t ORDER BY CreatedAt DESC"),
-        {"f": file_name, "t": thu_muc}
+        text("SELECT TOP 1 ClassificationJson, FilePath, UploadMetaJson, Site FROM dbo.IngestionJobs WHERE TenFile = :f AND ThuMuc = :t" + source_filter + " ORDER BY CreatedAt DESC"),
+        job_params,
     ).fetchone()
+    if source_file_path is not None and not job:
+        raise ValueError("Không tìm thấy job đúng đường dẫn nguồn upload; dừng ingest để bảo toàn dữ liệu.")
     
     cls_data = {}
     if job and job[0]:
@@ -127,14 +137,20 @@ def _get_or_create_doc(
                 f_id = inserted[0]
 
     row = conn.execute(
-        text("SELECT DocID, LifecycleStatus, ReviewStatus, IsCurrent FROM TaiLieu WHERE TenFile = :f AND ThuMuc = :t"),
+        text("SELECT DocID, LifecycleStatus, ReviewStatus, IsCurrent, FilePath FROM TaiLieu WHERE TenFile = :f AND ThuMuc = :t"),
         {"f": file_name, "t": thu_muc},
     ).fetchone()
     
     if row:
-        doc_id, lifecycle_status, review_status, is_current = row
+        doc_id, lifecycle_status, review_status, is_current, existing_path = row
         if lifecycle_status == 'published' and review_status == 'approved':
             raise ValueError(f"Tài liệu {file_name} đã được published. Không cho phép re-ingest để bảo toàn dữ liệu.")
+        incoming_path = source_file_path if source_file_path is not None else (job[1] if job else None)
+        if incoming_path is not None and (
+            not existing_path
+            or os.path.normcase(os.path.abspath(existing_path)) != os.path.normcase(os.path.abspath(incoming_path))
+        ):
+            raise ValueError(f"Tệp trùng tên {file_name} thuộc nguồn upload khác. Giữ nguyên tài liệu cũ; hãy đổi tên tệp mới.")
         # Update metadata neu re-ingest draft/rejected
         conn.execute(
             text("""UPDATE TaiLieu SET 

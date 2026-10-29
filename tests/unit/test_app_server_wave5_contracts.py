@@ -428,7 +428,11 @@ def test_history_exposes_only_sources_attributed_by_each_answer(
     monkeypatch.setattr(
         chat_routes,
         "page_has_vision",
-        lambda doc_id, page_no: (doc_id, page_no) == (42, 7),
+        lambda doc_id, page_no, **_kwargs: (doc_id, page_no) == (42, 7),
+    )
+    monkeypatch.setattr(
+        chat_routes, "page_has_preview",
+        lambda doc_id, page_no, **_kwargs: (doc_id, page_no) == (42, 7),
     )
     monkeypatch.setattr(
         chat_routes,
@@ -465,6 +469,30 @@ def test_history_exposes_only_sources_attributed_by_each_answer(
     assert messages[2]["citations"] == []
     assert "Nguồn tham chiếu" in messages[0]["ref_text"]
     assert "citations" not in messages[3]
+
+
+def test_history_ocr_citation_exposes_image_without_vision_summary(monkeypatch, client_for):
+    class Support:
+        def answer_sources_for_chat_ids(self, _chat_ids):
+            return [(11, 42, "scan.pdf", 1, "7", 0.91, 0)]
+
+    monkeypatch.setattr(
+        app_server.app.state, "runtime",
+        replace(app_server.app.state.runtime, app_support_queries=Support()),
+    )
+    monkeypatch.setattr(chat_routes, "page_has_vision", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(chat_routes, "page_has_preview", lambda *_args, **_kwargs: True, raising=False)
+    monkeypatch.setattr(
+        chat_routes, "get_chat_history",
+        lambda *_args, **_kwargs: [{"chat_id": 11, "content": "[SRC:D42P7]"}],
+    )
+
+    response = client_for(_profile()).post("/api/chat/history", json={"session_id": "s1"})
+
+    assert response.status_code == 200
+    citation = response.json()["messages"][0]["citations"][0]
+    assert citation["has_vision"] is False
+    assert citation["page_url"] == "/api/files/documents/42/pages/7"
 
 
 def test_chat_image_download_fails_closed_until_owner_is_proven(

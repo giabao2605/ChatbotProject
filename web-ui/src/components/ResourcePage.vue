@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref, watch } from "vue";
+import { nextTick, onMounted, reactive, ref, watch } from "vue";
 import { t } from "@/i18n";
 import type {
   ApiRow,
@@ -15,6 +15,7 @@ const props = defineProps<{
   eyebrow?: string;
   description?: string;
   load: (filters: Record<string, unknown>) => Promise<ApiRow[]>;
+  dataKey?: string;
   columns?: ResourceColumn[];
   rowActions?: RowAction[];
   toolbar?: ToolbarAction[];
@@ -87,6 +88,8 @@ async function refresh() {
 
 async function runAction(action: RowAction | ToolbarAction, row?: ApiRow) {
   if (action.confirm && !window.confirm(action.confirm)) return;
+  const actionTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  let refreshed = false;
   busy.value = true;
   error.value = "";
   notice.value = "";
@@ -95,11 +98,15 @@ async function runAction(action: RowAction | ToolbarAction, row?: ApiRow) {
     const outcome = result as { ok?: boolean; message?: string; result?: { message?: string } } | undefined;
     if (outcome?.ok === false) throw new Error(outcome.message || outcome.result?.message || t("common.error"));
     notice.value = t("common.success");
+    refreshed = true;
     await refresh();
   } catch (err) {
     error.value = err instanceof Error ? err.message : t("common.error");
   } finally {
     busy.value = false;
+    await nextTick();
+    // ponytail: Refreshed row actions require explicit keys; unkeyed tables may reuse another row's button.
+    if (document.activeElement === document.body && actionTrigger?.isConnected && (!row || !refreshed || props.dataKey)) actionTrigger.focus();
   }
 }
 
@@ -231,10 +238,10 @@ defineExpose({ refresh });
       <ProgressSpinner />
     </div>
 
-    <Card v-else>
+    <Card v-show="!loading">
       <template #content>
         <p v-if="!rows.length" class="muted-text" v-text="t('common.empty')"></p>
-        <DataTable v-else :value="rows" paginator :rows="15" removable-sort>
+        <DataTable v-else :value="rows" :data-key="dataKey" paginator :rows="15" removable-sort>
           <Column
             v-for="col in columns"
             :key="col.field"

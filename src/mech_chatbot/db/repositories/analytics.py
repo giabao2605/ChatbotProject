@@ -127,7 +127,7 @@ def get_usage_analytics(days=30, top_n=10):
     Tra ve dict: totals, no_answer, ratings, top_questions, daily, top_documents.
     """
     _ensure_engine()
-    import json as _json
+    limit = _sanitize_int(top_n, 10)
     out = {
         "days": days,
         "total_questions": 0, "total_sessions": 0, "total_users": 0,
@@ -163,15 +163,23 @@ def get_usage_analytics(days=30, top_n=10):
 
             # Lay cau hoi + tra loi de tinh no-answer & top questions (python-side de bo dau)
             rows = conn.execute(text(
-                "SELECT CauHoi_User, TraLoi_Bot, RefImages FROM LichSuChat "
+                "SELECT CauHoi_User, TraLoi_Bot FROM LichSuChat "
                 "WHERE ThoiGian >= DATEADD(day, -:d, GETDATE())"
             ), {"d": days}).fetchall()
+            top_docs = conn.execute(text("""
+                SELECT TOP (:limit) d.TenFile, COUNT(DISTINCT a.ChatID) AS ReferencesCount
+                FROM dbo.AnswerSource a
+                JOIN dbo.LichSuChat c ON c.ChatID = a.ChatID
+                JOIN dbo.TaiLieu d ON d.DocID = a.DocID
+                WHERE c.ThoiGian >= DATEADD(day, -:d, GETDATE())
+                GROUP BY d.DocID, d.TenFile
+                ORDER BY ReferencesCount DESC, d.DocID ASC
+            """), {"d": days, "limit": limit}).fetchall()
 
         from collections import Counter
         q_counter = Counter()
-        doc_counter = Counter()
         no_answer = 0
-        for cau_hoi, tra_loi, ref_images in rows:
+        for cau_hoi, tra_loi in rows:
             # Top questions (chuan hoa: bo dau, ha thuong, gom khoang trang)
             qn = _strip_accents_sql(cau_hoi)
             if qn:
@@ -180,26 +188,14 @@ def get_usage_analytics(days=30, top_n=10):
             an = _strip_accents_sql(tra_loi)
             if any(m in an for m in _NO_ANSWER_MARKERS):
                 no_answer += 1
-            # Tai lieu duoc tham chieu nhieu (tu RefImages JSON)
-            if ref_images:
-                try:
-                    refs = _json.loads(ref_images)
-                    for rf in (refs or []):
-                        name = str(rf)
-                        base = name.replace("\\", "/").split("/")[-1]
-                        if base:
-                            doc_counter[base] += 1
-                except Exception:
-                    pass
-
         out["no_answer_count"] = no_answer
         if out["total_questions"] > 0:
             out["no_answer_rate"] = round(100.0 * no_answer / out["total_questions"], 1)
         out["top_questions"] = [
-            {"question": q, "count": c} for q, c in q_counter.most_common(top_n)
+            {"question": q, "count": c} for q, c in q_counter.most_common(limit)
         ]
         out["top_documents"] = [
-            {"document": d, "count": c} for d, c in doc_counter.most_common(top_n)
+            {"document": r[0], "count": int(r[1])} for r in top_docs
         ]
         return out
     except Exception as e:

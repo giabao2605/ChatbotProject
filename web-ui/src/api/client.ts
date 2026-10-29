@@ -1,10 +1,22 @@
 import type { Citation, ChatMessage, SessionItem, UserProfile } from "@/types";
 import { parseSseBuffer } from "@/api/sse";
+import { t } from "@/i18n";
 
 let csrfToken = "";
+export const SESSION_UNAUTHORIZED_EVENT = "mech-chatbot.unauthorized";
+
+function notifyUnauthorized(status: number, path: string, requestCsrfToken: string) {
+  if (status === 401 && path !== "/api/auth/login" && requestCsrfToken === csrfToken) {
+    setCsrfToken("");
+    window.dispatchEvent(new Event(SESSION_UNAUTHORIZED_EVENT));
+  }
+}
 
 function errorDetail(raw: string, status: number): string {
   if (!raw) return `HTTP ${status}`;
+  if (/^\s*(?:<!doctype\s+html\b|<html(?:\s|>))/i.test(raw)) {
+    return `${t("common.error")} (HTTP ${status}). ${t("common.refresh")}.`;
+  }
   try {
     const parsed = JSON.parse(raw) as { detail?: unknown; message?: unknown };
     if (typeof parsed.detail === "string" && parsed.detail.trim()) return parsed.detail;
@@ -34,6 +46,7 @@ export function getCsrfToken() {
 }
 
 async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const requestCsrfToken = csrfToken;
   const headers = new Headers(init.headers);
   if (!headers.has("Content-Type") && init.body && !(init.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
@@ -48,6 +61,7 @@ async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
     cache: "no-store",
   });
   if (!response.ok) {
+    notifyUnauthorized(response.status, path, requestCsrfToken);
     const detail = await response.text().catch(() => "");
     throw new Error(errorDetail(detail, response.status));
   }
@@ -105,14 +119,16 @@ export async function login(username: string, password: string) {
 }
 
 export async function loadMe() {
+  const requestCsrfToken = csrfToken;
   const data = await apiFetch<{ user: UserProfile }>("/api/auth/me");
-  setCsrfToken(data.user.csrf_token);
+  if (requestCsrfToken === csrfToken) setCsrfToken(data.user.csrf_token);
   return data.user;
 }
 
 export async function refreshSession() {
+  const requestCsrfToken = csrfToken;
   const data = await apiFetch<{ user: UserProfile }>("/api/auth/refresh", { method: "POST" });
-  setCsrfToken(data.user.csrf_token);
+  if (requestCsrfToken === csrfToken) setCsrfToken(data.user.csrf_token);
   return data.user;
 }
 
@@ -136,12 +152,15 @@ export async function listSessions() {
   return data.sessions ?? [];
 }
 
-export async function loadHistory(sessionId: string) {
-  const data = await apiFetch<{ messages: ChatMessage[] }>("/api/chat/history", {
+export async function loadHistory(sessionId: string): Promise<ChatMessage[]> {
+  const data = await apiFetch<{ messages: (ChatMessage & { danh_gia?: unknown })[] }>("/api/chat/history", {
     method: "POST",
     body: JSON.stringify({ session_id: sessionId }),
   });
-  return data.messages ?? [];
+  return (data.messages ?? []).map((message) => {
+    const rating = message.feedback ?? message.danh_gia;
+    return { ...message, feedback: rating === 1 || rating === -1 ? rating : null };
+  });
 }
 
 export async function deleteSession(sessionId: string) {
@@ -180,6 +199,7 @@ export async function sendChatMessage(
   payload: Record<string, unknown>,
   callbacks: ChatStreamCallbacks,
 ) {
+  const requestCsrfToken = csrfToken;
   const response = await fetch("/api/chat/message", {
     method: "POST",
     credentials: "include",
@@ -191,6 +211,7 @@ export async function sendChatMessage(
     body: JSON.stringify(payload),
   });
   if (!response.ok || !response.body) {
+    notifyUnauthorized(response.status, "/api/chat/message", requestCsrfToken);
     const detail = await response.text().catch(() => "");
     throw new Error(detail || `HTTP ${response.status}`);
   }

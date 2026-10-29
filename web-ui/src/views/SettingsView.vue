@@ -235,7 +235,7 @@ const rowActions: RowAction[] = [{ label: "Sửa", run: (r) => openEdit(r) }];
     :row-actions="rowActions"
   />
 
-  <Dialog v-model:visible="dlg.visible" :header="`Sửa: ${dlg.key}`" modal :style="{ width: '480px' }" @hide="cancel">
+  <Dialog v-model:visible="dlg.visible" :header="`Sửa: ${dlg.key}`" modal :style="{ width: '480px' }" @after-hide="cancel">
     <div class="stack-form">
       <Message v-if="dlg.error" severity="error" v-text="dlg.error"></Message>
       <label class="field">
@@ -244,7 +244,7 @@ const rowActions: RowAction[] = [{ label: "Sửa", run: (r) => openEdit(r) }];
       </label>
     </div>
     <template #footer>
-      <Button label="Huỷ" severity="secondary" outlined :disabled="dlg.busy" @click="cancel" />
+      <Button label="Huỷ" severity="secondary" outlined :disabled="dlg.busy" @click="dlg.visible = false" />
       <Button label="Lưu" :loading="dlg.busy" @click="submit" />
     </template>
   </Dialog>

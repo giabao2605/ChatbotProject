@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+from functools import partial
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,12 @@ from pydantic import BaseModel, Field
 
 from mech_chatbot.api import app_security
 from mech_chatbot.api.dependencies import csrf_profile, current_profile
-from mech_chatbot.api.file_access import chat_image_path, data_raw_root, page_has_vision
+from mech_chatbot.api.file_access import (
+    chat_image_path,
+    data_raw_root,
+    page_has_preview,
+    page_has_vision,
+)
 from mech_chatbot.api.request_limits import (
     UploadTooLarge,
     enforce_request_rate_limit,
@@ -76,7 +82,9 @@ def _sse(event: str, data: Any) -> str:
 
 
 def _citation_list(retrieved_docs: list[Any]) -> list[dict[str, Any]]:
-    return build_citation_list(retrieved_docs, page_has_vision=page_has_vision)
+    return build_citation_list(
+        retrieved_docs, page_has_vision=page_has_vision, page_has_preview=page_has_preview
+    )
 
 
 def _filter_citations_by_answer(
@@ -125,6 +133,9 @@ def _sources_for_chat_ids(
     chat_ids: list[int],
     runtime: Any,
 ) -> dict[int, list[dict[str, Any]]]:
+    db_engine = getattr(runtime, "db_engine", None)
+    vision_available = partial(page_has_vision, db_engine=db_engine) if db_engine is not None else page_has_vision
+    preview_available = partial(page_has_preview, db_engine=db_engine) if db_engine is not None else page_has_preview
     rows = runtime.app_support_queries.answer_sources_for_chat_ids(
         tuple(int(chat_id) for chat_id in chat_ids if chat_id)
     )
@@ -133,7 +144,7 @@ def _sources_for_chat_ids(
         page_no = safe_int(chunk_ref)
         if doc_id is None or page_no is None:
             continue
-        verified_vision = bool(has_vision) and page_has_vision(int(doc_id), page_no)
+        verified_vision = bool(has_vision) and vision_available(int(doc_id), page_no)
         out.setdefault(int(chat_id), []).append(
             {
                 "doc_id": int(doc_id),
@@ -145,7 +156,7 @@ def _sources_for_chat_ids(
                 "has_vision": verified_vision,
                 "page_url": (
                     f"/api/files/documents/{int(doc_id)}/pages/{page_no}"
-                    if verified_vision
+                    if preview_available(int(doc_id), page_no)
                     else None
                 ),
                 "original_url": f"/api/files/documents/{int(doc_id)}/original",
@@ -276,12 +287,15 @@ def _resolve_chat_citations(
     citation_docs: Any,
     streamed_candidates: Any,
     answer: str,
+    *,
+    db_engine: Any = None,
 ) -> tuple[tuple[dict[str, Any], ...], str]:
     return resolve_chat_citations(
         citation_docs,
         streamed_candidates,
         answer,
-        page_has_vision=page_has_vision,
+        page_has_vision=partial(page_has_vision, db_engine=db_engine) if db_engine is not None else page_has_vision,
+        page_has_preview=partial(page_has_preview, db_engine=db_engine) if db_engine is not None else page_has_preview,
     )
 
 

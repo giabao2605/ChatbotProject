@@ -166,6 +166,33 @@ afterEach(() => {
 });
 
 describe("ChatView public behavior", () => {
+  it("opens an available OCR source image without claiming vision content", async () => {
+    sessionStorage.setItem("chat-active-session", "session-ocr");
+    vi.mocked(api.listSessions).mockResolvedValue([{ session_id: "session-ocr", cau_hoi: "OCR source question" }]);
+    vi.mocked(api.loadHistory).mockResolvedValue([{
+      role: "assistant",
+      content: "OCR answer [SRC:D42P7]",
+      citations: [{
+        doc_id: 42, page_no: 7, file_name: "scan.pdf", version_no: 1,
+        has_vision: false, page_url: "/api/files/documents/42/pages/7",
+        original_url: "/api/files/documents/42/original",
+      }],
+    }]);
+    const { wrapper } = mountWithPinia(ChatView);
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("OCR answer");
+    const preview = wrapper.find(".citation-preview-link");
+    expect(preview.exists()).toBe(true);
+    expect(preview.attributes("href")).toBe("/api/files/documents/42/pages/7");
+    expect(preview.attributes("target")).toBe("_blank");
+    expect(preview.find("img").attributes("src")).toBe(preview.attributes("href"));
+    await preview.trigger("click");
+    expect(wrapper.find(".citation-download").attributes("href"))
+      .toBe("/api/files/documents/42/original");
+    wrapper.unmount();
+  });
+
   it("restores the active conversation after a page reload", async () => {
     vi.mocked(api.listSessions).mockResolvedValue([
       { session_id: "session-a", cau_hoi: "Câu hỏi A" },

@@ -253,7 +253,9 @@ def _build_default_app_runtime(
                 _chat_actor_profile(actor),
             )
         ),
-        citation_resolver=_resolve_chat_citations,
+        citation_resolver=lambda docs, candidates, answer: _resolve_chat_citations(
+            docs, candidates, answer, db_engine=engine
+        ),
         raw_root=data_raw_root,
         create_ingestion_job=lambda **kwargs: production_create_ingestion_job(
             **kwargs,

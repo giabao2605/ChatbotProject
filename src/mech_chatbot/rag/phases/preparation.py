@@ -11,8 +11,10 @@ from mech_chatbot.config.logging import log_trace, logger
 from mech_chatbot.llm.external_ai import ExternalAICallCancelled
 from mech_chatbot.llm.llm_client import get_llm_model_name
 from mech_chatbot.rag.execution import RequestBudgetExceeded
+from mech_chatbot.rag.conversation_state import has_missing_referent
 from mech_chatbot.rag.phases.contracts import PreparationReason, PreparedValues
 from mech_chatbot.rag.pipeline_steps import _analyze_image, _prepare_history
+from mech_chatbot.rag.prompt import _t_rag
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,6 +191,43 @@ def _safety_terminal(
     )
 
 
+def _missing_referent_terminal(
+    context: _PreparationContext,
+    state: Any,
+) -> PreparationOutcome | None:
+    conversation = context.conversation_context or {}
+    if any((
+        context.chat_history, context.current_part_ids, context.image_path,
+        conversation.get("active_doc_refs"), conversation.get("pending_candidates"),
+        conversation.get("history_summary"),
+    )) or not has_missing_referent(context.user_question):
+        return None
+
+    def clarification_stream():
+        yield _t_rag(
+            "Mình chưa xác định chắc chắn được tài liệu/bản vẽ cần tra theo mô tả của bạn. "
+            "Bạn vui lòng cung cấp thêm mã bản vẽ, model, tên sản phẩm, kích thước hoặc "
+            "vật liệu cụ thể hơn nhé.",
+            context.response_language,
+        )
+
+    state.refuse("clarification_required")
+    debug = _empty_debug()
+    debug.update({
+        "answer_outcome": "clarification_required", "evidence_state": "AMBIGUOUS",
+        "evidence_stage": "intent", "correction_allowed": False, "correction_count": 0,
+    })
+    log_trace(
+        "rag_end", context.trace_id,
+        final_latency_ms=int((time.time() - context.started_at) * 1000),
+        refusal=True, refusal_reason="missing_referent",
+    )
+    return PreparationOutcome(
+        terminal=(clarification_stream(), "", (), (), debug),
+        reason_code="missing_referent",
+    )
+
+
 def _exact_cache_terminal(
     context: _PreparationContext,
     hit: Mapping[str, Any],
@@ -354,6 +393,9 @@ def prepare(state: Any) -> PreparationOutcome:
     safety_terminal = _safety_terminal(context, state)
     if safety_terminal is not None:
         return safety_terminal
+    referent_terminal = _missing_referent_terminal(context, state)
+    if referent_terminal is not None:
+        return referent_terminal
     cache_lookup = _lookup_exact_cache(context, state)
     if cache_lookup.terminal is not None:
         return cache_lookup.terminal

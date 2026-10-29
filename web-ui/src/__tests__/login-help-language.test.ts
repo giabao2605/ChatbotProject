@@ -55,12 +55,16 @@ describe("help language", () => {
   it("translates all six sections when switching between English and Vietnamese", async () => {
     const wrapper = mount(HelpView, { global: { stubs: { Card: card } } });
     expect(wrapper.text()).toContain("1. Chat & trích dẫn");
+    expect(wrapper.text()).not.toContain("mở đúng trang PDF gốc");
+    expect(wrapper.text()).toContain("ảnh trang khi có");
 
     setLocale("en");
     await flushPromises();
     expect(wrapper.findAll("h3")).toHaveLength(6);
     expect(wrapper.text()).toContain("1. Chat & citations");
     expect(wrapper.text()).toContain("Ask a question on the Chat page");
+    expect(wrapper.text()).not.toContain("correct page of the source PDF");
+    expect(wrapper.text()).toContain("page preview when available");
     expect(wrapper.text()).toContain("6. Language");
     expect(wrapper.text()).not.toContain("Đặt câu hỏi ở trang Chat");
 

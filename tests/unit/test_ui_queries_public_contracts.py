@@ -443,6 +443,13 @@ def test_list_documents_applies_normalized_rbac_and_filters(monkeypatch):
     }
 
 
+def test_document_list_projects_issued_date_for_metadata_prefill(monkeypatch):
+    connection = install_engine(monkeypatch, lambda *_args: FakeResult(rows=[]))
+    ui_queries.list_documents(global_read_admin=True)
+    projection = connection.calls[-1][0].split("FROM TaiLieu", 1)[0]
+    assert "d.IssuedDate" in projection
+
+
 def test_list_documents_fail_closed_without_scope_and_rejects_unknown_bucket(monkeypatch):
     connection = install_engine(monkeypatch, lambda *_args: FakeResult(rows=[]))
     monkeypatch.setenv("RBAC_STRICT_SITE_FILTER", "true")
@@ -609,9 +616,72 @@ def test_update_user_roles_writes_status_then_role_deltas(monkeypatch):
         7, False, ["reviewer"], ["viewer"]
     ) is True
 
-    assert connection.calls[0][1] == {"active": 0, "uid": 7}
-    assert connection.calls[1][1] == {"uid": 7, "role": "reviewer"}
-    assert connection.calls[2][1] == {"uid": 7, "role": "viewer"}
+    writes = [
+        params for sql, params in connection.calls
+        if sql.lstrip().startswith(("UPDATE", "INSERT", "DELETE"))
+    ]
+    assert writes == [
+        {"active": 0, "uid": 7},
+        {"uid": 7, "role": "reviewer"},
+        {"uid": 7, "role": "viewer"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("is_active", "del_roles"),
+    [(True, ["admin"]), (False, []), (True, ["ADMIN"]), (True, ["admin "])],
+    ids=["demote-last-admin", "disable-last-admin-through-roles", "uppercase-admin", "padded-admin"],
+)
+def test_update_user_roles_rejects_removing_last_active_admin(
+    monkeypatch, is_active, del_roles
+):
+    def resolver(sql, _params, _index):
+        if "COUNT(*)" in sql:
+            return FakeResult(one=(0,))
+        if "RoleName = 'admin'" in sql:
+            return FakeResult(one=(1,))
+        return FakeResult(rowcount=1)
+
+    connection = install_engine(monkeypatch, resolver)
+
+    result = ui_queries.update_user_active_and_roles(7, is_active, [], del_roles)
+
+    assert result is False, connection.calls
+    assert not any(
+        sql.lstrip().startswith(("UPDATE", "INSERT", "DELETE"))
+        for sql, _params in connection.calls
+    )
+
+
+@pytest.mark.parametrize(
+    ("is_active", "del_roles", "other_admins"),
+    [(False, ["admin"], 1), (True, ["viewer"], 0)],
+    ids=["another-active-admin", "last-admin-keeps-admin-role"],
+)
+def test_update_user_roles_allows_safe_admin_changes(
+    monkeypatch, is_active, del_roles, other_admins
+):
+    def resolver(sql, params, _index):
+        if "COUNT(*)" in sql:
+            return FakeResult(one=(other_admins,))
+        if "RoleName = 'admin'" in sql:
+            if "role" in params:
+                return FakeResult(one=(1,) if params["role"].rstrip().casefold() == "admin" else None)
+            return FakeResult(one=(1,))
+        return FakeResult(rowcount=1)
+
+    connection = install_engine(monkeypatch, resolver)
+
+    assert ui_queries.update_user_active_and_roles(7, is_active, ["reviewer"], del_roles) is True
+    writes = [
+        params for sql, params in connection.calls
+        if sql.lstrip().startswith(("UPDATE", "INSERT", "DELETE"))
+    ]
+    assert writes == [
+        {"active": int(is_active), "uid": 7},
+        {"uid": 7, "role": "reviewer"},
+        {"uid": 7, "role": del_roles[0]},
+    ]
 
 
 @pytest.mark.parametrize(

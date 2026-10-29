@@ -253,6 +253,7 @@ const userActions: RowAction[] = [
       :header="revoke.mode === 'clearance' ? `Thu hồi mức mật — ${revoke.username}` : `Thu hồi phòng ban — ${revoke.username}`"
       modal
       :style="{ width: '460px' }"
+      @after-hide="cancelRevoke"
     >
       <Message v-if="revoke.error" severity="error" v-text="revoke.error"></Message>
       <form class="stack-form" @submit.prevent="submitRevoke">
@@ -275,7 +276,7 @@ const userActions: RowAction[] = [
           <textarea v-model="revoke.reason" rows="2" class="native-select"></textarea>
         </label>
         <div class="form-actions">
-          <Button type="button" label="Huỷ" severity="secondary" outlined :disabled="revoke.busy" @click="cancelRevoke" />
+          <Button type="button" label="Huỷ" severity="secondary" outlined :disabled="revoke.busy" @click="revoke.visible = false" />
           <Button type="submit" label="Thu hồi" severity="danger" :loading="revoke.busy" />
         </div>
       </form>

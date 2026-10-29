@@ -121,7 +121,7 @@ const rowActions: RowAction[] = [
     :row-actions="rowActions"
   />
 
-  <Dialog v-model:visible="dlg.visible" header="Phân loại feedback" modal :style="{ width: '520px' }" @hide="cancel">
+  <Dialog v-model:visible="dlg.visible" header="Phân loại feedback" modal :style="{ width: '520px' }" @after-hide="cancel">
     <div class="stack-form">
       <Message v-if="dlg.error" severity="error" v-text="dlg.error"></Message>
       <p v-if="dlg.question" class="muted-text" v-text="dlg.question"></p>
@@ -142,7 +142,7 @@ const rowActions: RowAction[] = [
       </label>
     </div>
     <template #footer>
-      <Button label="Huỷ" severity="secondary" outlined :disabled="dlg.busy" @click="cancel" />
+      <Button label="Huỷ" severity="secondary" outlined :disabled="dlg.busy" @click="dlg.visible = false" />
       <Button label="Lưu" :loading="dlg.busy" @click="submit" />
     </template>
   </Dialog>

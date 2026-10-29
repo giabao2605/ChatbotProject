@@ -335,9 +335,12 @@ def test_bulk_review_reports_missing_identifiers_and_executes_scoped_delete_path
         "updated": 1,
         "pending": 0,
         "failed": 1,
-        "failures": [],
+        "failures": [{"job_id": None, "doc_id": 4, "code": "missing_job_id", "error": "Thiếu JobID"}],
     }
-    assert deleted.json()["updated"] == 3
+    assert deleted.json() == {"ok": False, "updated": 2, "pending": 0, "failed": 1, "failures": [{"job_id": None, "doc_id": None, "code": "missing_ids", "error": "Thiếu DocID hoặc JobID"}]}
+    empty_deleted = app_client.post("/api/documents/review/bulk", json={"action": "delete", "items": [{}]})
+    assert empty_deleted.status_code == 200
+    assert empty_deleted.json() == {"ok": False, "updated": 0, "pending": 0, "failed": 1, "failures": [{"job_id": None, "doc_id": None, "code": "missing_ids", "error": "Thiếu DocID hoặc JobID"}]}
     assert calls == [
         ("reject-job", 6, "invalid"),
         ("reject-doc", 5),

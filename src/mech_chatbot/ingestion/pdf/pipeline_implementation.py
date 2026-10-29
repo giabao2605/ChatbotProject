@@ -136,8 +136,8 @@ def _legacy_ingestion_persistence() -> IngestionPersistence:
     )
 
 
-def _load_governed_document(ten_file, thu_muc, *, persistence):
-    doc_id = persistence.reset_document_metadata(ten_file, thu_muc)
+def _load_governed_document(ten_file, thu_muc, *, persistence, source_file_path):
+    doc_id = persistence.reset_document_metadata(ten_file, thu_muc, source_file_path=source_file_path)
     if not doc_id:
         raise RuntimeError(
             "Khong tao duoc document identity; dung ingest truoc khi goi dich vu ngoai."
@@ -564,6 +564,7 @@ def process_and_ingest_pdf(
             ten_file,
             thu_muc,
             persistence=persistence,
+            source_file_path=pdf_path,
         )
         doc_id = governed_document.doc_id
         doc_info = governed_document.info
@@ -1195,6 +1196,7 @@ def process_and_ingest_file(
             ten_file,
             thu_muc,
             persistence=persistence,
+            source_file_path=file_path,
         )
         doc_id = governed_document.doc_id
         doc_info = governed_document.info

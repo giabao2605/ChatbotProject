@@ -231,7 +231,6 @@ function cancel() {
 }
 
 async function onDialogAfterHide() {
-  cancel();
   await nextTick();
   dialogTrigger?.focus();
   dialogTrigger = null;
@@ -271,7 +270,7 @@ const rowActions: RowAction[] = [
     :row-actions="rowActions"
   />
 
-  <Dialog v-model:visible="dlg.visible" :header="dialogTitle" modal :style="{ width: '460px' }" @after-hide="onDialogAfterHide">
+  <Dialog v-model:visible="dlg.visible" :header="dialogTitle" modal :style="{ width: '460px' }" @hide="cancel" @after-hide="onDialogAfterHide">
     <div class="stack-form">
       <Message v-if="dlg.error" severity="error" v-text="dlg.error"></Message>
 

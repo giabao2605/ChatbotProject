@@ -179,6 +179,8 @@ class SqlDocumentLookup:
                     SELECT TOP 1 d.DocID
                     FROM dbo.IngestionJobs j
                     JOIN dbo.TaiLieu d ON d.TenFile = j.TenFile AND d.ThuMuc = j.ThuMuc
+                      AND d.FilePath = j.FilePath
+                      AND NULLIF(LTRIM(RTRIM(j.FilePath)), '') IS NOT NULL
                     WHERE j.JobID = :job_id
                     ORDER BY d.DocID DESC
                     """

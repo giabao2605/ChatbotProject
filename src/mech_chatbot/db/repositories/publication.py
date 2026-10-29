@@ -649,6 +649,15 @@ def _create_outbox_event(
         else:
             target_version = int(state["PublicationVersion"] or 0) + 1
             idempotency_key = f"publication:{doc_id}:{action}:{target_version}"
+            previous = conn.execute(
+                text("""
+                    SELECT TOP 1 OutboxID FROM dbo.PublicationOutbox WITH (UPDLOCK, HOLDLOCK)
+                    WHERE DocID = :doc_id AND Action = :action ORDER BY OutboxID DESC
+                """),
+                {"doc_id": doc_id, "action": action},
+            ).mappings().first()
+            if previous:
+                idempotency_key += f":after:{previous['OutboxID']}"
             outbox_row = conn.execute(
                 text(
                     """

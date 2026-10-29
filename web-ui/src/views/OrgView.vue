@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, reactive, ref } from "vue";
 import ResourcePage from "@/components/ResourcePage.vue";
 import { apiGet, apiSend } from "@/api/client";
 import { isRoleAllowed } from "@/authorization";
@@ -14,12 +14,23 @@ import type { ApiRow, CreateForm, ResourceFilter, RowAction } from "@/types";
 
 type Opt = { label: string; value: string };
 
+// Danh sach phong ban cho dropdown "chuyen du lieu".
+const deptOptions = ref<Opt[]>([]);
+
 const auth = useAuthStore();
 const canManagePlatform = computed(() => isRoleAllowed(auth.user?.roles, ["platform_admin"]));
 
 async function loadDepartments(): Promise<ApiRow[]> {
   const data = await apiGet<{ departments: ApiRow[] }>("/api/catalog/departments", { active_only: false });
-  return data.departments ?? [];
+  const rows = data.departments ?? [];
+  deptOptions.value = rows
+    .map((r) => {
+      const code = pickStr(r, ["code", "DeptCode"]);
+      const name = pickStr(r, ["name", "DeptName"]);
+      return { value: code, label: name ? `${code} — ${name}` : code };
+    })
+    .filter((d) => d.value);
+  return rows;
 }
 
 async function loadSites(): Promise<ApiRow[]> {
@@ -54,23 +65,6 @@ function csvList(value: unknown): string[] {
     .map((item) => item.trim())
     .filter(Boolean);
 }
-
-// Danh sach phong ban cho dropdown "chuyen du lieu".
-const deptOptions = ref<Opt[]>([]);
-onMounted(async () => {
-  try {
-    const rows = await loadDepartments();
-    deptOptions.value = rows
-      .map((r) => {
-        const code = pickStr(r, ["code", "DeptCode"]);
-        const name = pickStr(r, ["name", "DeptName"]);
-        return { value: code, label: name ? `${code} — ${name}` : code };
-      })
-      .filter((d) => d.value);
-  } catch {
-    /* giu trong */
-  }
-});
 
 const deptForm: CreateForm = {
   title: "Thêm phòng ban",
@@ -456,7 +450,7 @@ const deptActions: RowAction[] = [
     />
   </div>
 
-  <Dialog v-model:visible="dlg.visible" :header="dialogTitle" modal :style="{ width: '460px' }" @hide="cancel">
+  <Dialog v-model:visible="dlg.visible" :header="dialogTitle" modal :style="{ width: '460px' }" @after-hide="cancel">
     <div class="stack-form">
       <Message v-if="dlg.error" severity="error" v-text="dlg.error"></Message>
       <label v-if="dlg.mode === 'status'" class="field">
@@ -482,7 +476,7 @@ const deptActions: RowAction[] = [
       </template>
     </div>
     <template #footer>
-      <Button label="Huỷ" severity="secondary" outlined :disabled="dlg.busy" @click="cancel" />
+      <Button label="Huỷ" severity="secondary" outlined :disabled="dlg.busy" @click="dlg.visible = false" />
       <Button label="Lưu" :loading="dlg.busy" @click="submit" />
     </template>
   </Dialog>

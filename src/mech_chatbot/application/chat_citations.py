@@ -19,6 +19,7 @@ def build_citation_list(
     retrieved_docs: Iterable[Any],
     *,
     page_has_vision: Callable[[int, int], bool],
+    page_has_preview: Callable[[int, int], bool] | None = None,
 ) -> list[dict[str, Any]]:
     seen: set[tuple[int, int]] = set()
     citations: list[dict[str, Any]] = []
@@ -34,6 +35,7 @@ def build_citation_list(
             continue
         seen.add(key)
         has_vision = page_has_vision(doc_id, page_no)
+        has_preview = page_has_preview(doc_id, page_no) if page_has_preview else has_vision
         citation = {
             "doc_id": doc_id,
             "page_no": page_no,
@@ -43,7 +45,7 @@ def build_citation_list(
             "has_vision": has_vision,
             "page_url": (
                 f"/api/files/documents/{doc_id}/pages/{page_no}"
-                if has_vision
+                if has_preview
                 else None
             ),
             "original_url": f"/api/files/documents/{doc_id}/original",
@@ -126,10 +128,12 @@ def resolve_chat_citations(
     answer: str,
     *,
     page_has_vision: Callable[[int, int], bool],
+    page_has_preview: Callable[[int, int], bool] | None = None,
 ) -> tuple[tuple[dict[str, Any], ...], str]:
     citations = build_citation_list(
         citation_docs,
         page_has_vision=page_has_vision,
+        page_has_preview=page_has_preview,
     ) or [dict(item) for item in streamed_candidates]
     citations = filter_citations_by_answer(citations, answer)
     return tuple(citations), citation_ref_text(citations)

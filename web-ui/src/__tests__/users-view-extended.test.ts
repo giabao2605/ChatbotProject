@@ -1,6 +1,13 @@
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import { defineComponent, nextTick } from "vue";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import PrimeVue from "primevue/config";
+import Button from "primevue/button";
+import Card from "primevue/card";
+import Column from "primevue/column";
+import DataTable from "primevue/datatable";
+import Dialog from "primevue/dialog";
+import ResourcePage from "@/components/ResourcePage.vue";
 import * as api from "@/api/client";
 import type { ApiRow, RowAction, ToolbarAction } from "@/types";
 import UsersView from "@/views/UsersView.vue";
@@ -242,6 +249,54 @@ describe("UsersView public contracts", () => {
     trigger.remove();
     sink.remove();
   });
+
+  it.each(["Tạo người dùng", "Đổi vai trò"])(
+    "restores focus and allows reopening %s after Escape while the action is pending",
+    async (label) => {
+      const host = document.createElement("div");
+      document.body.append(host);
+      const wrapper = mount(UsersView, {
+        attachTo: host,
+        global: {
+          plugins: [[PrimeVue, { unstyled: true }]],
+          components: { ResourcePage, Button, Card, Column, DataTable, Dialog },
+          stubs: {
+            InputText: InputTextStub,
+            Message: MessageStub,
+            ProgressSpinner: true,
+            Tag: true,
+            Textarea: true,
+            transition: false,
+          },
+        },
+      });
+      try {
+        await flushPromises();
+        const trigger = wrapper.findAll("button").find((item) => item.text() === label);
+        if (!trigger) throw new Error(`Missing trigger: ${label}`);
+        for (let attempt = 0; attempt < 2; attempt++) {
+          (trigger.element as HTMLButtonElement).focus();
+          await trigger.trigger("click");
+          await vi.waitFor(() => {
+            const dialog = document.querySelector('[role="dialog"]');
+            expect(dialog).not.toBeNull();
+            expect(dialog!.contains(document.activeElement)).toBe(true);
+          });
+          expect((trigger.element as HTMLButtonElement).disabled).toBe(true);
+          document.dispatchEvent(new KeyboardEvent("keydown", { code: "Escape", key: "Escape", bubbles: true }));
+          await vi.waitFor(() => {
+            expect(document.querySelector('[role="dialog"]')).toBeNull();
+            expect((trigger.element as HTMLButtonElement).disabled).toBe(false);
+            expect(document.activeElement).toBe(trigger.element);
+          });
+        }
+        expect(api.apiSend).not.toHaveBeenCalled();
+      } finally {
+        wrapper.unmount();
+        host.remove();
+      }
+    },
+  );
 
   it("computes role additions and removals from the current server state", async () => {
     const wrapper = mountUsers();

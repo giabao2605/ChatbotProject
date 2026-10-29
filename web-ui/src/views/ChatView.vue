@@ -297,7 +297,7 @@ onMounted(async () => {
                     class="citation-card"
                   >
                     <a
-                      v-if="citation.has_vision && citation.page_url"
+                      v-if="citation.page_url"
                       :href="citation.page_url"
                       target="_blank"
                       class="citation-preview-link"

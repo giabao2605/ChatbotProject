@@ -190,6 +190,36 @@ def test_new_variant_with_conflicting_code_is_rejected_before_outbox_write(
     assert not any("INSERT INTO dbo.PublicationOutbox" in sql for sql, _ in engine.calls)
 
 
+def test_corrected_variant_can_create_new_event_after_old_event_exhausted(monkeypatch):
+    _install_validations(monkeypatch)
+
+    def dispatch(sql, _params):
+        if "SELECT PublicationState, Servable, PublicationVersion" in sql:
+            return _Result(mapped={"PublicationState": "failed", "Servable": False, "PublicationVersion": 1})
+        if "SELECT BaseCode, VariantCode" in sql:
+            return _Result(mapped={"BaseCode": "QA-PUMP", "VariantCode": "beta"})
+        if "SELECT TOP 1 OutboxID FROM dbo.PublicationOutbox" in sql:
+            return _Result(mapped={"OutboxID": 353})
+        if "SELECT TOP 1 OutboxID, Status" in sql:
+            return _Result(mapped=None)
+        if "INSERT INTO dbo.PublicationOutbox" in sql:
+            return _Result(row=(354,))
+        return _Result()
+
+    engine = _install_engine(monkeypatch, dispatch)
+    result = publication._create_outbox_event(
+        170, "new_variant", "reviewer_b", reviewer_id=100, reviewer_roles=["reviewer"]
+    )
+
+    assert result.ok is True
+    assert result.outbox_id == 354
+    inserts = [params for sql, params in engine.calls if "INSERT INTO dbo.PublicationOutbox" in sql]
+    assert inserts == [{
+        "doc_id": 170, "action": "new_variant",
+        "payload": inserts[0]["payload"], "key": "publication:170:new_variant:2:after:353",
+    }]
+
+
 def test_queued_new_variant_is_revalidated_before_qdrant_changes(monkeypatch):
     _install_validations(monkeypatch)
 

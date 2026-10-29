@@ -25,8 +25,8 @@ from mech_chatbot.application.protected_files import (
 )
 
 
-# An explicit compatibility injection point for old isolated tests.  Production
-# code leaves it unset, so the actual engine is imported lazily by the adapter.
+# An explicit compatibility injection point for old isolated tests. Production
+# supplies its process-owned engine directly to the page metadata helpers.
 _ENGINE_UNSET = object()
 engine: Any = _ENGINE_UNSET
 
@@ -51,15 +51,22 @@ def _engine_provider() -> Any:
     return production_engine()
 
 
-def _store() -> SqlProtectedFileStore:
-    return SqlProtectedFileStore(engine_provider=_engine_provider)
+def _store(db_engine: Any = _ENGINE_UNSET) -> SqlProtectedFileStore:
+    return SqlProtectedFileStore(
+        engine_provider=_engine_provider if db_engine is _ENGINE_UNSET else lambda: db_engine() if callable(db_engine) else db_engine
+    )
 
 
 def _storage() -> FilesystemProtectedFileStorage:
+    raw_root = data_raw_root()
     return FilesystemProtectedFileStorage(
         project_root=project_root(),
-        raw_root=data_raw_root(),
+        raw_root=raw_root,
         processed_root=data_processed_root(),
+        additional_processed_roots=(
+            raw_root.parent.parent / "src" / "data" / "processed",
+            raw_root.resolve().parent.parent / "src" / "data" / "processed",
+        ),
     )
 
 
@@ -112,15 +119,22 @@ def resolve_under_root(
     return _storage().resolve_under_root(raw_path, allowed_roots)
 
 
-def page_image_path(doc_id: int, page_no: int) -> Path | None:
-    stored_path = _store().load_page_image(doc_id, page_no)
+def page_image_path(doc_id: int, page_no: int, *, db_engine: Any = _ENGINE_UNSET) -> Path | None:
+    stored_path = _store(db_engine).load_page_image(doc_id, page_no)
     return _storage().resolve_page_image(stored_path)
 
 
-def page_has_vision(doc_id: int, page_no: int) -> bool:
+def page_has_vision(doc_id: int, page_no: int, *, db_engine: Any = _ENGINE_UNSET) -> bool:
     try:
-        metadata = _store().load_page_vision(doc_id, page_no)
+        metadata = _store(db_engine).load_page_vision(doc_id, page_no)
         return bool(metadata and _storage().resolve_page_image(metadata[1]))
+    except Exception:
+        return False
+
+
+def page_has_preview(doc_id: int, page_no: int, *, db_engine: Any = _ENGINE_UNSET) -> bool:
+    try:
+        return page_image_path(doc_id, page_no, db_engine=db_engine) is not None
     except Exception:
         return False
 
@@ -145,6 +159,7 @@ __all__ = [
     "load_document_access_record",
     "normalize_security_level",
     "original_file_path",
+    "page_has_preview",
     "page_has_vision",
     "page_image_path",
     "project_root",

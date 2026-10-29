@@ -11,6 +11,7 @@ from mech_chatbot.application.ingestion_runner import (
     IngestionResult,
     IngestionRunner,
 )
+from tests.unit.test_upload_filename_identity import ingest_collision
 
 
 pytestmark = pytest.mark.unit
@@ -273,8 +274,31 @@ def test_runner_keeps_blocked_outcome_after_pipeline_rollback() -> None:
     assert result.outcome == "blocked"
     assert result.reason_code == "quality_blocked"
     assert store.transitions == [
-        ("failed", "Không đạt quality gate ingest (no_chunks)")
+        ("failed", "Không đạt quality gate ingest (no_chunks). rolled back")
     ]
+
+
+def test_runner_keeps_actionable_source_collision_cause_from_the_real_pipeline(ingest_collision):
+    env = ingest_collision
+    before = env["state"]()
+    report = env["ingest"](env["incoming"])
+    assert report["quality_status"] == "blocked"
+    store = FakeStore()
+    runner = _runner(store=store, processor=FakeProcessor(IngestionProcessResult(
+        success=False, message=report["message"], report=report,
+    )))
+
+    result = runner.run(_job())
+
+    assert result.outcome == "blocked"
+    assert result.reason_code == "quality_blocked"
+    assert result.report["quality_reason_codes"] == report["quality_reason_codes"]
+    assert store.reports == [report]
+    assert store.transitions[0][0] == "failed"
+    assert "Không đạt quality gate ingest" in store.transitions[0][1]
+    assert report["message"] in store.transitions[0][1]
+    assert "hãy đổi tên tệp mới" in store.transitions[0][1]
+    assert env["state"]() == before
 
 
 def test_runner_fails_closed_when_failure_report_cannot_be_saved() -> None:

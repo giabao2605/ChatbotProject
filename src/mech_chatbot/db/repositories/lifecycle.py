@@ -92,19 +92,26 @@ def get_lifecycle_overview(soon_days=30):
 
 def set_document_lifecycle(doc_id, effective_date=None, expiry_date=None, review_date=None, reviewer=None):
     """P1-7: cap nhat ngay hieu luc / het han / han review cho 1 tai lieu."""
+    changes = [
+        (field, column, parameter, value)
+        for field, column, parameter, value in (
+            ("effective_date", "EffectiveDate", "ed", effective_date),
+            ("expiry_date", "ExpiryDate", "xd", expiry_date),
+            ("review_date", "ReviewDate", "rd", review_date),
+        ) if value not in (None, "")
+    ]
+    if not changes:
+        return False
     _ensure_engine()
     try:
         with engine.begin() as conn:
             result = conn.execute(text(
-                "UPDATE TaiLieu SET EffectiveDate = :ed, ExpiryDate = :xd, ReviewDate = :rd WHERE DocID = :d"
-            ), {"ed": effective_date, "xd": expiry_date, "rd": review_date, "d": doc_id})
+                "UPDATE TaiLieu SET " + ", ".join(f"{column} = :{parameter}" for _, column, parameter, _ in changes)
+                + " WHERE DocID = :d"
+            ), {"d": doc_id, **{parameter: value for _, _, parameter, value in changes}})
         if not (getattr(result, "rowcount", 0) or 0):
             return False
-        _r_qdrant.update_qdrant_metadata(doc_id, {
-            "effective_date": str(effective_date)[:10] if effective_date else None,
-            "expiry_date": str(expiry_date)[:10] if expiry_date else None,
-            "review_date": str(review_date)[:10] if review_date else None,
-        })
+        _r_qdrant.update_qdrant_metadata(doc_id, {field: str(value)[:10] for field, _, _, value in changes})
         _r_semantic_cache._invalidate_semantic_cache("lifecycle.update")
         try:
             _r_audit.write_audit_log(username=reviewer, action="document_lifecycle_update", entity_type="TaiLieu",

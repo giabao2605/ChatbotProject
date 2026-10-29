@@ -1,5 +1,6 @@
 import inspect
 import json
+from contextlib import nullcontext
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -434,8 +435,8 @@ def test_bulk_review_reports_valid_and_failed_items(
     published = []
 
     class Publication:
-        def resolve_latest_doc_id(self, _job_id):
-            return 42
+        def resolve_latest_doc_id(self, job_id):
+            return {9: 42, 10: 43}.get(job_id)
 
         def publish_document(self, command, actor):
             published.append((command, actor))
@@ -734,6 +735,58 @@ def test_pending_preview_requires_assigned_reviewer_before_file_resolution(monke
     )
     response = client_for(_profile("reviewer")).get("/api/files/review/documents/42/pages/1")
     assert response.status_code == 403
+
+
+@pytest.mark.parametrize("denial", [
+    "same_department_unassigned", "cross_department", "missing_document", "invalid_actor",
+])
+def test_publish_contract_denial_explains_policy_without_disclosing_target(
+    monkeypatch, client_for, denial,
+):
+    from mech_chatbot.db.repositories import publication
+
+    profile = _profile("reviewer")
+    row = {
+        "KnowledgeApproverUserID": 9087, "DepartmentApproverUserID": 9087,
+        "ActorActive": 1, "ActorInOwnerDepartment": 1,
+    }
+    if denial == "cross_department":
+        row = {**row, "ActorInOwnerDepartment": 0}
+    elif denial == "missing_document":
+        row = None
+    elif denial == "invalid_actor":
+        profile = {**profile, "user_id": "invalid"}
+    reads = []
+
+    def execute(statement, params):
+        reads.append((str(statement), params))
+        assert str(statement).lstrip().startswith("SELECT")
+        return SimpleNamespace(mappings=lambda: SimpleNamespace(first=lambda: row))
+
+    engine = SimpleNamespace(connect=lambda: nullcontext(SimpleNamespace(execute=execute)))
+    monkeypatch.setattr(document_routes, "validate_publish_actor", lambda doc_id, actor, roles: (
+        publication.validate_publish_actor(
+            doc_id, actor, roles, db_engine=engine,
+            policy=SimpleNamespace(allow_admin_approval_override=False),
+        )
+    ))
+    monkeypatch.setattr(document_routes, "validate_publish_contract", lambda *_args: (
+        pytest.fail("denied actor must not inspect the publication contract")
+    ))
+    for name in ("reject_document", "archive_document"):
+        monkeypatch.setattr(document_routes, name, lambda *_args, **_kwargs: (
+            pytest.fail("denied contract read must not write")
+        ))
+
+    response = client_for(profile).get("/api/documents/42/publish-contract")
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": (
+        "Không đủ quyền duyệt tài liệu. Hãy dùng tài khoản người duyệt được giao, "
+        "đang hoạt động và thuộc phòng ban sở hữu tài liệu."
+    )}
+    assert len(reads) == 1
+    assert reads[0][1] == {"doc_id": 42, "actor_id": None if denial == "invalid_actor" else 7}
 
 
 def test_pending_preview_serves_assigned_reviewers_page_and_inline_original(monkeypatch, client_for, tmp_path):

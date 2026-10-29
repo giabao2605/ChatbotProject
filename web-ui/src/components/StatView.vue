@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
-import { t } from "@/i18n";
+import { currentLocale, t } from "@/i18n";
 import type { ToolbarAction } from "@/types";
 
 const props = defineProps<{
@@ -29,6 +29,23 @@ type Section = TableSection | BarSection;
 
 const scalars = ref<Scalar[]>([]);
 const sections = ref<Section[]>([]);
+
+const reportLabels: Readonly<Record<string, string>> = {
+  days: "Số ngày", total_questions: "Tổng câu hỏi", total_sessions: "Tổng phiên", total_users: "Tổng người dùng",
+  no_answer_count: "Câu hỏi chưa có đáp án", no_answer_rate: "Tỷ lệ chưa có đáp án", likes: "Thích", dislikes: "Không thích",
+  top_questions: "Câu hỏi phổ biến", question: "Câu hỏi", count: "Số lượng", daily: "Theo ngày", date: "Ngày",
+  top_documents: "Tài liệu được sử dụng nhiều", document: "Tài liệu", department: "Phòng ban", by_department: "Theo phòng ban",
+  owned_total: "Tài liệu sở hữu", shared_access: "Tài liệu được chia sẻ", total: "Tổng số", pending_review: "Chờ duyệt",
+  published: "Đã xuất bản", confidential: "Tài liệu mật", failed_jobs: "Job lỗi", running_jobs: "Job đang chạy",
+  entries: "Mục cache", lookups: "Lượt tra cache", hits: "Lượt trúng cache", hit_rate: "Tỷ lệ trúng cache", cost_saved: "Chi phí tiết kiệm",
+  total_requests: "Tổng yêu cầu", total_cost: "Tổng chi phí", avg_latency_ms: "Độ trễ trung bình (ms)", refusal_rate: "Tỷ lệ từ chối",
+  requests: "Yêu cầu", tokens_in: "Token đầu vào", tokens_out: "Token đầu ra", cost: "Chi phí",
+  step_latency: "Độ trễ từng bước", refusals: "Yêu cầu bị từ chối", reason: "Lý do", top_costly: "Yêu cầu có chi phí cao nhất",
+};
+
+function reportLabel(key: string): string {
+  return currentLocale() === "vi" ? reportLabels[key] ?? key : key;
+}
 
 function isScalar(v: unknown): boolean {
   return v === null || ["string", "number", "boolean"].includes(typeof v);
@@ -190,13 +207,13 @@ onMounted(refresh);
     <template v-else>
       <div v-if="scalars.length" class="stat-grid">
         <Card v-for="item in scalars" :key="item.key">
-          <template #title><span v-text="item.key"></span></template>
+          <template #title><span v-text="reportLabel(item.key)"></span></template>
           <template #content><strong class="stat-number" v-text="item.value"></strong></template>
         </Card>
       </div>
 
       <Card v-for="section in sections" :key="section.key">
-        <template #title><span v-text="section.key"></span></template>
+        <template #title><span v-text="reportLabel(section.key)"></span></template>
         <template #content>
           <!-- Bieu do cot ngang cho map so lieu -->
           <div v-if="section.kind === 'bars'" class="bar-chart">
@@ -211,7 +228,7 @@ onMounted(refresh);
             <table class="stat-table">
               <thead>
                 <tr>
-                  <th v-for="col in section.columns" :key="col" v-text="col"></th>
+                  <th v-for="col in section.columns" :key="col" v-text="reportLabel(col)"></th>
                 </tr>
               </thead>
               <tbody>

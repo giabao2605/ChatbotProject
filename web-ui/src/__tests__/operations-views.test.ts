@@ -1,8 +1,15 @@
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import { defineComponent, nextTick, type Component } from "vue";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import PrimeVue from "primevue/config";
+import Button from "primevue/button";
+import Column from "primevue/column";
+import DataTable from "primevue/datatable";
+import Dialog from "primevue/dialog";
 import type { ApiRow, CreateForm, RowAction, ToolbarAction } from "@/types";
 import * as api from "@/api/client";
+import StatView from "@/components/StatView.vue";
+import ResourcePage from "@/components/ResourcePage.vue";
 import AccessView from "@/views/AccessView.vue";
 import AnalyticsView from "@/views/AnalyticsView.vue";
 import AuditView from "@/views/AuditView.vue";
@@ -17,6 +24,7 @@ import ObservabilityView from "@/views/ObservabilityView.vue";
 import QualityView from "@/views/QualityView.vue";
 import QueueView from "@/views/QueueView.vue";
 import RegressionView from "@/views/RegressionView.vue";
+import ReviewView from "@/views/ReviewView.vue";
 
 const state = vi.hoisted(() => ({
   replace: vi.fn(),
@@ -80,7 +88,7 @@ const ButtonStub = defineComponent({
 const DialogStub = defineComponent({
   name: "Dialog",
   props: { visible: Boolean, header: String },
-  emits: ["update:visible", "hide"],
+  emits: ["update:visible", "hide", "after-hide"],
   template: '<div v-if="visible" class="dialog-stub"><slot /><slot name="footer" /></div>',
 });
 
@@ -286,7 +294,20 @@ beforeEach(() => {
 });
 
 describe("thin operations views", () => {
+  it("labels feedback quality scores and sample counts without extraction-score ambiguity", () => {
+    const wrapper = mountView(QualityView);
+    const columns = wrapper.findComponent(ResourcePageStub).props("columns") as { field: string; header: string }[];
+    expect(columns).toEqual(expect.arrayContaining([
+      { field: "quality", header: "Điểm phản hồi" },
+      { field: "wl", header: "Thích có trọng số" },
+      { field: "wd", header: "Không thích có trọng số" },
+      { field: "n", header: "Số phản hồi" },
+      { field: "reliable", header: "Đủ mẫu đánh giá" },
+    ]));
+  });
+
   it("runs analytics, observability, audit, and quality contracts", async () => {
+    state.roles = [...state.roles, "platform_admin"];
     const analytics = mountView(AnalyticsView);
     for (const stat of analytics.findAllComponents(StatViewStub)) {
       await (stat.props("load") as () => Promise<unknown>)();
@@ -309,6 +330,26 @@ describe("thin operations views", () => {
     expect(vi.mocked(api.apiSend)).toHaveBeenCalledWith("/api/quality/cleanup", "POST");
   });
 
+  it.each([
+    [["reviewer"], ["Báo cáo sử dụng", "Theo phòng ban"], ["/api/analytics/usage", "/api/analytics/departments"]],
+    [["admin"], ["Báo cáo sử dụng", "Theo phòng ban"], ["/api/analytics/usage", "/api/analytics/departments"]],
+    [["platform_admin"], ["Semantic cache"], ["/api/analytics/cache"]],
+    [["reviewer", "platform_admin"], ["Báo cáo sử dụng", "Theo phòng ban", "Semantic cache"], ["/api/analytics/usage", "/api/analytics/departments", "/api/analytics/cache"]],
+    [["viewer"], [], []],
+  ])("renders and requests only permitted analytics for %j", async (roles, titles, paths) => {
+    state.roles = roles;
+    const wrapper = mount(AnalyticsView, {
+      global: { stubs: { Button: ButtonStub, Card: stubs.Card, Message: stubs.Message, ProgressSpinner: true } },
+    });
+    try {
+      await flushPromises();
+      expect(vi.mocked(api.apiGet).mock.calls.map(([path]) => path)).toEqual(paths);
+      expect(wrapper.findAllComponents(StatView).map((item) => item.props("title"))).toEqual(titles);
+    } finally {
+      wrapper.unmount();
+    }
+  });
+
   it("switches dictionary tabs and renders help content", async () => {
     const dictionary = mountView(DictionaryView);
     expect(dictionary.find(".materials-view-stub").exists()).toBe(true);
@@ -324,6 +365,168 @@ describe("thin operations views", () => {
 });
 
 describe("access and document operations", () => {
+  it.each(["Escape", "Huỷ", "header"])("unlocks metadata editing and restores its opener after %s", async (closeWith) => {
+    vi.mocked(api.apiGet).mockImplementation(async (path) => {
+      if (path === "/api/documents") return { documents: [{ DocID: 7, Title: "Bơm" }] } as never;
+      throw new Error(`Unexpected GET ${path}`);
+    });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const wrapper = mount(DocumentsView, {
+      attachTo: host,
+      global: {
+        plugins: [[PrimeVue, { unstyled: true }]],
+        components: { Button, Column, DataTable, Dialog },
+        stubs: { Card: stubs.Card, InputText: InputTextStub, Message: stubs.Message, ProgressSpinner: true, Textarea: true, Tag: true, transition: false },
+      },
+    });
+    try {
+      await flushPromises();
+      const trigger = button(wrapper.findComponent(ResourcePage), "Sửa metadata");
+      const opener = trigger.element as HTMLButtonElement;
+      opener.focus();
+      await trigger.trigger("click");
+      await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')?.contains(document.activeElement)).toBe(true));
+      expect(opener.disabled).toBe(true);
+      if (closeWith === "Escape") document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
+      else document.querySelector<HTMLButtonElement>(closeWith === "Huỷ" ? '[role="dialog"] button[aria-label="Huỷ"]' : '[role="dialog"] button')!.click();
+      await vi.waitFor(() => {
+        expect(document.querySelector('[role="dialog"]')).toBeNull();
+        expect(opener.disabled).toBe(false);
+        expect(document.activeElement).toBe(opener);
+      });
+      opener.click();
+      await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')?.contains(document.activeElement)).toBe(true));
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
+      await vi.waitFor(() => expect(opener.disabled).toBe(false));
+      expect(api.apiSend).not.toHaveBeenCalled();
+    } finally {
+      wrapper.unmount();
+      host.remove();
+    }
+  });
+
+  it.each(["Xuất bản (version)", "Xuất bản (variant)", "Xuất bản (độc lập)"])("restores the %s opener after dismissing an async invalid contract", async (label) => {
+    let resolveContract!: (value: unknown) => void;
+    vi.mocked(api.apiGet).mockImplementation((path) => {
+      if (path.endsWith("/publish-contract")) return new Promise((resolve) => { resolveContract = resolve; }) as never;
+      if (path === "/api/documents/pending-review") return Promise.resolve({ documents: [{ DocID: 7, JobID: 13 }] }) as never;
+      if (path === "/api/ingestion/bulk-action-jobs") return Promise.resolve({ jobs: [] }) as never;
+      if (path === "/api/documents/bulk-meta") return Promise.resolve({ documents: [], departments: [] }) as never;
+      throw new Error(`Unexpected GET ${path}`);
+    });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const wrapper = mount(ReviewView, {
+      attachTo: host,
+      global: {
+        plugins: [[PrimeVue, { unstyled: true }]],
+        components: { Button, Column, DataTable, Dialog },
+        stubs: { Card: stubs.Card, InputText: InputTextStub, Message: stubs.Message, ProgressSpinner: true, Textarea: true, Tag: true, transition: false },
+      },
+    });
+    try {
+      await flushPromises();
+      const trigger = button(wrapper.findComponent(ResourcePage), label);
+      const opener = trigger.element as HTMLButtonElement;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        opener.focus();
+        await trigger.trigger("click");
+        expect(opener.disabled).toBe(true);
+        // jsdom keeps focus on disabled buttons; Chrome blurs the async action opener.
+        opener.blur();
+        resolveContract({ valid: false, issues: [{ field: "title", code: "required", message: "Thiếu tiêu đề" }] });
+        await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')?.contains(document.activeElement)).toBe(true));
+        expect(opener.disabled).toBe(false);
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
+        await vi.waitFor(() => {
+          expect(document.querySelector('[role="dialog"]')).toBeNull();
+          expect(document.activeElement).toBe(opener);
+        });
+      }
+      if (label === "Xuất bản (version)") {
+        const otherInput = document.createElement("input");
+        host.append(otherInput);
+        for (const destination of ["other input", "removed opener"]) {
+          opener.focus();
+          await trigger.trigger("click");
+          resolveContract({ valid: false, issues: [{ code: "required" }] });
+          await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')?.contains(document.activeElement)).toBe(true));
+          if (destination === "other input") {
+            otherInput.focus();
+            wrapper.findComponent(Dialog).vm.$emit("after-hide");
+            await flushPromises();
+            expect(document.activeElement).toBe(otherInput);
+          } else opener.remove();
+          document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
+          await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+          await flushPromises();
+          if (destination === "removed opener") expect(document.activeElement).toBe(document.body);
+        }
+      }
+      expect(api.apiSend).not.toHaveBeenCalled();
+    } finally {
+      wrapper.unmount();
+      host.remove();
+    }
+  });
+
+  it.each([
+    ["Thu hồi mức mật", "Escape"],
+    ["Thu hồi mức mật", "Huỷ"],
+    ["Thu hồi phòng ban", "Escape"],
+    ["Thu hồi phòng ban", "Huỷ"],
+  ])("unlocks and focuses %s after closing with %s", async (label, closeWith) => {
+    state.roles = ["admin"];
+    const host = document.createElement("div");
+    document.body.append(host);
+    const wrapper = mount(AccessView, {
+      attachTo: host,
+      global: {
+        plugins: [[PrimeVue, { unstyled: true }]],
+        components: { Button, Column, DataTable, Dialog },
+        stubs: {
+          Card: stubs.Card,
+          InputText: InputTextStub,
+          Message: stubs.Message,
+          ProgressSpinner: true,
+          Tag: true,
+          Textarea: true,
+          transition: false,
+        },
+      },
+    });
+    try {
+      await flushPromises();
+      const users = wrapper.findAllComponents(ResourcePage).find((item) => item.props("title") === "Quản lý quyền người dùng")!;
+      const trigger = button(users, label);
+      const opener = trigger.element as HTMLButtonElement;
+      opener.focus();
+      await trigger.trigger("click");
+      await vi.waitFor(() => {
+        const dialog = document.querySelector('[role="dialog"]');
+        expect(dialog).not.toBeNull();
+        expect(dialog!.contains(document.activeElement)).toBe(true);
+      });
+      expect(opener.disabled).toBe(true);
+      if (closeWith === "Escape") {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
+      } else {
+        document.querySelector<HTMLButtonElement>('[role="dialog"] button[aria-label="Huỷ"]')!.click();
+      }
+      await vi.waitFor(() => {
+        expect(document.querySelector('[role="dialog"]')).toBeNull();
+        expect(opener.disabled).toBe(false);
+        expect(document.activeElement).toBe(opener);
+      });
+      expect(users.findAll(".row-actions button").every((item) => !(item.element as HTMLButtonElement).disabled)).toBe(true);
+      expect(api.apiSend).not.toHaveBeenCalled();
+    } finally {
+      wrapper.unmount();
+      host.remove();
+    }
+  });
+
   it("loads and executes access request and revocation contracts", async () => {
     const wrapper = mountView(AccessView);
     await flushPromises();
@@ -457,6 +660,7 @@ describe("dictionary and quality resources", () => {
     await button(wrapper, "Xoá", ".dialog-stub button").trigger("click");
     await flushPromises();
     await button(wrapper, "Đóng", ".dialog-stub button").trigger("click");
+    wrapper.findComponent(DialogStub).vm.$emit("after-hide");
     await synonym;
 
     expect(vi.mocked(api.apiSend)).toHaveBeenCalledWith(
@@ -495,6 +699,194 @@ describe("dictionary and quality resources", () => {
 });
 
 describe("lifecycle, queue, and regression operations", () => {
+  it.each(["Đã rà soát", "Đặt ngày"])("keeps lifecycle %s open during save and refreshes once", async (label) => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const wrapper = mount(LifecycleView, {
+      attachTo: host,
+      props: { group: "expired" },
+      global: {
+        plugins: [[PrimeVue, { unstyled: true }]],
+        components: { Button, Column, DataTable, Dialog },
+        stubs: {
+          Card: stubs.Card, InputText: InputTextStub, Message: stubs.Message,
+          ProgressSpinner: true, Tag: true, transition: false,
+        },
+      },
+    });
+    try {
+      await flushPromises();
+      const trigger = button(wrapper, label);
+      const opener = trigger.element as HTMLButtonElement;
+      opener.focus();
+      await trigger.trigger("click");
+      await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+      let finish!: (value: unknown) => void;
+      vi.mocked(api.apiSend).mockImplementation(() => new Promise((resolve) => { finish = resolve; }) as never);
+      document.querySelector<HTMLButtonElement>('[role="dialog"] button[aria-label="Lưu"]')!.click();
+      await flushPromises();
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
+      await flushPromises();
+      expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+      expect(document.querySelector('[role="dialog"] [data-pc-group-section="headericon"]')).toBeNull();
+      expect(opener.disabled).toBe(true);
+      finish({ ok: true });
+      await vi.waitFor(() => {
+        expect(document.querySelector('[role="dialog"]')).toBeNull();
+        expect(opener.disabled).toBe(false);
+        expect(document.activeElement).toBe(opener);
+      });
+      expect(api.apiSend).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(api.apiGet).mock.calls.filter(([path]) => path === "/api/lifecycle")).toHaveLength(2);
+    } finally {
+      wrapper.unmount();
+      host.remove();
+    }
+  });
+
+  it("sends only one lifecycle request when save is clicked twice before repaint", async () => {
+    let finish!: (value: unknown) => void;
+    vi.mocked(api.apiSend).mockImplementation(() => new Promise((resolve) => { finish = resolve; }) as never);
+    const wrapper = mountView(LifecycleView, { group: "expired" });
+    const pending = pages(wrapper)[0].rowActions![0].run({ doc_id: 9, file: "pump.pdf" });
+    await nextTick();
+    const save = button(wrapper, "Lưu", ".dialog-stub button").element as HTMLButtonElement;
+    save.click();
+    save.click();
+    expect(api.apiSend).toHaveBeenCalledTimes(1);
+    finish({ ok: true });
+    await pending;
+    wrapper.unmount();
+  });
+
+  it.each(["-1", "0", "1.5", ""])("rejects invalid lifecycle review days %j and allows correction", async (days) => {
+    const wrapper = mountView(LifecycleView, { group: "expired" });
+    const resolved = vi.fn();
+    const pending = pages(wrapper)[0].rowActions![0].run({ doc_id: 9, file: "pump.pdf" }).then(resolved);
+    await nextTick();
+    const input = wrapper.find('.dialog-stub input[type="number"]');
+    expect((input.element as HTMLInputElement).value).toBe("180");
+    await input.setValue(days);
+    await button(wrapper, "Lưu", ".dialog-stub button").trigger("click");
+    await flushPromises();
+    expect(api.apiSend).not.toHaveBeenCalled();
+    expect(wrapper.find(".dialog-stub").exists()).toBe(true);
+    expect(wrapper.text()).toContain("Nhập số ngày nguyên từ 1 trở lên.");
+    expect(resolved).not.toHaveBeenCalled();
+    await input.setValue("1");
+    await button(wrapper, "Lưu", ".dialog-stub button").trigger("click");
+    await pending;
+    expect(api.apiSend).toHaveBeenCalledWith("/api/lifecycle/documents/9/reviewed", "POST", { next_review_days: 1 });
+    wrapper.unmount();
+  });
+
+  it.each([
+    ["queue", QueueView, "Xoá nhiều job", "/api/ingestion/jobs", "Huỷ"],
+    ["queue", QueueView, "Xoá nhiều job", "/api/ingestion/jobs", "Escape"],
+    ["documents", DocumentsView, "Xóa nhiều DocID", "/api/documents", "Huỷ"],
+    ["documents", DocumentsView, "Xóa nhiều DocID", "/api/documents", "Escape"],
+    ["queue", QueueView, "Xoá nhiều job", "/api/ingestion/jobs", "inflight"],
+    ["documents", DocumentsView, "Xóa nhiều DocID", "/api/documents", "inflight"],
+  ] as const)("%s bulk dialog returns toolbar focus", async (_name, view, label, path, closeWith) => {
+    vi.mocked(api.apiGet).mockImplementation((path) => Promise.resolve(responseFor(path)) as never);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const wrapper = mount(view as never, {
+      attachTo: host,
+      global: {
+        plugins: [[PrimeVue, { unstyled: true }]],
+        components: { Button, Column, DataTable, Dialog },
+        stubs: {
+          Card: stubs.Card, InputText: InputTextStub, Message: stubs.Message,
+          ProgressSpinner: true, Tag: true, Textarea: true, transition: false,
+        },
+      },
+    });
+    try {
+      await flushPromises();
+      const trigger = button(wrapper, label);
+      const opener = trigger.element as HTMLButtonElement;
+      opener.focus();
+      await trigger.trigger("click");
+      await vi.waitFor(() => {
+        const dialog = document.querySelector('[role="dialog"]');
+        expect(dialog).not.toBeNull();
+        expect(dialog!.contains(document.activeElement)).toBe(true);
+      });
+      expect(opener.disabled).toBe(true);
+      if (closeWith === "inflight") {
+        let finish!: (value: unknown) => void;
+        vi.mocked(api.apiSend).mockImplementation(() => new Promise((resolve) => { finish = resolve; }) as never);
+        const ids = document.querySelector<HTMLTextAreaElement>('[role="dialog"] textarea')!;
+        ids.value = "7";
+        ids.dispatchEvent(new Event("input", { bubbles: true }));
+        await nextTick();
+        const deleteLabel = _name === "queue" ? "Xoá" : "Xóa";
+        document.querySelector<HTMLButtonElement>(`[role="dialog"] button[aria-label="${deleteLabel}"]`)!.click();
+        await flushPromises();
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
+        await flushPromises();
+        expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+        expect(document.querySelector('[role="dialog"] [data-pc-group-section="headericon"]')).toBeNull();
+        expect(opener.disabled).toBe(true);
+        finish({ ok: true, deleted: 1, failed: 0 });
+        await flushPromises();
+      } else if (closeWith === "Escape") {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
+      } else {
+        const cancel = document.querySelector<HTMLButtonElement>('[role="dialog"] button[aria-label="Huỷ"]')!;
+        cancel.focus();
+        cancel.click();
+      }
+      await vi.waitFor(() => {
+        expect(document.querySelector('[role="dialog"]')).toBeNull();
+        expect(opener.disabled).toBe(false);
+        expect(document.activeElement).toBe(opener);
+      });
+      expect(wrapper.findAll(".row-actions button").every((item) => !(item.element as HTMLButtonElement).disabled)).toBe(true);
+      if (closeWith === "inflight") expect(api.apiSend).toHaveBeenCalledTimes(1);
+      else expect(api.apiSend).not.toHaveBeenCalled();
+      expect(vi.mocked(api.apiGet).mock.calls.filter(([requestPath]) => requestPath === path)).toHaveLength(closeWith === "inflight" ? 2 : 1);
+    } finally {
+      wrapper.unmount();
+      host.remove();
+    }
+  });
+
+  it.each([
+    ["feedback", FeedbackView, {}, { FeedbackID: 3 }],
+    ["lifecycle", LifecycleView, { group: "expired" }, { doc_id: 9, file: "pump.pdf" }],
+  ] as const)("settles %s cancellation only after the dialog has hidden", async (_name, view, props, row) => {
+    const wrapper = mountView(view, props);
+    const rejected = vi.fn();
+    const pending = pages(wrapper)[0].rowActions![0].run(row).catch(rejected);
+    await nextTick();
+    const dialog = wrapper.findComponent(DialogStub);
+    await button(wrapper, "Huỷ", ".dialog-stub button").trigger("click");
+    expect(wrapper.find(".dialog-stub").exists()).toBe(false);
+    expect(rejected).not.toHaveBeenCalled();
+    dialog.vm.$emit("after-hide");
+    await pending;
+    expect(rejected).toHaveBeenCalledWith(expect.any(Error));
+    wrapper.unmount();
+  });
+
+  it.each([0, 1])("keeps lifecycle action %s open when the API reports failure", async (actionIndex) => {
+    vi.mocked(api.apiSend).mockResolvedValue({ ok: false } as never);
+    const wrapper = mountView(LifecycleView, { group: "expired" });
+    const resolved = vi.fn();
+    void pages(wrapper)[0].rowActions![actionIndex].run({
+      doc_id: 9, file: "pump.pdf", effective_date: "2026-01-01",
+    }).then(resolved).catch(() => {});
+    await nextTick();
+    await button(wrapper, "Lưu", ".dialog-stub button").trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".dialog-stub").exists()).toBe(true);
+    expect(wrapper.text()).toContain("Không cập nhật được tài liệu.");
+    expect(resolved).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
   it("loads lifecycle groups and submits review and date changes", async () => {
     const wrapper = mountView(LifecycleView, { group: "expired" });
     const contract = pages(wrapper)[0];
@@ -558,23 +950,39 @@ describe("lifecycle, queue, and regression operations", () => {
     );
   });
 
-  it("keeps the bulk delete dialog open when a job ID does not exist", async () => {
-    vi.mocked(api.apiSend).mockImplementation((path) =>
-      Promise.resolve(path === "/api/ingestion/jobs/bulk-delete"
-        ? { ok: false, deleted: 0, failed: 1 }
-        : { ok: true }) as never,
-    );
-    const wrapper = mountView(QueueView);
+  it.each([
+    ["queue", QueueView, 0, "Xoá", "response"],
+    ["queue", QueueView, 1, "Xoá", "response"],
+    ["documents", DocumentsView, 0, "Xóa", "response"],
+    ["documents", DocumentsView, 1, "Xóa", "response"],
+    ["documents", DocumentsView, 1, "Xóa", "http"],
+  ] as const)("%s bulk failures preserve completed changes for refresh", async (name, view, deleted, deleteLabel, failure) => {
+    if (name === "queue") vi.mocked(api.apiSend).mockResolvedValue({ ok: false, deleted, failed: 1 } as never);
+    else {
+      if (deleted) vi.mocked(api.apiSend).mockResolvedValueOnce({ ok: true } as never);
+      if (failure === "http") vi.mocked(api.apiSend).mockRejectedValue(new Error("Forbidden"));
+      else vi.mocked(api.apiSend).mockResolvedValue({ ok: false } as never);
+    }
+    const wrapper = mountView(view);
     await flushPromises();
-    const pending = pages(wrapper)[0].toolbar?.[0].run().catch(() => undefined);
+    const resolved = vi.fn();
+    const rejected = vi.fn();
+    const pending = pages(wrapper)[0].toolbar![0].run().then(resolved, rejected);
     await nextTick();
-    await wrapper.find(".dialog-stub textarea").setValue("2147483647");
-    await button(wrapper, "Xoá", ".dialog-stub button").trigger("click");
+    await wrapper.find(".dialog-stub textarea").setValue("7, 8");
+    await button(wrapper, deleteLabel, ".dialog-stub button").trigger("click");
     await flushPromises();
-
-    expect(wrapper.find(".dialog-stub").text()).toContain("1 JobID không xóa được");
+    expect(wrapper.find(".dialog-stub").exists()).toBe(true);
+    expect(wrapper.find(".dialog-stub").text()).toMatch(/không xóa được|Không xóa được|Forbidden/);
+    expect(resolved).not.toHaveBeenCalled();
+    expect(rejected).not.toHaveBeenCalled();
+    const dialog = wrapper.findAllComponents(DialogStub).find((item) => item.props("visible"))!;
     await button(wrapper, "Huỷ", ".dialog-stub button").trigger("click");
+    dialog.vm.$emit("after-hide");
     await pending;
+    expect(resolved).toHaveBeenCalledTimes(deleted ? 1 : 0);
+    expect(rejected).toHaveBeenCalledTimes(deleted ? 0 : 1);
+    wrapper.unmount();
   });
 
   it("loads, edits, and runs the regression suite", async () => {

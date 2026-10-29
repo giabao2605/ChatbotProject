@@ -4,6 +4,8 @@ import { setLocale } from "@/i18n";
 import type { Locale } from "@/i18n";
 import type { UserProfile } from "@/types";
 
+export const LOGOUT_STORAGE_KEY = "mech-chatbot.logout";
+
 function syncLocale(user: UserProfile | null) {
   const pref = user?.preferred_language;
   if (pref === "vi" || pref === "en") setLocale(pref);
@@ -15,38 +17,55 @@ export const useAuthStore = defineStore("auth", {
     ready: false,
     loading: false,
     error: "",
+    sessionRevision: 0,
   }),
   getters: {
     isAdmin: (state) => state.user?.roles.includes("admin") ?? false,
   },
   actions: {
+    invalidateSession() {
+      this.sessionRevision += 1;
+      this.user = null;
+      this.ready = true;
+      this.loading = false;
+      this.error = "";
+    },
     async loadMe() {
+      const revision = this.sessionRevision;
       try {
-        this.user = await api.loadMe();
+        const user = await api.loadMe();
+        if (revision !== this.sessionRevision) return;
+        this.user = user;
         syncLocale(this.user);
       } catch {
-        this.user = null;
+        if (revision === this.sessionRevision) this.user = null;
       } finally {
-        this.ready = true;
+        if (revision === this.sessionRevision) this.ready = true;
       }
     },
     async login(username: string, password: string) {
+      const revision = this.sessionRevision;
       this.loading = true;
       this.error = "";
       try {
-        this.user = await api.login(username, password);
+        const user = await api.login(username, password);
+        if (revision !== this.sessionRevision) return;
+        this.user = user;
         syncLocale(this.user);
         this.ready = true;
       } catch (error) {
-        this.error = error instanceof Error ? error.message : "Đăng nhập thất bại";
+        if (revision === this.sessionRevision) this.error = error instanceof Error ? error.message : "Đăng nhập thất bại";
         throw error;
       } finally {
-        this.loading = false;
+        if (revision === this.sessionRevision) this.loading = false;
       }
     },
     async refresh() {
+      const revision = this.sessionRevision;
       try {
-        this.user = await api.refreshSession();
+        const user = await api.refreshSession();
+        if (revision !== this.sessionRevision) return false;
+        this.user = user;
         syncLocale(this.user);
         this.ready = true;
         return true;
@@ -65,7 +84,12 @@ export const useAuthStore = defineStore("auth", {
     },
     async logout() {
       await api.logout();
-      this.user = null;
+      this.invalidateSession();
+      try {
+        localStorage.setItem(LOGOUT_STORAGE_KEY, `${Date.now()}:${Math.random()}`);
+      } catch {
+        // The server session is revoked; unavailable storage must not block local logout.
+      }
     },
   },
 });

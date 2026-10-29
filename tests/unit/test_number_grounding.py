@@ -1,6 +1,8 @@
 import pytest
 
 from mech_chatbot.rag.evidence_gate import (
+    EvidenceState,
+    evaluate_answerability,
     find_unsupported_numbers,
     has_unsupported_numbers,
     heuristic_missing_evidence_reason,
@@ -8,6 +10,31 @@ from mech_chatbot.rag.evidence_gate import (
 
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize("context", [
+    "QA-20261003-FORMAT-TXT-01 Technical procedure version 1\nAssembly torque: 19 N.m.\nHolding time: 37 minutes.",
+    "document version setting value unit\nQA-20261003-FORMAT-CSV-01 1 torque 31 N.m\nQA-20261003-FORMAT-CSV-01 1 hold 43 minutes",
+    "Slide 1: QA-20261003-FORMAT-PPTX-01\nTechnical procedure version 1\nTorque: 47 N.m\nHold: 53 minutes",
+    "Holding time: 37.5 min.",
+])
+def test_time_gate_accepts_explicit_numeric_english_minutes(context):
+    decision = evaluate_answerability(
+        "Mô-men siết và thời gian giữ là bao nhiêu?", context,
+    )
+    assert decision.state is EvidenceState.SUFFICIENT
+
+
+@pytest.mark.parametrize("context", [
+    "Technical procedure version 37. Torque: 19 N.m.",
+    "Holding time: minutes; value not specified.",
+    "Contains 37 minerals and 19 N.m torque.",
+])
+def test_time_gate_still_rejects_missing_numeric_duration(context):
+    decision = evaluate_answerability(
+        "Mô-men siết và thời gian giữ là bao nhiêu?", context,
+    )
+    assert decision.state is EvidenceState.INSUFFICIENT
 
 
 @pytest.mark.parametrize("source,answer", [("1,500", "1500"), ("1.500", "1500"), ("12,50", "12.5")])

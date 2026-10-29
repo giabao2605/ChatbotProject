@@ -178,7 +178,7 @@ def test_published_document_cannot_be_reingested(install_engine, monkeypatch):
         if "FROM dbo.DepartmentKnowledgeGovernance" in sql:
             return _Result()
         if "SELECT DocID, LifecycleStatus" in sql:
-            return _Result([(42, "published", "approved", 1)])
+            return _Result([(42, "published", "approved", 1, None)])
         return _Result()
 
     connection = install_engine(handle)
@@ -207,7 +207,7 @@ def test_reingest_resets_a_draft_to_review_with_safe_classification_defaults(
         if "FROM dbo.DepartmentKnowledgeGovernance" in sql:
             return _Result()
         if "SELECT DocID, LifecycleStatus" in sql:
-            return _Result([(42, "draft", "rejected", 0)])
+            return _Result([(42, "draft", "rejected", 0, "C:/uploads/drawing.pdf")])
         return _Result()
 
     connection = install_engine(handle)

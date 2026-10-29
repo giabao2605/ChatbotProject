@@ -350,6 +350,72 @@ def test_context_analysis_provider_failure_returns_safe_fallback(monkeypatch, er
         assert executor.future.cancelled is True
 
 
+@pytest.mark.parametrize("question", [
+    "Mô-men siết và thời gian giữ của biến thể đó là bao nhiêu?",
+    "What are the tightening torque and holding time of that variant?",
+])
+def test_restored_history_referent_rewrites_without_in_memory_anchors(question):
+    history = [
+        {"role": "user", "content": (
+            "Mô-men siết và thời gian giữ của biến thể Beta trong tài liệu "
+            "QA_20260924_browser_firefox_variant_beta.md là bao nhiêu? Trích nguồn."
+        )},
+        {"role": "assistant", "content": (
+            "- **Mô-men siết:** 61 N.m\n- **Thời gian giữ:** 17 phút\n\n"
+            "[Nguồn: QA_20260924_browser_firefox_variant_beta.md, Trang 1, "
+            "Version 1, SourceID D1150P1]"
+        )},
+    ]
+    standalone = "Mô-men siết và thời gian giữ của biến thể Beta là bao nhiêu?"
+    calls = []
+
+    def provider(messages, **kwargs):
+        calls.append((messages[0].content, kwargs))
+        return SimpleNamespace(content=(
+            '{"context_action":"continue","standalone_question":"' + standalone + '"}'
+        ))
+
+    assert intent.analyze_context(
+        question, chat_history=history, current_part_ids=[], active_doc_refs=None,
+        invoke_provider=provider, trace_id="restored-history", runtime=_runtime(),
+    ) == {
+        "context_action": "continue", "standalone_question": standalone,
+        "llm_resolved": True,
+    }
+    assert len(calls) == 1
+    prompt, kwargs = calls[0]
+    assert history[0]["content"] in prompt and history[1]["content"] in prompt
+    assert kwargs == {"surface": "query_disambiguation", "trace_id": "restored-history"}
+
+
+@pytest.mark.parametrize(("history", "enabled", "question"), [
+    (None, True, "Mô-men siết và thời gian giữ của biến thể đó là bao nhiêu?"),
+    ([{"role": "user", "content": "Tra biến thể Beta"}], False,
+     "Mô-men siết và thời gian giữ của biến thể đó là bao nhiêu?"),
+    ([{"role": "user", "content": "Tra biến thể Beta"}], True,
+     "Mô-men siết và thời gian giữ của biến thể Gamma là bao nhiêu?"),
+    ([{"role": "user", "content": "Tra biến thể Beta"}], True,
+     "Mô-men siết và thời gian giữ của biến thể đó của AB-120 là bao nhiêu?"),
+])
+def test_referent_rewrite_preserves_fresh_disabled_and_explicit_target_paths(
+    history, enabled, question,
+):
+    calls = []
+
+    def provider(*_args, **_kwargs):
+        calls.append(True)
+        raise AssertionError("request must keep the existing no-rewrite path")
+
+    assert intent.analyze_context(
+        question, chat_history=history, current_part_ids=[], active_doc_refs=None,
+        invoke_provider=provider, runtime=_runtime(rewrite_enabled=enabled),
+    ) == {
+        "context_action": "continue", "standalone_question": question,
+        "llm_resolved": False,
+    }
+    assert calls == []
+
+
 def test_runtime_factory_owns_executor_lifecycle(monkeypatch):
     created = []
 

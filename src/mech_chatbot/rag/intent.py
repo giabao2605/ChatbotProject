@@ -16,6 +16,7 @@ from qdrant_client import models
 from mech_chatbot.config.logging import logger
 from mech_chatbot.llm.external_ai import ExternalAICallCancelled
 from mech_chatbot.llm.llm_client import cohere_invoke
+from mech_chatbot.rag.conversation_state import has_missing_referent
 from mech_chatbot.rag.entity_resolver import extract_explicit_codes
 from mech_chatbot.rag.execution import RequestBudgetExceeded
 from mech_chatbot.rag.rbac import (
@@ -530,6 +531,7 @@ def analyze_context(user_question, chat_history=None, current_part_ids=None, act
     _has_followup_signal = (
         any(m in _q_ctx for m in _followup_markers)
         or len(_q_ctx.split()) <= 6
+        or has_missing_referent(user_question)
     )
     # Coi active_doc_refs nhu mot "neo" -> van cho LLM chay de phan biet continue /
     # switch_topic ke ca voi cau dai KHONG co tu khoa tiep dien.

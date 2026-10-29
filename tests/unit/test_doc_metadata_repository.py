@@ -1,6 +1,7 @@
 from contextlib import contextmanager
 
 import pytest
+from sqlalchemy import create_engine, text
 
 from mech_chatbot.db.repositories import doc_metadata
 
@@ -262,7 +263,7 @@ def test_set_document_attributes_rejects_empty_id_and_fails_closed(monkeypatch):
 
 
 def test_update_common_metadata_updates_all_boundaries_and_survives_qdrant_failure(monkeypatch):
-    engine = _Engine(lambda _query, _params: _Result())
+    engine = _Engine(lambda _query, _params: _Result(row=(1,)))
     monkeypatch.setattr(doc_metadata, "engine", engine)
     attribute_calls = []
     monkeypatch.setattr(
@@ -303,7 +304,7 @@ def test_update_common_metadata_updates_all_boundaries_and_survives_qdrant_failu
         parent_page="3",
     ) is True
 
-    query, params = engine.calls[0]
+    query, params = engine.calls[-1]
     assert "Title = :title" in query
     assert "Summary = :summary" in query
     assert "Tags" not in query
@@ -325,7 +326,7 @@ def test_update_common_metadata_updates_all_boundaries_and_survives_qdrant_failu
 
 
 def test_update_common_metadata_supports_clear_values_and_attribute_only_update(monkeypatch):
-    engine = _Engine(lambda _query, _params: _Result())
+    engine = _Engine(lambda _query, _params: _Result(row=(1,)))
     monkeypatch.setattr(doc_metadata, "engine", engine)
     monkeypatch.setattr(doc_metadata, "set_document_attributes", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(doc_metadata._r_qdrant, "update_qdrant_metadata", lambda *_args: True)
@@ -339,7 +340,7 @@ def test_update_common_metadata_supports_clear_values_and_attribute_only_update(
         knowledge_approver_user_id=8,
         parent_applicable=False,
     ) is True
-    assert engine.calls[0][1] == {
+    assert engine.calls[-1][1] == {
         "d": 3,
         "knowledge_owner_user_id": None,
         "knowledge_approver_user_id": 8,
@@ -348,11 +349,11 @@ def test_update_common_metadata_supports_clear_values_and_attribute_only_update(
 
     engine.calls.clear()
     assert doc_metadata.update_document_common_metadata(3, attributes={}) is True
-    assert engine.calls == []
+    assert engine.calls == [("SELECT 1 FROM TaiLieu WHERE DocID = :d", {"d": 3})]
 
 
 def test_update_common_metadata_accepts_non_string_common_value_and_skips_none_governance(monkeypatch):
-    engine = _Engine(lambda _query, _params: _Result())
+    engine = _Engine(lambda _query, _params: _Result(row=(1,)))
     monkeypatch.setattr(doc_metadata, "engine", engine)
     monkeypatch.setattr(doc_metadata._r_qdrant, "update_qdrant_metadata", lambda *_args: True)
     monkeypatch.setattr(doc_metadata._r_audit, "write_audit_log", lambda *_args: None)
@@ -364,7 +365,7 @@ def test_update_common_metadata_accepts_non_string_common_value_and_skips_none_g
         knowledge_owner_user_id=None,
     ) is True
 
-    assert engine.calls[0][1] == {"d": 3, "issued_date": 20260720}
+    assert engine.calls[-1][1] == {"d": 3, "issued_date": 20260720}
 
 
 @pytest.mark.parametrize(
@@ -429,3 +430,43 @@ def test_get_common_metadata_for_rag_handles_empty_engine_and_query_failure(monk
     engine = _Engine(lambda _query, _params: (_ for _ in ()).throw(RuntimeError("db")))
     monkeypatch.setattr(doc_metadata, "engine", engine)
     assert doc_metadata.get_common_metadata_for_rag([1]) == {}
+
+
+@pytest.fixture
+def metadata_sqlite(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE TaiLieu (DocID INTEGER PRIMARY KEY, Title TEXT, Site TEXT)"))
+        conn.execute(text("INSERT INTO TaiLieu (DocID, Title, Site) VALUES (7, 'Original', 'QA_A')"))
+        conn.execute(text("CREATE TABLE DocumentAttributes (DocID INTEGER, Domain TEXT, AttributeKey TEXT, AttributeValue TEXT, ExtractedBy TEXT)"))
+    monkeypatch.setattr(doc_metadata, "engine", engine)
+    effects = []
+    monkeypatch.setattr(doc_metadata._r_qdrant, "update_qdrant_metadata", lambda *args: effects.append(("vector", args)) or True)
+    monkeypatch.setattr(doc_metadata._r_audit, "write_audit_log", lambda *args: effects.append(("audit", args)))
+    monkeypatch.setattr(doc_metadata._r_semantic_cache, "_invalidate_semantic_cache", lambda *args: effects.append(("cache", args)))
+    yield engine, effects
+    engine.dispose()
+
+
+@pytest.mark.parametrize("metadata", [{"site": "QA_B"}, {"title": "New", "attributes": {"key": "value"}}, {"attributes": {"key": "value"}}])
+def test_missing_document_metadata_has_no_side_effects(metadata_sqlite, metadata):
+    engine, effects = metadata_sqlite
+    assert doc_metadata.update_document_common_metadata(999, **metadata) is False
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT DocID,Title,Site FROM TaiLieu")).fetchall() == [(7, "Original", "QA_A")]
+        assert conn.execute(text("SELECT COUNT(*) FROM DocumentAttributes")).scalar() == 0
+    assert effects == []
+
+
+@pytest.mark.parametrize("metadata", [{"site": "QA_B"}, {"title": "New", "attributes": {"key": "value"}}, {"attributes": {"key": "value"}}])
+def test_existing_document_metadata_preserves_update_contract(metadata_sqlite, metadata):
+    engine, effects = metadata_sqlite
+    assert doc_metadata.update_document_common_metadata(7, reviewer="QA", **metadata) is True
+    with engine.connect() as conn:
+        row = conn.execute(text("SELECT Title,Site FROM TaiLieu WHERE DocID=7")).one()
+        assert row == (metadata.get("title", "Original"), metadata.get("site", "QA_A"))
+        attrs = conn.execute(text("SELECT DocID,AttributeKey,AttributeValue FROM DocumentAttributes")).fetchall()
+        assert attrs == ([(7, "key", "value")] if "attributes" in metadata else [])
+    assert [args for kind, args in effects if kind == "cache"] == [("doc.metadata",)]
+    assert len([1 for kind, _ in effects if kind == "audit"]) == 1
+    assert len([1 for kind, _ in effects if kind == "vector"]) == (1 if "title" in metadata or "site" in metadata else 0)

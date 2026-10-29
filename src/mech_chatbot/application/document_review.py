@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any, Literal, Protocol
@@ -12,6 +13,7 @@ from mech_chatbot.auth.authorization import role_allows
 ReviewAction = Literal["publish", "reject", "delete"]
 PublishMode = Literal["standalone", "new_version", "new_variant"]
 OutcomeStatus = Literal["updated", "pending", "failed"]
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,7 +53,18 @@ class BatchReviewResult:
 
     @property
     def failures(self) -> tuple[Mapping[str, Any], ...]:
-        return tuple(outcome.detail for outcome in self.outcomes if outcome.detail)
+        return tuple(
+            {
+                **(outcome.detail or {}),
+                "job_id": outcome.job_id,
+                "doc_id": outcome.doc_id,
+                "code": outcome.code,
+                "error": outcome.message or "Thao tác thất bại",
+            }
+            if outcome.status == "failed" else outcome.detail
+            for outcome in self.outcomes
+            if outcome.status == "failed" or outcome.detail
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,8 +133,14 @@ class PublicationCoordinator:
                 payload={"ok": False, "state": "unauthorized", "error": "Forbidden"},
             )
         doc_id = command.doc_id
-        if doc_id is None:
-            doc_id = self._publication.resolve_latest_doc_id(command.job_id)
+        if command.job_id > 0:
+            linked_doc_id = self._publication.resolve_latest_doc_id(command.job_id)
+            if doc_id is not None and doc_id != linked_doc_id:
+                return PublicationOutcome(
+                    ok=False, state="validation_failed", error="JobID không thuộc tài liệu",
+                    payload={"ok": False, "state": "validation_failed", "error": "JobID không thuộc tài liệu"},
+                )
+            doc_id = linked_doc_id
         if doc_id is None:
             return PublicationOutcome(
                 ok=False,
@@ -187,13 +206,17 @@ class ReviewDocuments:
             if command.action == "reject":
                 return self._reject_item(command, actor, item)
             return self._delete_item(item, actor)
-        except Exception as exc:
+        except Exception:
+            logger.exception(
+                "Bulk review %s failed for job_id=%s doc_id=%s",
+                command.action, item.job_id, item.doc_id,
+            )
             return ReviewItemOutcome(
                 status="failed",
                 job_id=item.job_id,
                 doc_id=item.doc_id,
                 code=self._failure_code(command.action),
-                message=str(exc),
+                message={"publish": "Publish thất bại", "reject": "Reject thất bại", "delete": "Xóa thất bại"}[command.action],
             )
 
     @staticmethod
@@ -254,8 +277,8 @@ class ReviewDocuments:
             self._review_store.reject_document(item.doc_id, reviewer=actor.username or "System")
         return ReviewItemOutcome("updated", item.job_id, item.doc_id, None, None)
     def _delete_item(self, item: ReviewItem, actor: DocumentActor) -> ReviewItemOutcome:
-        # Preserve the current odd contract: delete with neither id is a no-op
-        # counted as an updated item.
+        if not item.doc_id and not item.job_id:
+            return ReviewItemOutcome("failed", item.job_id, item.doc_id, "missing_ids", "Thiếu DocID hoặc JobID")
         if item.doc_id:
             self._review_store.delete_document(item.doc_id, reviewer=actor.username or "System")
         if item.job_id:

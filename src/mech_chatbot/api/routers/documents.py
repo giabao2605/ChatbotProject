@@ -18,7 +18,7 @@ from mech_chatbot.application.document_upload import (
     UploadFailure,
     UploadRejected,
 )
-from mech_chatbot.application.protected_files import ProtectedFileActor, ProtectedFileError, ProtectedFileReference
+from mech_chatbot.application.protected_files import LEVEL_ORDER, ProtectedFileActor, ProtectedFileError, ProtectedFileReference, normalize_security_level
 from mech_chatbot.api.dependencies import csrf_profile, current_profile, require_any_role
 from mech_chatbot.api.request_limits import (
     UploadTooLarge,
@@ -42,6 +42,7 @@ from mech_chatbot.services.document_service import (
     reconcile_serving_state,
     reject_document,
     update_document_common_metadata,
+    update_pending_variant_code,
     validate_publish_actor,
     validate_publish_contract,
 )
@@ -121,7 +122,13 @@ def _assert_review_actor(doc_id: int, profile: dict[str, Any]) -> None:
         doc_id, profile.get("user_id"), profile.get("roles") or []
     )
     if not result.valid:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Không đủ quyền duyệt tài liệu. Hãy dùng tài khoản người duyệt được giao, "
+                "đang hoạt động và thuộc phòng ban sở hữu tài liệu."
+            ),
+        )
 
 
 def _job_department_allowed(row: dict[str, Any], profile: dict[str, Any]) -> bool:
@@ -141,6 +148,23 @@ def _assert_job_review_actor(job_id: int, profile: dict[str, Any], runtime: Any)
     if not rows or any(row.get("DocID") or not _job_department_allowed(row, profile) for row in rows):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
     return None
+
+
+def _assert_job_control_actor(job_id: int, profile: dict[str, Any], *, uploader_cancel: bool = False) -> None:
+    rows = _rows_to_json(list_bulk_action_jobs(job_id=job_id))
+    if not rows:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    pure_uploader = uploader_cancel and not role_allows(profile.get("roles"), "reviewer", "admin")
+    for row in rows:
+        scoped = _job_department_allowed(row, profile)
+        if not _is_admin(profile):
+            sites = {str(site).strip() for site in profile.get("allowed_sites") or []}
+            scoped = scoped and str(row.get("Site") or "").strip() in sites
+            scoped = scoped and LEVEL_ORDER[normalize_security_level(row.get("SecurityLevel"))] <= LEVEL_ORDER[normalize_security_level(profile.get("max_security_level") or "public")]
+        if not scoped or (pure_uploader and row.get("UploadedBy") != profile.get("username")):
+            raise HTTPException(status_code=403, detail="Forbidden")
+        if _safe_int(row.get("DocID")) and not pure_uploader:
+            _assert_review_actor(int(row["DocID"]), profile)
 
 
 def _read_upload_command(
@@ -598,6 +622,18 @@ def document_update_metadata(doc_id: int, body: dict[str, Any], profile: dict[st
     return {"ok": bool(result), "result": result}
 
 
+@router.patch("/documents/{doc_id}/variant-code")
+def document_update_variant_code(doc_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
+    _assert_any_role(profile, "reviewer", "admin")
+    _assert_metadata_actor(doc_id, profile)
+    if set(body) != {"variant_code"}:
+        raise HTTPException(status_code=422, detail="Chỉ chấp nhận mã biến thể")
+    result = update_pending_variant_code(doc_id, body["variant_code"], reviewer=profile.get("username") or "System")
+    if not result["ok"]:
+        raise HTTPException(status_code=409, detail=result["error"])
+    return result
+
+
 @router.get("/documents/{doc_id}/publish-contract")
 def document_publish_contract(doc_id: int, profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
     _assert_review_actor(doc_id, profile)
@@ -725,24 +761,28 @@ def ingestion_bulk_delete(body: dict[str, Any], profile: dict[str, Any] = Depend
 @router.patch("/ingestion/jobs/{job_id}/priority")
 def ingestion_set_priority(job_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
+    _assert_job_control_actor(job_id, profile)
     return {"ok": bool(set_job_priority(job_id, _safe_int(body.get("priority")) or 0))}
 
 
 @router.post("/ingestion/jobs/{job_id}/cancel")
 def ingestion_cancel(job_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "uploader", "reviewer", "admin")
+    _assert_job_control_actor(job_id, profile, uploader_cancel=True)
     return {"ok": bool(cancel_job(job_id, canceled_by=profile.get("username") or "System"))}
 
 
 @router.post("/ingestion/jobs/{job_id}/requeue")
 def ingestion_requeue(job_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
+    _assert_job_control_actor(job_id, profile)
     return {"ok": bool(requeue_job(job_id))}
 
 
 @router.post("/ingestion/jobs/{job_id}/pending-review")
 def ingestion_pending_review(job_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
+    _assert_job_control_actor(job_id, profile)
     return {"ok": bool(mark_job_pending_review(job_id))}
 
 
@@ -821,9 +861,13 @@ def lifecycle_set_document(doc_id: int, body: dict[str, Any], profile: dict[str,
 def lifecycle_mark_reviewed(doc_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     _assert_any_role(profile, "reviewer", "admin")
     _assert_metadata_actor(doc_id, profile)
+    value = body.get("next_review_days", 180)
+    days = _safe_int(value) if isinstance(value, (int, str)) and not isinstance(value, bool) else None
+    if days is None or days < 1:
+        raise HTTPException(status_code=422, detail="next_review_days phải là số nguyên >= 1")
     return {"ok": bool(mark_document_reviewed(
         doc_id, reviewer=profile.get("username") or "System",
-        next_review_days=_safe_int(body.get("next_review_days")) or 180,
+        next_review_days=days,
     ))}
 
 

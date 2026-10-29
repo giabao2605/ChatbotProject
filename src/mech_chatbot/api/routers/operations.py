@@ -403,23 +403,29 @@ def glossary(domain: str | None = None, active_only: bool = False, profile: dict
 def glossary_upsert(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "admin", "reviewer")
     result = glossary_service.upsert_glossary_term(term=str(body.get("term") or ""), domain=body.get("domain"), synonyms=body.get("synonyms"), expansion=body.get("expansion"), is_active=bool(body.get("is_active", True)), glossary_id=body.get("glossary_id"))
-    if isinstance(result, dict):
-        if not result.get("ok"):
-            raise HTTPException(status_code=400, detail=result.get("message") or "Khong luu duoc thuat ngu")
-        return result
-    return {"ok": bool(result)}
+    if isinstance(result, dict) and not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("message") or "Khong luu duoc thuat ngu")
+    if _operation_ok(result):
+        audit_service.write_audit_log(action="glossary_upsert", username=profile.get("username") or "System", entity_type="DomainGlossary", entity_id=result.get("glossary_id") if isinstance(result, dict) else body.get("glossary_id"), details={}, user_id=profile.get("user_id"))
+    return result if isinstance(result, dict) else {"ok": bool(result)}
 
 
 @router.patch("/glossary/{glossary_id}/active")
 def glossary_active(glossary_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "admin", "reviewer")
-    return {"ok": bool(glossary_service.set_glossary_active(glossary_id, bool(body.get("is_active"))))}
+    result = glossary_service.set_glossary_active(glossary_id, bool(body.get("is_active")))
+    if result:
+        audit_service.write_audit_log(action="glossary_active", username=profile.get("username") or "System", entity_type="DomainGlossary", entity_id=glossary_id, details={"is_active": bool(body.get("is_active"))}, user_id=profile.get("user_id"))
+    return {"ok": bool(result)}
 
 
 @router.delete("/glossary/{glossary_id}")
 def glossary_delete(glossary_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "admin")
-    return {"ok": bool(glossary_service.delete_glossary_term(glossary_id))}
+    result = glossary_service.delete_glossary_term(glossary_id)
+    if result:
+        audit_service.write_audit_log(action="glossary_delete", username=profile.get("username") or "System", entity_type="DomainGlossary", entity_id=glossary_id, details={}, user_id=profile.get("user_id"))
+    return {"ok": bool(result)}
 
 
 @router.get("/materials")
@@ -430,25 +436,37 @@ def materials(profile: dict[str, Any] = Depends(current_profile)):
 @router.post("/materials")
 def material_upsert(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "admin", "reviewer")
-    return {"ok": bool(material_service.upsert_material(code=str(body.get("code") or ""), display=body.get("display"), category=body.get("category"), is_active=bool(body.get("is_active", True)), material_id=body.get("material_id")))}
+    result = material_service.upsert_material(code=str(body.get("code") or ""), display=body.get("display"), category=body.get("category"), is_active=bool(body.get("is_active", True)), material_id=body.get("material_id"))
+    if result:
+        audit_service.write_audit_log(action="material_upsert", username=profile.get("username") or "System", entity_type="MaterialDictionary", entity_id=body.get("material_id"), details={"canonical_code": str(body.get("code") or "").strip()}, user_id=profile.get("user_id"))
+    return {"ok": bool(result)}
 
 
 @router.post("/materials/{material_id}/synonyms")
 def material_synonym_add(material_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "admin", "reviewer")
-    return {"ok": bool(material_service.add_material_synonym(material_id, str(body.get("synonym") or "")))}
+    result = material_service.add_material_synonym(material_id, str(body.get("synonym") or ""))
+    if result:
+        audit_service.write_audit_log(action="material_synonym_add", username=profile.get("username") or "System", entity_type="MaterialDictionary", entity_id=material_id, details={}, user_id=profile.get("user_id"))
+    return {"ok": bool(result)}
 
 
 @router.delete("/materials/{material_id}")
 def material_delete(material_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "admin")
-    return {"ok": bool(material_service.delete_material(material_id))}
+    result = material_service.delete_material(material_id)
+    if result:
+        audit_service.write_audit_log(action="material_delete", username=profile.get("username") or "System", entity_type="MaterialDictionary", entity_id=material_id, details={}, user_id=profile.get("user_id"))
+    return {"ok": bool(result)}
 
 
 @router.delete("/materials/synonyms/{synonym_id}")
 def material_synonym_delete(synonym_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "admin", "reviewer")
-    return {"ok": bool(material_service.delete_material_synonym(synonym_id))}
+    result = material_service.delete_material_synonym(synonym_id)
+    if result:
+        audit_service.write_audit_log(action="material_synonym_delete", username=profile.get("username") or "System", entity_type="MaterialSynonym", entity_id=synonym_id, details={}, user_id=profile.get("user_id"))
+    return {"ok": bool(result)}
 
 
 @router.get("/feedback")
@@ -461,6 +479,8 @@ def feedback_classify(feedback_id: int, body: dict[str, Any], request: Request, 
     assert_any_role(profile, "reviewer", "admin")
     correct_answer = body.get("correct_answer")
     result = ui_query_service.classify_feedback_and_get_source(feedback_id, failure_type=body.get("failure_type"), correct_answer=correct_answer, reviewer_note=body.get("reviewer_note"))
+    if result is not None:
+        audit_service.write_audit_log(action="feedback_classify", username=profile.get("username") or "System", entity_type="FeedbackReview", entity_id=feedback_id, details={}, user_id=profile.get("user_id"))
     golden_hash = None
     regression_qid = None
     if correct_answer and str(correct_answer).strip():
@@ -475,7 +495,10 @@ def feedback_classify(feedback_id: int, body: dict[str, Any], request: Request, 
 @router.delete("/feedback/{feedback_id}")
 def feedback_delete(feedback_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "admin", "reviewer")
-    return {"ok": bool(ui_query_service.delete_feedback(feedback_id))}
+    result = ui_query_service.delete_feedback(feedback_id)
+    if result:
+        audit_service.write_audit_log(action="feedback_delete", username=profile.get("username") or "System", entity_type="FeedbackReview", entity_id=feedback_id, details={}, user_id=profile.get("user_id"))
+    return {"ok": bool(result)}
 
 
 @router.get("/regression/questions")
@@ -486,14 +509,24 @@ def regression_questions(active_only: bool = True, profile: dict[str, Any] = Dep
 @router.post("/regression/questions")
 def regression_question_add(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "reviewer", "admin")
-    result = feedback_service.add_regression_question(question=str(body.get("question") or ""), expected_doc_id=body.get("expected_doc_id"), expected_keywords=body.get("expected_keywords"), department=body.get("department"), site=body.get("site"), created_by=profile.get("username") or "System")
+    expected_doc_id = body.get("expected_doc_id")
+    if expected_doc_id == "":
+        expected_doc_id = None
+    if expected_doc_id is not None and (type(expected_doc_id) is not int or expected_doc_id <= 0):
+        raise HTTPException(status_code=422, detail="DocID kỳ vọng phải là số nguyên dương")
+    result = feedback_service.add_regression_question(question=str(body.get("question") or ""), expected_doc_id=expected_doc_id, expected_keywords=body.get("expected_keywords"), department=body.get("department"), site=body.get("site"), created_by=profile.get("username") or "System")
+    if result is not None:
+        audit_service.write_audit_log(action="regression_question_create", username=profile.get("username") or "System", entity_type="RegressionQuestion", entity_id=result, details={}, user_id=profile.get("user_id"))
     return {"ok": result is not None, "result": result}
 
 
 @router.patch("/regression/questions/{reg_qid}/active")
 def regression_question_active(reg_qid: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "reviewer", "admin")
-    return {"ok": bool(feedback_service.set_regression_question_active(reg_qid, bool(body.get("is_active"))))}
+    result = feedback_service.set_regression_question_active(reg_qid, bool(body.get("is_active")))
+    if result:
+        audit_service.write_audit_log(action="regression_question_active", username=profile.get("username") or "System", entity_type="RegressionQuestion", entity_id=reg_qid, details={"is_active": bool(body.get("is_active"))}, user_id=profile.get("user_id"))
+    return {"ok": bool(result)}
 
 
 @router.get("/regression/runs")

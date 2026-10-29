@@ -148,6 +148,7 @@ class AppRuntime:
     app_support_queries: Any
     protected_file_resolver: ProtectedFileResolver | None
     strict_site_filter: bool
+    db_engine: Any = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,6 +206,7 @@ def build_app_runtime(
     app_support_queries: Any | None = None,
     protected_file_resolver: ProtectedFileResolver | None = None,
     strict_site_filter: bool = True,
+    db_engine: Any = None,
 ) -> AppRuntime:
     """Build an immutable app runtime from explicitly supplied adapters."""
     runner = ChatTurnRunner(
@@ -239,6 +241,7 @@ def build_app_runtime(
         app_support_queries=documents.app_support_queries,
         protected_file_resolver=protected_file_resolver,
         strict_site_filter=bool(strict_site_filter),
+        db_engine=db_engine,
     )
 
 
@@ -393,6 +396,7 @@ def build_default_app_runtime(
             strict_site_filter=strict_site_filter,
         ),
         strict_site_filter=strict_site_filter,
+        db_engine=engine,
     )
 
 

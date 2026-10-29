@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import date
+import re
+import sqlite3
 
 import pytest
 
@@ -92,12 +94,13 @@ def test_usage_analytics_returns_normalized_questions_documents_and_no_answer_ra
             Result(rows=((date(2026, 7, 19), 1), (date(2026, 7, 20), 3))),
             Result(
                 rows=(
-                    ("Ap suat toi da?", "Khong co thong tin.", '["folder/manual.pdf"]'),
-                    ("Áp suất tối đa?", "12 bar", '["manual.pdf", "drawing.png"]'),
-                    ("  ", None, "not-json"),
-                    (None, "Ngoài phạm vi", None),
+                    ("Ap suat toi da?", "Khong co thong tin."),
+                    ("Áp suất tối đa?", "12 bar"),
+                    ("  ", None),
+                    (None, "Ngoài phạm vi"),
                 )
             ),
+            Result(rows=(("manual.pdf", 2),)),
         ),
     )
 
@@ -119,6 +122,68 @@ def test_usage_analytics_returns_normalized_questions_documents_and_no_answer_ra
         ],
         "top_documents": [{"document": "manual.pdf", "count": 2}],
     }
+
+
+@pytest.mark.parametrize("top_n, expected_count", [(3, 3), (2, 2), (0, 0), ("2; DROP TABLE TaiLieu", 2)])
+def test_usage_top_documents_counts_final_citations_once_per_chat_not_images(monkeypatch, top_n, expected_count):
+    database = sqlite3.connect(":memory:")
+    database.executescript("""
+        CREATE TABLE LichSuChat (ChatID INTEGER, SessionID TEXT, Username TEXT,
+            DanhGia INTEGER, ThoiGian TEXT, CauHoi_User TEXT, TraLoi_Bot TEXT, RefImages TEXT);
+        CREATE TABLE TaiLieu (DocID INTEGER, TenFile TEXT);
+        CREATE TABLE AnswerSource (ChatID INTEGER, DocID INTEGER, ChunkRef TEXT);
+        CREATE TABLE AnswerEvidence (ChatID INTEGER, DocID INTEGER);
+        INSERT INTO TaiLieu VALUES (1,'manual.pdf'),(2,'manual.pdf'),(3,'drawing.pdf'),(4,'uncited.pdf');
+        INSERT INTO LichSuChat VALUES
+            (1,'session1','QA',0,datetime('now'),'q1','answer','[]'),
+            (2,'session2','QA',0,datetime('now'),'q2','answer','[]'),
+            (3,'session3','QA',0,datetime('now'),'q3','answer','["phantom.png"]'),
+            (4,'old','QA',0,datetime('now','-42 days'),'old','answer','[]');
+        INSERT INTO AnswerSource VALUES
+            (1,1,'page1'),(1,1,'page2'),(1,1,'page2'),(2,1,'page3'),
+            (2,2,'page1'),(3,3,'page1'),(4,3,'old'),(1,NULL,'null'),(1,999,'deleted');
+        INSERT INTO AnswerEvidence VALUES (1,4);
+    """)
+    calls = []
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, statement, params=None):
+            original = str(statement)
+            calls.append((original, params))
+            query = original.replace("dbo.", "")
+            query = re.sub(r"DATEADD\(day,\s*-:d,\s*GETDATE\(\)\)", "datetime('now', '-' || :d || ' days')", query)
+            query = query.replace("CAST(ThoiGian AS DATE)", "date(ThoiGian)")
+            if "TOP (:limit)" in query:
+                query = query.replace("TOP (:limit)", "") + " LIMIT :limit"
+            return database.execute(query, params or {})
+
+    class SqliteEngine:
+        def connect(self):
+            return Connection()
+
+    monkeypatch.setattr(analytics, "_ensure_engine", lambda: None)
+    monkeypatch.setattr(analytics, "engine", SqliteEngine())
+    try:
+        result = analytics.get_usage_analytics(days=7, top_n=top_n)
+        expected = [
+            {"document": "manual.pdf", "count": 2},
+            {"document": "manual.pdf", "count": 1},
+            {"document": "drawing.pdf", "count": 1},
+        ][:expected_count]
+        assert result["top_documents"] == expected
+        citation_sql, params = next(call for call in calls if "AnswerSource" in call[0])
+        assert "AnswerEvidence" not in citation_sql
+        assert "RefImages" not in citation_sql
+        assert params == {"d": 7, "limit": expected_count}
+        assert database.execute("SELECT COUNT(*) FROM TaiLieu").fetchone()[0] == 4
+    finally:
+        database.close()
 
 
 def test_usage_analytics_preserves_empty_shape_on_database_failure(monkeypatch):

@@ -10,6 +10,7 @@ KHÔNG import streamlit / ui ở tầng này.
 from sqlalchemy import text
 
 from mech_chatbot.db.engine import engine, resolve_engine as _resolve_engine
+from .jobs import JOB_CONTROL_DOCUMENT_GUARD
 
 
 def resolve_engine(candidate=None):
@@ -476,7 +477,7 @@ def list_documents(allowed_departments=None, max_security_level="public", allowe
                d.Title, d.Tags, d.Summary, d.VersionNo, d.IsCurrent AS IsCurrentVersion,
                d.UploadedBy, d.NgayTaiLen AS CreatedAt, d.ExpiryDate, d.EffectiveStatus, d.LastReviewedAt,
                d.EffectiveDate AS EffectiveDateStart, d.ReviewDate, d.OwnerSigner, d.DocLanguage AS Language,
-               d.DocNumber, d.Site, d.VariantGroup, d.VariantCode AS BranchLabel, d.LifecycleStatus, d.ReviewStatus
+               d.DocNumber, d.Site, d.VariantGroup, d.VariantCode AS BranchLabel, d.LifecycleStatus, d.ReviewStatus, d.IssuedDate
         FROM TaiLieu d
         {where_clause}
         ORDER BY d.NgayTaiLen DESC
@@ -585,6 +586,8 @@ def list_pending_review_docs():
             LEFT JOIN TaiLieu d
               ON d.TenFile = j.TenFile
              AND d.ThuMuc = j.ThuMuc
+             AND d.FilePath = j.FilePath
+             AND NULLIF(LTRIM(RTRIM(j.FilePath)), '') IS NOT NULL
              AND d.ReviewStatus = 'pending_review'
              AND d.LifecycleStatus <> 'deleting'
             WHERE j.Status = 'pending_review'
@@ -605,8 +608,18 @@ def reject_ingestion_job(job_id, reason, *, db_engine=None):
 def mark_job_pending_review(job_id):
 	with engine.begin() as conn:
 		res = conn.execute(text("""
-                    UPDATE IngestionJobs SET Status = 'pending_review', UpdatedAt = GETDATE() WHERE JobID = :jid
-                """), {"jid": job_id})
+                    UPDATE dbo.IngestionJobs SET Status = 'pending_review', UpdatedAt = GETDATE()
+                    WHERE JobID = :jid
+                      AND Status = 'failed'
+                      AND LockedBy IS NULL AND LockedAt IS NULL
+                      AND QualityStatus IN ('ready_for_review', 'needs_review')
+                      AND EXISTS (
+                          SELECT 1 FROM dbo.TaiLieu d
+                          WHERE d.TenFile = IngestionJobs.TenFile AND d.ThuMuc = IngestionJobs.ThuMuc
+                            AND d.ReviewStatus = 'pending_review' AND d.PublicationState = 'draft'
+                            AND d.Servable = 0
+                      )
+                """ + JOB_CONTROL_DOCUMENT_GUARD), {"jid": job_id})
 	return (getattr(res, "rowcount", 0) or 0) > 0
 
 
@@ -626,18 +639,24 @@ def delete_ingestion_job(job_id, *, db_engine=None):
 	return (getattr(res, "rowcount", 0) or 0) > 0
 
 
-def list_bulk_action_jobs():
+def list_bulk_action_jobs(job_id=None):
 	with engine.connect() as conn:
 		return conn.execute(text("""
-            SELECT j.JobID, j.TenFile, j.ThuMuc, j.Status, j.UpdatedAt, d.DocID
+            SELECT j.JobID, j.TenFile, j.ThuMuc, j.Status, j.UpdatedAt, d.DocID,
+                   j.UploadedBy, COALESCE(d.SecurityLevel, j.SecurityLevel) AS SecurityLevel,
+                   COALESCE(d.Site, j.Site) AS Site
             FROM IngestionJobs j
             LEFT JOIN TaiLieu d
               ON d.TenFile = j.TenFile
              AND d.ThuMuc = j.ThuMuc
-             AND d.LifecycleStatus <> 'deleting'
-            WHERE j.Status IN ('pending_review', 'failed', 'rejected', 'publishing')
+             AND d.FilePath = j.FilePath
+             AND NULLIF(LTRIM(RTRIM(j.FilePath)), '') IS NOT NULL
+        """ + (" AND d.LifecycleStatus <> 'deleting'" if job_id is None else "") + (
+            " WHERE j.JobID = :job_id" if job_id is not None else
+            " WHERE j.Status IN ('pending_review', 'failed', 'rejected', 'publishing')"
+        ) + """
             ORDER BY j.UpdatedAt ASC
-        """)).fetchall()
+        """), {"job_id": job_id} if job_id is not None else {}).fetchall()
 
 
 def mark_job_rejected(job_id, *, db_engine=None):
@@ -783,6 +802,15 @@ def list_users_basic():
 
 def update_user_active_and_roles(user_id, is_active, add_roles, del_roles):
 	with engine.begin() as conn:
+		if _user_is_admin(conn, user_id) and _other_active_admin_count(conn, user_id) <= 0:
+			if not is_active:
+				return False
+			for _role in del_roles:
+				if conn.execute(
+					text("SELECT 1 FROM Roles WHERE RoleName = 'admin' AND RoleName = :role"),
+					{"role": _role},
+				).fetchone():
+					return False
 		conn.execute(
 			text("UPDATE Users SET IsActive = :active WHERE UserID = :uid"),
 			{"active": 1 if is_active else 0, "uid": user_id},
