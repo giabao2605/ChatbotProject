@@ -2,6 +2,18 @@
 
 An internal **Retrieval-Augmented Generation (RAG)** and knowledge-management platform for 14 department profiles. It classifies and ingests office or technical documents, enforces RBAC, department, site, clearance and serving-state policies, then returns evidence-backed answers with source provenance.
 
+## Vận hành Windows production
+
+Xem [hướng dẫn vận hành chính](docs/windows-service-operations.md) trước khi cập nhật
+hoặc khởi động lại web. App, RAG và Worker dùng chung `src` và `chat_env` tại repo
+gốc; giao diện được phục vụ từ `web-ui/dist`. Mã launcher chuẩn được chuẩn bị tại
+`scripts/windows_service`; việc có mã mới trong Git không có nghĩa service đã chuyển.
+Đối chiếu command của Windows Service với hồ sơ phát hành để biết bản đang chạy.
+
+Các hướng dẫn dev, demo và Docker bên dưới phục vụ môi trường riêng. Đặc biệt,
+`scripts/ops/start_demo_lan.ps1` có chạy migration, không dùng làm lệnh restart
+production. Không thử dependency hoặc build đè frontend tại checkout đang phục vụ.
+
 ---
 
 ## Key Features
