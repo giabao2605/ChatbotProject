@@ -15,7 +15,7 @@ Chỉ triển khai production sau một phê duyệt riêng cho đúng commit v�
 | Checkout phục vụ | `C:/Users/bao.nguyen/Documents/ChatBotProject` |
 | Bằng chứng bản sửa | `.local/runs/audit-confirmed-fixes/`, `.local/runs/audit-dependencies/` trong worktree |
 | Kiểm chứng bổ sung | `.local/runs/audit-release-prep-20261030/` trong worktree |
-| Hồ sơ còn thiếu | Quyền vận hành nâng quyền, thử lock dưới service identity, bundle/approval mới, snapshot quay lui mới và kết quả smoke |
+| Hồ sơ còn thiếu trước deploy | Bundle/approval mới, snapshot quay lui mới, kiểm đường dẫn/khởi động production và kết quả smoke |
 
 Giữ SHA mã đã kiểm tra cùng hash frontend, lock Python/npm, wheelhouse và receipt.
 Không cộng lượt test trùng, không đổi tên focused checks thành CI xanh. Các con số
@@ -27,7 +27,7 @@ Không đánh dấu các bước phát hành dưới là đã đạt trước kh
 ## Kết quả chuẩn bị đã có ngày 30/10/2026
 
 - Đã commit bản sửa tại SHA trên, qua hook kiểm secret; chưa push. Không sửa
-  checkout phục vụ, `.env`, `chat_env`, service, ACL hoặc receipt lịch sử.
+  checkout phục vụ, `.env`, `chat_env`, service, ACL production hoặc receipt lịch sử.
 - Đã tạo DB `Mech_Chatbot_Test_Audit_20261030_1a18b8d` trên
   `localhost\SQLEXPRESS`. Đây là DB tách biệt **cùng instance**, không phải máy
   hoặc SQL instance staging riêng. Chỉ có schema và dữ liệu giả; không sao hoặc
@@ -54,15 +54,39 @@ Không đánh dấu các bước phát hành dưới là đã đạt trước kh
   toàn bộ tám file frontend build đã kiểm tra. Đây là manifest kiểm chứng local,
   không phải approval hoặc deployment receipt. V0048 SHA256:
   `20a5a4797f6703cc494987cd7092ad2318178cc92e8f2aee0a0028c031626a5a`.
-- Probe không nâng quyền hiện trả Windows error 5 khi mở quyền start/stop bốn
-  service và quyền tạo service thử. Đã gửi người vận hành script chỉ mở handle,
-  đọc trạng thái và ghi `service-permissions.json`; chưa nhận receipt nâng quyền.
-  Script không start/stop/create service hay sửa ACL. Quyền của token admin không
-  tự nâng quyền tiến trình Codex hiện tại.
+- Probe thường ban đầu trả Windows error 5. Receipt `service-permissions.json`
+  được người vận hành chạy bằng quyền admin lúc **15:45 ngày 30/10/2026 (Asia/Saigon)**
+  xác nhận query/start/stop cả bốn service và quyền tạo service thử đều đạt;
+  cả bốn vẫn Running, ba service MechRAG dùng đúng virtual account, Cloudflared
+  dùng LocalSystem. Script chỉ mở handle: không start/stop/create service hoặc
+  sửa ACL. Chưa kiểm quyền change-config. Token admin không tự nâng quyền tiến
+  trình Codex hiện tại.
 - ACL đọc được tại `C:/ProgramData/MechRAGServices/worker-heartbeat` cấp Modify
   cho `NT SERVICE\MechRAGWorker`, Full cho SYSTEM/Administrators/người vận hành,
-  App chỉ RX. Test cạnh tranh process trong thư mục tạm đã có ở bộ test bản sửa;
-  chưa mở/khóa file thử dưới chính service identity hoặc chạm lock/heartbeat thật.
+  App chỉ RX. Test cạnh tranh process trong thư mục tạm đã có ở bộ test bản sửa.
+  Không tạo/mở/khóa file lock production hoặc sửa heartbeat thật.
+- Phép thử token worker chạy bằng admin lúc 15:49 dừng tại `OpenProcessToken`
+  với error 5, trước khi tạo thư mục/file thử. `worker-identity-permissions.json`
+  giữ kết quả thất bại; không coi quyền quản lý service là quyền đọc token của nó.
+  Helper tự kiểm tra bằng token người dùng hiện tại đạt, chỉ đủ kiểm harness.
+  Sau đó người vận hành đồng ý và chạy wrapper `run_worker_identity_probe.ps1`
+  qua một Scheduled Task SYSTEM tạm lúc **15:55 (Asia/Saigon)**. Task không có
+  trigger lặp, hash helper được khóa, có deadline và receipt riêng từng lượt.
+- Phép thử SYSTEM đã lấy đúng token của worker đang chạy (PID 10564, SID
+  `S-1-5-80-2380487211-1910894509-36140916-3467823900-1131910825`) rồi impersonate
+  chỉ trong helper: tạo/đọc/ghi và lấy khóa file mới trên thư mục thử có DACL
+  sao chép đúng từ thư mục production; lần lấy khóa bằng handle thứ hai bị chặn;
+  thả rồi lấy lại khóa đạt, file khóa được giữ. Token/privilege/handle được trả
+  lại; PID và Running của worker thật giữ nguyên trước/sau. Receipt:
+  `worker-identity-system-54b395b938264f9db913b3224d62d25d.json`.
+- Receipt wrapper cùng lượt `54b395b938264f9db913b3224d62d25d` xác nhận task exit 0,
+  `ok=true`, `task_removed=true`; đối chiếu Task Scheduler không còn task có
+  tiền tố `MechRAGAuditLockProbe_`. Chỉ ACL/file trong thư mục test được tạo;
+  không start/stop production service, không truy cập SQL/Qdrant/provider ở phép
+  thử này. Kết quả chứng minh quyền token service trên bản sao DACL, không thay
+  kiểm startup worker candidate, đường dẫn production, file lock production có
+  ACL riêng hoặc cạnh tranh/crash giữa hai process dưới token service. Kiểm hai
+  process/crash dùng token người vận hành đã đạt trong bộ test bản sửa.
 
 Snapshot lịch sử của lượt đưa `98972bf` vào phục vụ nằm tại
 `C:/ProgramData/MechRAGServices/restructure-deploy-c2859a0f16e140b2a7c1d9c3ee5cce45/`.
@@ -108,8 +132,10 @@ chứng ingestion thật hoàn tất. Không cần chạy lại toàn suite nế
 
 ## Các chốt đang chặn phát hành
 
-- Chưa có approval production mới, bundle ký cho candidate, receipt quyền thực
-  tế và smoke live của candidate. Không tái dùng approval/chữ ký lịch sử cho SHA mới.
+- Chưa có approval production mới, bundle ký cho candidate và smoke live của
+  candidate. Quyền quản lý service bằng token admin và thao tác lock bằng token
+  worker trên DACL replica đã có receipt; không tái dùng approval/chữ ký lịch sử
+  cho SHA mới. Kiểm đường dẫn/file lock thật trong cửa sổ triển khai vẫn còn.
 - Chưa có cơ chế drain production đã xác minh: cần ngừng mọi nguồn nhận việc mới
   và chứng minh request/job đang chạy đã kết thúc. Heartbeat/TCP rỗng không đủ.
   Host dừng sau 110 giây, HTTP graceful 90 giây; không dùng timeout để thay drain.
@@ -195,5 +221,6 @@ không coi unit test hoặc kế hoạch này là diễn tập rollback thật. 
 worker cũ, ràng buộc single instance mới không còn: giữ đúng một worker, ngừng
 mọi launcher phụ và không dựa vào lock mới để bảo vệ baseline.
 
-Chưa kiểm: service identity/lock thực tế, tải dài, reboot, restore DB/vector thật
-và deploy production. SQL test đạt không thay bằng chứng các điều kiện này.
+Chưa kiểm: khởi động candidate qua service, file lock production, tải dài, reboot,
+restore DB/vector thật và deploy production. SQL test và token/ACL replica đạt
+không thay bằng chứng các điều kiện này.
