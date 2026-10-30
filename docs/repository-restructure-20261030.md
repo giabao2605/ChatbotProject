@@ -202,3 +202,12 @@ Chưa kiểm tải dài, SQL Server thật, reboot, backup/restore hoặc rollba
 Khóa worker chỉ bảo vệ cùng host với phiên bản đã cập nhật. Rollback ingestion
 sau khi đã xóa vector cũ không khôi phục lại vector cũ; vẫn giữ cơ chế dọn vector
 mới theo DocID và phục hồi metadata hiện có, không bổ sung hệ thống snapshot vector.
+
+### Cập nhật ở lượt chuẩn bị phát hành tiếp theo
+
+Sau khi được phép commit và thử SQL bằng dữ liệu giả, mã audit đã được chốt local
+tại `e8d5e4fc8eb15ced68ac85b772707c3f79192f57`. V0048 đã chạy trên DB test tách
+biệt cùng SQL Express instance; 17/17 tình huống HTTP/SQL bổ sung đạt. Các câu
+"chưa commit/chưa chạy migration/chưa kiểm SQL Server" ở phần trên là trạng thái
+cuối lượt sửa ban đầu; migration production vẫn chưa chạy, bản sửa chưa deploy.
+Xem [kết quả mới, điều kiện còn thiếu và kế hoạch quay lui](audit-confirmed-fixes-release-plan-20261030.md).

@@ -9,7 +9,9 @@ Receipt và snapshot bảo toàn nằm tại
 `result.json` ghi chuyển đổi hoàn tất, `web.json` ghi health và RAG đúng SHA,
 ba file `*-preflight.json` ghi kiểm chứng identity/release. Thư mục `configuration/`
 là bản lưu được bảo vệ; không in nội dung hoặc sao credential vào Git.
-Bản sửa audit sau mốc này chỉ ở worktree, chưa triển khai, chưa chạy migration.
+Bản sửa audit sau mốc này đã commit local, chưa triển khai hoặc chạy migration
+production. Kiểm SQL bằng dữ liệu giả và các điều kiện phát hành còn thiếu được
+ghi trong [kế hoạch phát hành audit](audit-confirmed-fixes-release-plan-20261030.md).
 
 ## Bản chuẩn và nơi làm việc
 
