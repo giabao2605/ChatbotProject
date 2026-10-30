@@ -27,7 +27,14 @@ def test_scope_total_history_round_trip_uses_checked_cards_and_rejects_missing_s
     with pytest.raises(ValueError): serialize_history_result({'math':{**math,'accepted':True}}, [card])
     with pytest.raises(ValueError): serialize_history_result({'math':{**math,'offline_only':live}}, [card])
     if live:
-        with pytest.raises(ValueError): serialize_history_result({'math':{**math,'activation_scope':'default_rollout'}}, [card])
+        rollout = {**math, 'activation_scope':'default_rollout'}
+        rollout_payload = serialize_history_result({'math':rollout}, [card])
+        rollout_result = restore_history_result(rollout_payload, [card])['math']
+        assert rollout_result['activation_scope'] == 'default_rollout'
+        assert rollout_result['sources'] == [card]
+        with pytest.raises(ValueError): restore_history_result(rollout_payload, [])
+        with pytest.raises(ValueError): restore_history_result(rollout_payload, [{**card,'scope_hash':'b'*64}])
+        with pytest.raises(ValueError): serialize_history_result({'math':{**math,'activation_scope':'unrestricted'}}, [card])
 
 
 def test_query_scope_total_history_preserves_branch_scope_binding():

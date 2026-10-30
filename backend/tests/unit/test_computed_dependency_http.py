@@ -34,7 +34,8 @@ def test_computed_dependency_http_delivers_only_verified_numbers(path, wrong_num
     docs.append(type(guide)(page_content=guide.page_content,
         metadata={**guide.metadata, 'external_processing_policy':'all_external'}))
     prompts = []
-    def generate(prompt):
+    def generate(prompt, **kwargs):
+        assert kwargs['timeout'] > 0
         prompts.append(str(prompt))
         locator = re.findall(r'D\d+L[0-9A-Fa-f]{16}', prompts[-1])[0]
         explanation = 'The difference is 999 VND.' if wrong_number else 'The delta subtracts the first total from the second total.'

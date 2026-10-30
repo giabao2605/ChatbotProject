@@ -24,7 +24,8 @@ def test_bom_dependency_keeps_manifest_total_beyond_context_edge_limit(bom_store
     docs, _, _, runtime = offline_pipeline
     docs.append(_document('Assembly quantities follow the reviewed occurrence paths, multiplied by order quantity.'))
     prompts = []
-    def generate(prompt):
+    def generate(prompt, **kwargs):
+        assert kwargs['timeout'] > 0
         prompts.append(str(prompt))
         locators = sorted(set(re.findall(r'D\d+L[0-9A-Fa-f]{16}', prompts[-1])))
         assert '306.00' in prompts[-1]
