@@ -58,7 +58,7 @@ Tao va kich hoat virtual environment:
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+pip install -r backend/requirements/requirements.txt
 ```
 
 Neu da co `chat_env` nhu may hien tai, cach nhanh nhat la chay script:
@@ -79,14 +79,14 @@ Neu muon chay tay, dung 2 terminal rieng:
 Mo terminal 1, chay RAG server:
 
 ```powershell
-$env:PYTHONPATH="src"
+$env:PYTHONPATH="backend/src"
 python -m mech_chatbot.api.rag_server
 ```
 
 Mo terminal 2, chay app-api + Vue static UI:
 
 ```powershell
-$env:PYTHONPATH="src"
+$env:PYTHONPATH="backend/src"
 $env:APP_SERVER_HOST="0.0.0.0"
 $env:APP_SERVER_PORT="8080"
 python -m mech_chatbot.api.app_server

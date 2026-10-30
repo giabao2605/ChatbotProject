@@ -8,7 +8,7 @@ Commit đối chiếu runtime Query Decomposition: `c7e7b86`
 
 Commit đối chiếu Community summaries offline control plane: `27c13ce`
 
-Tài liệu gốc: [`../doichieukientruc.docx`](../doichieukientruc.docx)
+Tài liệu gốc: [`doichieukientruc.docx`](doichieukientruc.docx)
 Bản review ban đầu: [`doichieukientruc-review.md`](doichieukientruc-review.md)
 
 ## Phạm vi và định nghĩa hoàn tất
@@ -65,9 +65,9 @@ Không gán một phần trăm tổng hợp cho bảng này vì các hạng mụ
 Các implementation chính:
 
 - [`scripts/eval/rag_trace_snapshot.py`](../scripts/eval/rag_trace_snapshot.py)
-- [`src/mech_chatbot/config/logging.py`](../src/mech_chatbot/config/logging.py)
-- [`src/mech_chatbot/llm/external_ai.py`](../src/mech_chatbot/llm/external_ai.py)
-- [`src/mech_chatbot/rag/semantic_cache.py`](../src/mech_chatbot/rag/semantic_cache.py)
+- [`src/mech_chatbot/config/logging.py`](../backend/src/mech_chatbot/config/logging.py)
+- [`src/mech_chatbot/llm/external_ai.py`](../backend/src/mech_chatbot/llm/external_ai.py)
+- [`src/mech_chatbot/rag/semantic_cache.py`](../backend/src/mech_chatbot/rag/semantic_cache.py)
 
 #### Chưa có hoặc chưa hoàn tất
 
@@ -97,11 +97,11 @@ Các implementation chính:
 Các implementation chính:
 
 - [`scripts/eval/run_eval.py`](../scripts/eval/run_eval.py)
-- [`src/mech_chatbot/evaluation/outcomes.py`](../src/mech_chatbot/evaluation/outcomes.py)
-- [`src/mech_chatbot/evaluation/metrics.py`](../src/mech_chatbot/evaluation/metrics.py)
-- [`src/mech_chatbot/evaluation/grounding.py`](../src/mech_chatbot/evaluation/grounding.py)
-- [`src/mech_chatbot/evaluation/risk_coverage.py`](../src/mech_chatbot/evaluation/risk_coverage.py)
-- [`src/mech_chatbot/evaluation/adjudication.py`](../src/mech_chatbot/evaluation/adjudication.py)
+- [`src/mech_chatbot/evaluation/outcomes.py`](../backend/src/mech_chatbot/evaluation/outcomes.py)
+- [`src/mech_chatbot/evaluation/metrics.py`](../backend/src/mech_chatbot/evaluation/metrics.py)
+- [`src/mech_chatbot/evaluation/grounding.py`](../backend/src/mech_chatbot/evaluation/grounding.py)
+- [`src/mech_chatbot/evaluation/risk_coverage.py`](../backend/src/mech_chatbot/evaluation/risk_coverage.py)
+- [`src/mech_chatbot/evaluation/adjudication.py`](../backend/src/mech_chatbot/evaluation/adjudication.py)
 - [`docs/evaluation-foundation.md`](evaluation-foundation.md)
 - [`scripts/crag_eval/`](../scripts/crag_eval/)
 - [`data/crag_eval_v1/eval_manifest.jsonl`](../data/crag_eval_v1/eval_manifest.jsonl)
@@ -130,10 +130,10 @@ Các implementation chính:
 
 Các implementation chính:
 
-- [`src/mech_chatbot/rag/evidence_gate.py`](../src/mech_chatbot/rag/evidence_gate.py)
-- [`src/mech_chatbot/rag/claim_repair.py`](../src/mech_chatbot/rag/claim_repair.py)
-- [`src/mech_chatbot/rag/pipeline.py`](../src/mech_chatbot/rag/pipeline.py)
-- [`src/mech_chatbot/rag/pipeline_steps.py`](../src/mech_chatbot/rag/pipeline_steps.py)
+- [`src/mech_chatbot/rag/evidence_gate.py`](../backend/src/mech_chatbot/rag/evidence_gate.py)
+- [`src/mech_chatbot/rag/claim_repair.py`](../backend/src/mech_chatbot/rag/claim_repair.py)
+- [`src/mech_chatbot/rag/pipeline.py`](../backend/src/mech_chatbot/rag/pipeline.py)
+- [`src/mech_chatbot/rag/pipeline_steps.py`](../backend/src/mech_chatbot/rag/pipeline_steps.py)
 - [`scripts/eval/crag_rollout_gate.py`](../scripts/eval/crag_rollout_gate.py)
 
 #### Bằng chứng đã đạt staging gate
@@ -214,9 +214,9 @@ Trong cả ba run:
 
 Implementation chính:
 
-- [`src/mech_chatbot/rag/grounded_math.py`](../src/mech_chatbot/rag/grounded_math.py)
-- [`tests/unit/test_grounded_math.py`](../tests/unit/test_grounded_math.py)
-- [`src/mech_chatbot/evaluation/grounded_math.py`](../src/mech_chatbot/evaluation/grounded_math.py)
+- [`src/mech_chatbot/rag/grounded_math.py`](../backend/src/mech_chatbot/rag/grounded_math.py)
+- [`tests/unit/test_grounded_math.py`](../backend/tests/unit/test_grounded_math.py)
+- [`src/mech_chatbot/evaluation/grounded_math.py`](../backend/src/mech_chatbot/evaluation/grounded_math.py)
 - [`scripts/grounded_math_eval/`](../scripts/grounded_math_eval/)
 - [`docs/grounded-math-rollout.md`](grounded-math-rollout.md)
 
@@ -245,9 +245,9 @@ Implementation chính:
 
 Implementation chính:
 
-- [`src/mech_chatbot/rag/late_interaction.py`](../src/mech_chatbot/rag/late_interaction.py)
+- [`src/mech_chatbot/rag/late_interaction.py`](../backend/src/mech_chatbot/rag/late_interaction.py)
 - [`scripts/late_interaction/backfill_shadow.py`](../scripts/late_interaction/backfill_shadow.py)
-- [`requirements-late-interaction.txt`](../requirements-late-interaction.txt)
+- [`requirements-late-interaction.txt`](../backend/requirements/requirements-late-interaction.txt)
 
 #### Bằng chứng offline readiness
 
@@ -283,8 +283,8 @@ Artifact local `reports/late-interaction/fb07b27-final/readiness.json` có SHA-2
 
 Implementation chính:
 
-- [`src/mech_chatbot/rag/query_decomposition.py`](../src/mech_chatbot/rag/query_decomposition.py)
-- [`tests/unit/test_query_decomposition.py`](../tests/unit/test_query_decomposition.py)
+- [`src/mech_chatbot/rag/query_decomposition.py`](../backend/src/mech_chatbot/rag/query_decomposition.py)
+- [`tests/unit/test_query_decomposition.py`](../backend/tests/unit/test_query_decomposition.py)
 
 #### Chưa có hoặc chưa hoàn tất
 
@@ -314,9 +314,9 @@ Implementation chính:
 - [`database/migrations/V0033__governed_knowledge_graph.sql`](../database/migrations/V0033__governed_knowledge_graph.sql)
 - [`database/migrations/V0034__graph_provenance_hardening.sql`](../database/migrations/V0034__graph_provenance_hardening.sql)
 - [`scripts/graph/seed_deterministic.py`](../scripts/graph/seed_deterministic.py)
-- [`src/mech_chatbot/rag/graph_retrieval.py`](../src/mech_chatbot/rag/graph_retrieval.py)
-- [`src/mech_chatbot/db/repositories/graph.py`](../src/mech_chatbot/db/repositories/graph.py)
-- [`src/mech_chatbot/services/graph_service.py`](../src/mech_chatbot/services/graph_service.py)
+- [`src/mech_chatbot/rag/graph_retrieval.py`](../backend/src/mech_chatbot/rag/graph_retrieval.py)
+- [`src/mech_chatbot/db/repositories/graph.py`](../backend/src/mech_chatbot/db/repositories/graph.py)
+- [`src/mech_chatbot/services/graph_service.py`](../backend/src/mech_chatbot/services/graph_service.py)
 
 #### Chưa có hoặc chưa hoàn tất
 
@@ -397,7 +397,7 @@ Không đạt default-rollout gate không đồng nghĩa phải xóa tính năng
 - Rollback luôn phải là tắt feature flag, không yêu cầu data migration ngược.
 - Chỉ chuyển milestone tiếp theo sang production sau khi milestone trước có artifact và gate rõ ràng.
 
-Trạng thái triển khai: đã hoàn tất bằng [`rollout_guardrails.py`](../src/mech_chatbot/evaluation/rollout_guardrails.py) và CLI [`scripts/eval/rollout_guardrails.py`](../scripts/eval/rollout_guardrails.py). Guardrail fail-closed với unit-only evidence, benchmark drift, production mutation, safety regression, rollback gap, ít hơn ba pair hoặc milestone dependency chưa đóng.
+Trạng thái triển khai: đã hoàn tất bằng [`rollout_guardrails.py`](../backend/src/mech_chatbot/evaluation/rollout_guardrails.py) và CLI [`scripts/eval/rollout_guardrails.py`](../scripts/eval/rollout_guardrails.py). Guardrail fail-closed với unit-only evidence, benchmark drift, production mutation, safety regression, rollback gap, ít hơn ba pair hoặc milestone dependency chưa đóng.
 
 ### 2.2 Milestone 0 — Hoàn thiện evaluation foundation dùng chung
 
@@ -494,7 +494,7 @@ Chuyển CRAG từ “staging gate passed” sang “production pilot passed”.
 
 Implementation phục vụ pilot:
 
-- [`src/mech_chatbot/evaluation/crag_pilot.py`](../src/mech_chatbot/evaluation/crag_pilot.py)
+- [`src/mech_chatbot/evaluation/crag_pilot.py`](../backend/src/mech_chatbot/evaluation/crag_pilot.py)
 - [`scripts/eval/crag_pilot_preflight.py`](../scripts/eval/crag_pilot_preflight.py)
 - [`scripts/eval/crag_pilot_gate.py`](../scripts/eval/crag_pilot_gate.py)
 - [`docs/adr/0002-crag-pilot-isolation-and-voyage-fallback.md`](adr/0002-crag-pilot-isolation-and-voyage-fallback.md)

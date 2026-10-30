@@ -29,6 +29,12 @@ Cần giữ một bộ wheelhouse đã kiểm chứng cùng hồ sơ quay lui/ph
 hash giúp phát hiện wheel thay đổi, nhưng một file lock không thay thế binary
 đã lưu. Đặc biệt wheel build từ source có thể có hash khác nếu build lại.
 
+## Đường dẫn trong candidate đã sắp xếp
+
+Các file dependency nằm trong `backend/requirements/`, giữ nguyên tên, phiên bản
+và hash. Các đường dẫn wheelhouse/receipt bên trên thuộc lần dựng lịch sử và
+không được di chuyển. Checkout production vẫn giữ cấu trúc của release đang chạy.
+
 ## Dựng vào môi trường mới
 
 Chạy từ repo chứa lock, thay `$wheelhouse` bằng đường dẫn bộ wheel đã lưu. Chỉ
@@ -41,7 +47,7 @@ $wheelhouse = '.local/runs/runtime-consolidation-20261030/dependencies/wheels'
 if (Test-Path -LiteralPath $newEnv) { throw 'Chọn đường dẫn môi trường mới' }
 & 'C:\Users\bao.nguyen\AppData\Local\Programs\Python\Python312\python.exe' -m venv $newEnv
 if ($LASTEXITCODE -ne 0) { throw 'Không tạo được môi trường' }
-& "$newEnv/Scripts/python.exe" -B -m pip install --no-index --find-links $wheelhouse --require-hashes -r requirements-windows-runtime.lock.txt
+& "$newEnv/Scripts/python.exe" -B -m pip install --no-index --find-links $wheelhouse --require-hashes -r backend/requirements/requirements-windows-runtime.lock.txt
 if ($LASTEXITCODE -ne 0) { throw 'Dựng dependency không đạt' }
 & "$newEnv/Scripts/python.exe" -B -m pip check
 if ($LASTEXITCODE -ne 0) { throw 'Dependency không tương thích' }

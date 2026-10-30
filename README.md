@@ -5,9 +5,10 @@ An internal **Retrieval-Augmented Generation (RAG)** and knowledge-management pl
 ## Vận hành Windows production
 
 Xem [hướng dẫn vận hành chính](docs/windows-service-operations.md) trước khi cập nhật
-hoặc khởi động lại web. App, RAG và Worker dùng chung `src` và `chat_env` tại repo
-gốc; giao diện được phục vụ từ `web-ui/dist`. Mã launcher chuẩn được chuẩn bị tại
-`scripts/windows_service`; việc có mã mới trong Git không có nghĩa service đã chuyển.
+hoặc khởi động lại web. Candidate này dùng `backend/src` và `frontend/dist`.
+Checkout production vẫn giữ cấu trúc cũ và môi trường `chat_env` hiện hành;
+không cập nhật hoặc build đè nó trong đợt sắp xếp repo. Mã launcher nằm tại
+`scripts/windows_service`; mã mới trong Git không có nghĩa service đã chuyển.
 Đối chiếu command của Windows Service với hồ sơ phát hành để biết bản đang chạy.
 
 Các hướng dẫn dev và demo bên dưới phục vụ môi trường riêng. Đặc biệt,
@@ -72,184 +73,24 @@ production. Không thử dependency hoặc build đè frontend tại checkout đ
 
 ## Project Structure
 
-```text
-ChatBotProject/
-├── CODEX.md                       # Agent engineering-skill configuration
-├── .env                           # Local environment variables; never commit secrets
-├── docs/
-│   ├── agents/                    # Issue-tracker, triage and domain-doc rules
-│   ├── adr/                       # Architectural decisions, created when needed
-│   ├── go-live-demo.md            # Demo and go-live notes
-│   └── wave*-rollout-checklist.md # Rollout operating checklists
-├── web-ui/                        # Vue 3 + Vite + PrimeVue browser UI
-├── run_server.py                  # RAG server launcher
-├── run_worker.py                  # Ingestion worker launcher
-├── requirements*.txt              # Runtime, locked and test dependencies
-├── pytest.ini                     # Test configuration
-│
-├── .github/
-│   └── workflows/
-│       ├── ragas_eval.yml        # CI: weekly RAGAS evaluation (or manual trigger)
-│       └── tests.yml             # CI: automated test suite runner
-│
-├── database/
-│   ├── schema/
-│   │   └── 01_baseline.sql               # Base schema definitions
-│   ├── seed/
-│   │   ├── 01_roles.sql
-│   │   ├── 02_dev_accounts.sql
-│   │   └── 03_departments.sql
-│   ├── data_migrations/
-│   │   └── 0001_normalize_domain_values.sql
-│   ├── migrations/                       # Versioned SQL migrations (Flyway-style, idempotent)
-│   │   ├── V0001__backfill_clearance_safe_default.sql
-│   │   ├── V0002  →  V0016               # Core schema evolution (clearance, metadata, glossary, …)
-│   │   ├── V0017__add_user_preferred_language.sql
-│   │   ├── V0018__backfill_dev_account_links.sql
-│   │   ├── V0019__publication_outbox_and_serving_gate.sql
-│   │   ├── V0020__semantic_cache_exact_lookup.sql
-│   │   ├── V0021__external_ai_provider_profiles.sql
-│   │   ├── V0022__knowledge_governance_and_serving_epoch.sql
-│   │   ├── V0023__department_rollout_and_evaluation_gates.sql
-│   │   ├── V0024__separate_control_plane_roles.sql
-│   │   ├── V0025__citation_provenance_and_chat_evidence.sql
-│   │   ├── V0026__effective_lifecycle_buckets.sql
-│   │   ├── V0027__wave2_rollout_profiles.sql
-│   │   ├── V0028__wave3_rollout_profiles.sql
-│   │   ├── V0029__wave4_rollout_profiles.sql
-│   │   ├── V0030__rollout_invariants_and_profile_hygiene.sql
-│   │   ├── V0031__wave1_domain_profiles.sql
-│   │   ├── V0032__rollout_wave_status_guard.sql
-│   │   └── V0033 - V0041                 # Feature governance and provider profiles
-│   └── MIGRATIONS.md                     # Migration documentation
-│
-├── scripts/
-│   ├── create_qdrant_indexes.py          # Initialize Qdrant Cloud collections
-│   ├── nap_them_file.py                  # Manually ingest additional documents
-│   ├── route_dashboard.py                # Dashboard route analyzer
-│   ├── eval_semantic_router.py           # Semantic router evaluation script
-│   ├── admin/
-│   │   └── hash_pass.py                  # Hash passwords for manual account seeding
-│   ├── diagnostics/
-│   │   ├── check_image_summary_coverage.py
-│   │   ├── check_qdrant_count.py
-│   │   └── check_qdrant_schema.py
-│   ├── eval/
-│   │   ├── run_ragas_eval.py             # RAGAS evaluation entry point (used by CI)
-│   │   ├── run_eval.py                   # Manual evaluation runner
-│   │   ├── ragas_metrics.py              # RAGAS metric definitions
-│   │   ├── evaluate_chatbot.py           # Chatbot evaluation harness
-│   │   ├── benchmark_rag_concurrency.py  # RAG concurrency load testing
-│   │   ├── pilot_rollout_gate.py         # Department rollout gate evaluation
-│   │   ├── golden_set.jsonl              # Full golden question set
-│   │   └── golden_set_datagoc_real.jsonl  # Real-data golden set
-│   ├── migrations/
-│   │   ├── migrate.py                    # Run pending SQL migrations in order
-│   │   ├── migrate_qdrant_collection.py
-│   │   ├── backfill_qdrant_governance_metadata.py  # Backfill governance metadata
-│   │   ├── backfill_qdrant_servable.py   # Backfill servable flag in Qdrant
-│   │   ├── verify_clean_migration.py     # Verify migration integrity
-│   │   ├── alter_ingestionjobs.py
-│   │   ├── check_empty.py
-│   │   └── check_qdrant.py
-│   ├── ops/
-│   │   ├── backup_system.py              # System backup utility
-│   │   ├── loadtest_lan.py               # LAN load testing tool
-│   │   ├── start_demo_lan.ps1             # PowerShell script: start all services for LAN demo
-│   │   └── worker_supervisor.ps1          # Keep the ingestion worker ready and restart it after exit
-│   └── danger_ops/
-│       ├── empty_bag.py                  # Purge documents from Qdrant
-│       ├── reconcile_sql_qdrant.py       # Reconcile SQL ↔ Qdrant state
-│       └── reset_and_create_dev_db.sql   # Full dev database reset
-│
-├── tests/                                # Golden question sets and test fixtures
-├── mech_chatbot_tests_layered/           # Layered tests (unit, integration, e2e)
-├── reports/                              # RAG evaluation reports (incl. ragas_report.md)
-├── data/
-│   ├── raw/                              # Source PDF/document files
-│   ├── processed/                        # Rendered page images
-│   └── cache/                            # Vision OCR cache (not committed to git)
-│
-└── src/mech_chatbot/                     # Core application source code
-    ├── api/
-    │   ├── app_server.py                 # Browser-facing FastAPI app (serves Vue build + REST API)
-    │   ├── app_security.py               # App-level CSRF, CORS, and session security
-    │   ├── file_access.py                # Secure file-serving endpoints
-    │   └── rag_server.py                 # Persistent FastAPI RAG server
-    ├── workers/
-    │   ├── ingestion_worker.py           # Background document ingestion daemon
-    │   └── rag_worker.py                 # Isolated RAG subprocess worker
-    ├── ingestion/
-    │   ├── document_classifier.py        # 2-tier document classifier
-    │   ├── domain_registry.py            # Central domain configuration registry
-    │   ├── domain_handlers.py            # Per-domain processing handlers
-    │   ├── doc_type_registry.py          # Document type registry
-    │   ├── site_registry.py              # Site/branch registry
-    │   ├── material_registry.py          # Material registry
-    │   ├── mechanical_extractors.py      # Extractor for mechanical documents
-    │   ├── generic_extractors.py         # General-purpose extractor
-    │   ├── pdf_processor.py              # Backward-compatible PDF ingestion facade
-    │   ├── pdf/                          # Split PDF pipeline: readers, vision, BOM, metadata, quality, chunking
-    │   ├── sensitive_scanner.py          # Sensitive content detection on ingest
-    │   ├── vision_cache.py               # Disk-based Vision OCR result cache
-    │   └── file_ingestor.py              # Ingestion pipeline orchestrator
-    ├── rag/
-    │   ├── service.py                    # Backward-compatible RAG shim / re-export surface
-    │   ├── pipeline.py                   # RAG orchestration: chat_with_rag + citations
-    │   ├── pipeline_steps.py             # P0 helper slices extracted from chat_with_rag
-    │   ├── bootstrap.py                  # Qdrant, embedding, BM25, and LLM bootstrap
-    │   ├── prompt.py                     # Prompt templates and response language helpers
-    │   ├── retrieval.py                  # Retrieval helpers and lifecycle filters
-    │   ├── rerank.py                     # Reranking and long-context ordering
-    │   ├── intent.py                     # Query intent, filters, version policy
-    │   ├── evidence_gate.py              # LLM evidence sufficiency verification
-    │   ├── streaming_policy.py           # Streaming response policy
-    │   ├── conversation_state.py         # Conversation state memory and management
-    │   ├── interaction_router.py         # RAG semantic routing controller
-    │   ├── semantic_cache.py             # Semantic caching layer
-    │   ├── route_*.py                    # Various routing logic (LLM, Safety, Responses, Config)
-    │   ├── context_builders.py           # Builders for RAG context framing
-    │   ├── answer_checks.py              # Verification & evidence checks
-    │   ├── glossary_expand.py            # Query expansion via domain glossary
-    │   ├── rbac.py                       # RBAC-based Qdrant filter builder
-    │   ├── entity_resolver.py            # Entity / material name normalizer
-    │   ├── chitchat.py                   # Chitchat detection and bilingual handling
-    │   ├── regression.py                 # Regression batch runner
-    │   └── text_utils.py                 # Text processing utilities
-    ├── auth/
-    │   ├── core.py                       # Authentication core logic
-    │   ├── authorization.py              # Role-based authorization middleware
-    │   ├── service.py                    # Auth session & role resolution shim
-    │   ├── security_policy.py            # Security clearance policy (resolve_clearance)
-    │   └── rate_limit.py                 # Login rate limiting & lockout
-    ├── db/
-    │   ├── engine.py                     # SQLAlchemy engine and SQL Server connection settings
-    │   ├── registry_ports.py             # Abstract registry port interfaces
-    │   ├── repository.py                 # Backward-compatible shim re-exporting repositories/*
-    │   └── repositories/                 # Split SQL repositories by domain
-    │       ├── access.py / audit.py / analytics.py
-    │       ├── catalog.py / chat.py / feedback.py / lifecycle.py
-    │       ├── doc_metadata.py / document.py / document_pages.py
-    │       ├── external_ai.py / glossary.py / jobs.py / material.py / bom.py
-    │       ├── knowledge_governance.py / publication.py / rollout.py
-    │       └── qdrant.py / semantic_cache.py / settings.py / ui_queries.py / version.py
-    ├── services/                         # Thin service layer used by API endpoints
-    │   ├── access_service.py / audit_service.py / analytics_service.py
-    │   ├── chat_service.py / document_service.py / feedback_service.py
-    │   ├── external_ai_service.py / glossary_service.py / job_service.py
-    │   ├── knowledge_governance_service.py / lifecycle_service.py
-    │   ├── material_service.py / org_service.py / rollout_service.py
-    │   └── settings_service.py / ui_query_service.py
-    ├── llm/
-    │   ├── llm_client.py                 # LLM client (OpenAI-compatible, with retry)
-    │   ├── vision_client.py              # Vision model client (with retry)
-    │   └── external_ai.py               # External AI provider routing & policy
-    └── config/
-        ├── constants.py                  # System-wide constants (SHARE_ALL_DEPARTMENT sentinel)
-        ├── logging.py                    # Centralized structured logging
-        ├── settings.py                   # Runtime settings loader
-        └── validate.py                   # Fail-fast config validation (assert_config_valid)
-```
+| Directory | Purpose |
+|---|---|
+| `backend/src/mech_chatbot/` | Python API, RAG, ingestion, domain and governance code |
+| `backend/tests/` | Main backend suite, architecture checks and fixtures |
+| `backend/tests_layered/` | Independent layered suite and historical runner compatibility |
+| `backend/requirements/` | Runtime, test, security and optional dependency files; pinned versions unchanged |
+| `frontend/` | Vue application, frontend tests and Vite build |
+| `scripts/` | Development, evaluation, diagnostics and Windows service tools |
+| `database/` | Schema, migrations and seed scripts |
+| `docs/` | Operating guides, architecture decisions and the original architecture document |
+| `data/`, `src/data/`, `eval/` | Existing corpus, page images, caches and evaluation inputs; paths preserved |
+| `reports/` | Existing review and release evidence; historical hashes preserved |
+| `.local/` | Local runs, temporary files and isolated environments; not versioned |
+
+`run_server.py` and `run_worker.py` remain root launchers. Root `pytest.ini`
+collects `backend/tests`; the layered suite uses its own configuration.
+The Python package is still named `mech_chatbot`; HTTP APIs and database schemas
+are unchanged. See [restructure evidence and rollback](docs/repository-restructure-20261030.md).
 
 ---
 
@@ -485,7 +326,7 @@ processes before rerunning the launcher.
 ```bash
 git clone https://github.com/giabao2605/ChatbotProject.git
 cd ChatbotProject
-pip install -r requirements.txt
+pip install -r backend/requirements/requirements.txt
 ```
 
 Start each service in a separate terminal:
@@ -495,30 +336,42 @@ Start each service in a separate terminal:
 python run_server.py
 
 # Terminal 2 — Ingestion worker
-$env:PYTHONPATH="src"; python run_worker.py
+$env:PYTHONPATH="backend/src"; python run_worker.py
 
 # Terminal 3 — Vue UI + browser-facing FastAPI
-$env:PYTHONPATH="src"; $env:APP_SERVER_HOST="0.0.0.0"; $env:APP_SERVER_PORT="8080"; python -m mech_chatbot.api.app_server
+$env:PYTHONPATH="backend/src"; $env:APP_SERVER_HOST="0.0.0.0"; $env:APP_SERVER_PORT="8080"; python -m mech_chatbot.api.app_server
 ```
 
-> Alternatively, run with `PYTHONPATH=src` explicitly:
+> Alternatively, run with `PYTHONPATH=backend/src` explicitly:
 > ```bash
-> PYTHONPATH=src python -m mech_chatbot.api.rag_server
-> PYTHONPATH=src python -m mech_chatbot.workers.ingestion_worker
-> PYTHONPATH=src APP_SERVER_HOST=0.0.0.0 APP_SERVER_PORT=8080 python -m mech_chatbot.api.app_server
+> PYTHONPATH=backend/src python -m mech_chatbot.api.rag_server
+> PYTHONPATH=backend/src python -m mech_chatbot.workers.ingestion_worker
+> PYTHONPATH=backend/src APP_SERVER_HOST=0.0.0.0 APP_SERVER_PORT=8080 python -m mech_chatbot.api.app_server
 > ```
 
-Run the baseline browser E2E only after the RAG API is ready on port 8100, the
-browser app is ready on port 8080, and
-`.local/demo-wave-credentials.json` exists:
+Run live browser E2E only against an isolated candidate with its own SQL/Qdrant
+data and test credentials. Do not copy production `.env` or credentials. Verify
+the candidate identity before login/chat; the current Windows services use
+ports 8080/8100, so use separate ports for this checkout:
 
 ```powershell
+$env:E2E_BASE_URL="http://127.0.0.1:18080"
+$env:E2E_RAG_BASE_URL="http://127.0.0.1:18100"
+$env:DEV_API_TARGET="http://127.0.0.1:18180"
+$env:E2E_CREDENTIALS_PATH="C:\path-to-isolated-test-credentials.json"
 $env:E2E_BROWSER_CHANNEL="chrome"
-npm --prefix web-ui run test:e2e
+npm --prefix frontend run test:e2e
 ```
 
+`E2E_BASE_URL` is required. The live RAG health check also requires
+`E2E_RAG_BASE_URL`. Fixture-only browser tests can use a frontend preview on
+18080 with intercepted API responses; passing them does not prove live SQL,
+provider, login or ingestion readiness. `DEV_API_TARGET` controls the Vite API
+proxy and must point to the separate candidate app API, not the RAG API.
+
+
 Omit `E2E_BROWSER_CHANNEL` after installing bundled Chromium with
-`npx playwright install chromium` from `web-ui`. The E2E runner reads demo
+`npx playwright install chromium` from `frontend`. The E2E runner reads demo
 credentials only inside the test process and keeps traces/videos off while
 login and chat requests are in flight.
 
@@ -628,24 +481,24 @@ The generator creates 84 lifecycle fixtures and 1,050 evaluation cases
 writes a rollout gate; `--record-gates` is accepted only in full mode.
 
 ```bash
-pip install -r requirements-test.txt
+pip install -r backend/requirements/requirements-test.txt
 
 # Fast local suite (skips integration and eval tests)
 pytest -m "not integration and not eval"
 
 # Full pytest collection. Integration/eval tests are skipped unless their
-# required environment variables are enabled in tests/conftest.py.
+# required environment variables are enabled in backend/tests/conftest.py.
 pytest
 
 # Run by layer
-pytest tests/
+pytest backend/tests/
 pytest mech_chatbot_tests_layered/
 
 # Manual RAG quality evaluation
-PYTHONPATH=src python scripts/eval/run_ragas_eval.py
+PYTHONPATH=backend/src python scripts/eval/run_ragas_eval.py
 
 # Manual evaluation with detailed output
-PYTHONPATH=src python scripts/eval/run_eval.py
+PYTHONPATH=backend/src python scripts/eval/run_eval.py
 ```
 
 Evaluation reports are stored in the `reports/` directory.
@@ -677,7 +530,7 @@ Wave 3 and Wave 4 commands are documented in their respective template
 directories:
 
 ```powershell
-$env:PYTHONPATH="src"
+$env:PYTHONPATH="backend/src"
 python scripts/eval/pilot_rollout_gate.py reports/wave2-evaluation.jsonl `
   --expected-departments Warehouse,Accountant,Sales,Planning `
   --expected-department-count 4 `

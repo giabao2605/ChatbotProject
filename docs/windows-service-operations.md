@@ -37,6 +37,16 @@ minh hết request/job. Không in `.env`, token hoặc khóa ký ra terminal/bá
 Đối chiếu commit với bundle được cấu hình, hash bundle và chữ ký; RAG health có
 xác thực phải cho đúng commit và `live_authorized=true`.
 
+## Candidate sắp xếp repo ngày 30/10/2026
+
+Nhánh `codex/repo-restructure` dùng `backend/src` và `frontend/dist`. Launcher
+trong candidate đã được cập nhật theo hai đường dẫn này, còn `chat_env`, `.env`,
+dữ liệu, log và hồ sơ phát hành giữ nguyên vị trí tương đối từ repo root.
+Các đường dẫn `src` và `web-ui/dist` trong mô tả release cũ bên trên là lịch sử;
+không áp dụng thay đổi cấu trúc vào checkout đang phục vụ trong đợt này.
+Xem [phạm vi, kiểm chứng và rollback](repository-restructure-20261030.md).
+Không chạy configure/preflight hoặc service host từ candidate để thử bố cục.
+
 ## Chuẩn bị phát hành
 
 1. Kiểm tra mọi thay đổi nguồn và WIP; ghi commit live, candidate và main. Không

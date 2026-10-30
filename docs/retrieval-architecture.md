@@ -4,7 +4,7 @@
 
 The pilot uses explicit dense retrieval plus BM25 sparse retrieval as two
 separate Qdrant searches, then performs reciprocal-rank fusion (RRF) in
-`src/mech_chatbot/rag/pipeline_steps.py`.
+`backend/src/mech_chatbot/rag/pipeline_steps.py`.
 
 The runtime mode for this path is `explicit_dense_bm25_rrf`.  It is the source
 of truth for the pilot; Qdrant Query API/prefetch is not currently required.

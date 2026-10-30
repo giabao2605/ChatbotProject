@@ -17,7 +17,7 @@ This repository uses the single-context layout:
 ├── CONTEXT.md
 ├── docs/
 │   └── adr/
-└── src/
+└── backend/src/
 ```
 
 ## Consumer rules

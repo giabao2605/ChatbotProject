@@ -33,6 +33,13 @@ bản đang chạy và ít nhất một bộ quay lui đầy đủ. Công cụ h
 reports/logs/worktrees/venvs mặc định; nếu muốn nghỉ các tài nguyên này phải có
 quyết định riêng và cập nhật kiểm thử trước, không bỏ chốt để dọn nhanh.
 
+## Bố cục candidate mới
+
+Bảo vệ thêm `backend`, `frontend/dist` và `frontend/node_modules` trong candidate.
+Giữ bảo vệ các đường dẫn cũ `src`, `web-ui/dist`, `web-ui/node_modules`, bộ test
+và dữ liệu cũ để công cụ vẫn an toàn khi kiểm tra checkout lịch sử. Các output
+frontend mới chỉ được xét bằng manifest như output cũ, không tự dọn theo tên.
+
 ## Quy trình
 
 1. Quét dung lượng toàn repo, gồm file ẩn và ignored; không đi theo reparse point.
