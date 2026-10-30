@@ -3164,15 +3164,18 @@ def test_profile_pair_launcher_rejects_invalid_selective_flag_sources(
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="exercises Windows ACL or process boundary")
-def test_profile_pair_launcher_resolves_live_bundle_from_external_checkout(tmp_path):
+@pytest.mark.parametrize("source_path", ["src", "backend/src"])
+def test_profile_pair_launcher_resolves_live_bundle_from_external_checkout(tmp_path, source_path):
     powershell = shutil.which("pwsh") or shutil.which("powershell")
     if powershell is None:
         pytest.skip("PowerShell is required for the Windows launcher contract")
 
     scripts_dir = tmp_path / "scripts" / "ops"
-    source_dir = tmp_path / "src"
+    source_dir = tmp_path / source_path
     scripts_dir.mkdir(parents=True)
-    source_dir.mkdir()
+    source_dir.mkdir(parents=True)
+    (source_dir / "mech_chatbot").mkdir()
+    (source_dir / "mech_chatbot" / "__init__.py").write_text("", encoding="utf-8")
     (tmp_path / "bundle.json").write_text("{}", encoding="utf-8")
     (source_dir / "checkout_sentinel.py").write_text(
         'VALUE = "external-checkout"\n',

@@ -100,6 +100,12 @@ if (
 if (![string]::IsNullOrWhiteSpace($RestoreEvidenceSha256)) {
     $RestoreEvidenceSha256 = $RestoreEvidenceSha256.ToLowerInvariant()
 }
+if (-not (Test-Path -LiteralPath (Join-Path $pythonPath 'mech_chatbot\__init__.py') -PathType Leaf)) {
+    $pythonPath = Join-Path $projectRoot 'src'
+}
+if (-not (Test-Path -LiteralPath (Join-Path $pythonPath 'mech_chatbot\__init__.py') -PathType Leaf)) {
+    throw 'Source package unavailable.'
+}
 
 Push-Location $projectRoot
 try {
