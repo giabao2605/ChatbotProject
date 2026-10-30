@@ -306,4 +306,3 @@ if __name__ == '__main__':
         identity_preflight(args.role)
     else:
         run(args.role, args.stop_file)
-
