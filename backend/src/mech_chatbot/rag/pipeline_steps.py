@@ -871,8 +871,10 @@ def _assemble_context(retrieved_docs, user_question):
     # Legacy approved answers are usable only as excerpts of the selected current source.
     try:
         from mech_chatbot.db.repositories.feedback import find_golden_answer
+        from mech_chatbot.rag.execution import current_request_actor
         _golden = find_golden_answer(
             user_question,
+            actor=current_request_actor(),
             admitted_doc_ids=list(dict.fromkeys(
                 doc.metadata.get("doc_id") for doc in retrieved_docs
                 if doc.metadata.get("doc_id") is not None

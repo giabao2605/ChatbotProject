@@ -196,7 +196,7 @@ def test_repository_store_persists_turn_evidence_and_final_sources():
     calls = []
     store = RepositoryChatStore(
         save_chat_history=lambda **kwargs: calls.append(("chat", kwargs)) or 91,
-        save_answer_evidence=lambda *args: calls.append(("evidence", args)),
+        save_answer_evidence=lambda *args,**kwargs: calls.append(("evidence", args, kwargs)),
         save_answer_sources=lambda *args: calls.append(("sources", args)),
     )
     citation = {
@@ -219,7 +219,8 @@ def test_repository_store_persists_turn_evidence_and_final_sources():
 
     assert store.persist(record) == 91
     assert calls[0][1]["bot_msg"] == "answer refs"
-    assert calls[1] == ("evidence", (91, [{"doc_id": 1}]))
+    assert calls[1][:2] == ("evidence", (91, [{"doc_id": 1}]))
+    assert calls[1][2]['actor']['username'] == 'alice'
     assert calls[2][1][1][0]["source_id"] == "D1P3"
 
 
@@ -231,11 +232,11 @@ def test_repository_store_keeps_structured_pins_and_reports_failed_evidence_writ
                 'citation_schema':'source-locator-v2','source_id':'D17L1234567890ABCDEF'}
     record = ChatPersistence(command=replace(command(),scope_comparison=('a','b')),actor=actor(),answer='4',
                              ref_text='',ref_images=(),evidence=(citation,),citations=(citation,))
-    store = RepositoryChatStore(save_chat_history=lambda **kw:11,save_answer_evidence=lambda *a:True,
+    store = RepositoryChatStore(save_chat_history=lambda **kw:11,save_answer_evidence=lambda *a,**kw:True,
                                 save_answer_sources=lambda cid,docs:captured.extend(docs) or True)
     assert store.persist(record)==11
     assert captured[0]['scope_hash']=='b'*64 and captured[0]['locator']['cell']=='B2'
-    failed = RepositoryChatStore(save_chat_history=lambda **kw:11,save_answer_evidence=lambda *a:False,
+    failed = RepositoryChatStore(save_chat_history=lambda **kw:11,save_answer_evidence=lambda *a,**kw:False,
                                  save_answer_sources=lambda *a:pytest.fail('must not save unverifiable sources'))
     with pytest.raises(RuntimeError):
         failed.persist(record)
@@ -254,7 +255,9 @@ def test_repository_store_passes_branch_result_with_final_citations_and_reports_
     store = RepositoryChatStore(save_chat_history=lambda **kw:11,
         save_answer_evidence=lambda *a,**kw:captured.append(kw) or True,save_answer_sources=lambda *a:True)
     assert store.persist(record)==11
-    assert captured == [{'advanced_rag':metadata,'citation_cards':[card]}]
+    assert captured[0]['advanced_rag'] == metadata
+    assert captured[0]['citation_cards'] == [card]
+    assert captured[0]['actor']['user_id'] == 7
     failed = RepositoryChatStore(save_chat_history=lambda **kw:11,save_answer_evidence=lambda *a,**kw:False,
         save_answer_sources=lambda *a:pytest.fail('must not pretend the advanced history was saved'))
     with pytest.raises(RuntimeError):failed.persist(record)
@@ -271,7 +274,8 @@ def test_repository_store_keeps_legacy_results_on_the_existing_evidence_api(meta
     record = ChatPersistence(command=command(),actor=actor(),answer='Answer',ref_text='',ref_images=(),
                              evidence=(),citations=(),advanced_rag=metadata)
     assert store.persist(record)==11
-    assert captured == [{}]
+    assert captured[0]['actor']['user_id'] == 7
+    assert 'advanced_rag' not in captured[0]
 
 
 def test_audit_adapter_preserves_typed_record_fields():

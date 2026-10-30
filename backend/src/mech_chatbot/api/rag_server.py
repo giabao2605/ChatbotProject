@@ -268,6 +268,7 @@ class ChatRequest(BaseModel):
     bom_rollup: BomRollupRequest | None = None
     query_plan: QueryPlanRequest | None = None
     text_query: bool = Field(False,strict=True)
+    regression_scope: Dict[str, str] | None = None
 
 
 class ChatResponse(BaseModel):
@@ -782,6 +783,7 @@ async def chat_stream_endpoint(
                     runtime=server_state.runtime,
                 )
                 completed = False
+                completion_outcome = None
                 for event in events:
                     if cancel_event.is_set():
                         raise ExternalAICallCancelled("RAG stream da bi client huy")
@@ -807,6 +809,7 @@ async def chat_stream_endpoint(
                     elif isinstance(event, RagCompleted):
                         debug_info = dict(event.diagnostics)
                         completed = True
+                        completion_outcome = event.outcome
                     elif isinstance(event, RagCancelled):
                         if event.cause is not None:
                             raise event.cause
@@ -836,6 +839,8 @@ async def chat_stream_endpoint(
                         "first_token_ms": first_token_ms,
                         "trace_id": request_trace_id,
                         "trace_stages": trace_stages,
+                        'outcome':completion_outcome,
+                        **({'debug_info':debug_info} if req.regression_scope is not None else {}),
                     },
                 )
                 logger.info(
@@ -850,6 +855,7 @@ async def chat_stream_endpoint(
                 )
             except ExternalAICallCancelled:
                 elapsed_ms = int((time.time() - started) * 1000)
+                emit('cancelled', {'code':'cancelled','trace_id':request_trace_id,'elapsed_ms':elapsed_ms})
                 logger.info("RAG stream cancelled after %sms", elapsed_ms)
                 if not replay:
                     _audit_admin_query(
@@ -1113,6 +1119,22 @@ def _open_rag_events(
         RagRequest,
     )
 
+    if req.regression_scope is not None:
+        from mech_chatbot.application.feedback_access import validated_scope
+        from mech_chatbot.auth.authorization import role_allows
+        from mech_chatbot.auth.authorization import normalized_roles
+        if not role_allows(user_profile.get('roles'), 'reviewer'):
+            raise HTTPException(403, detail='Regression access denied')
+        try:
+            scope = validated_scope(user_profile, **req.regression_scope)
+        except (ValueError,TypeError):
+            raise HTTPException(422, detail='Invalid regression scope') from None
+        user_profile = {**user_profile, 'department':scope['department'],
+            'allowed_departments':[scope['department']], 'allowed_sites':[scope['site']],
+            'max_security_level':scope['max_security_level'],
+            'roles':sorted((normalized_roles(user_profile['roles']) - {'admin'})
+                           | ({'viewer'} if 'admin' in normalized_roles(user_profile['roles']) else set()))}
+
     if req.scope_total is not None or req.scope_comparison is not None or req.graph_query is not None or req.bom_rollup is not None or req.query_plan is not None or req.text_query:
         mode = _scope_comparison_mode(req, user_profile, runtime, replay=mode == 'pilot_replay')
     request = RagRequest(
@@ -1121,6 +1143,8 @@ def _open_rag_events(
         history=tuple(req.chat_history),
         current_part_ids=tuple(req.current_part_ids),
         access=AccessScope(
+            user_id=user_profile.get('user_id'),
+            username=user_profile.get('username'),
             department=user_profile.get("department"),
             roles=frozenset(user_profile.get("roles") or ()),
             allowed_departments=frozenset(user_profile.get("allowed_departments") or ()),

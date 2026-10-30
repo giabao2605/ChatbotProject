@@ -130,6 +130,27 @@ def test_admin_mutation_stops_when_transaction_lock_is_unavailable(monkeypatch):
     assert len(conn.calls) == 1 and 'sp_getapplock' in conn.calls[0][0]
 
 
+@pytest.mark.parametrize('active', [False, True])
+def test_role_only_update_preserves_account_activity(monkeypatch, active):
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine('sqlite://')
+    with engine.begin() as conn:
+        conn.execute(text('CREATE TABLE Users (UserID INTEGER PRIMARY KEY, IsActive INTEGER)'))
+        conn.execute(text('CREATE TABLE Roles (RoleID INTEGER PRIMARY KEY, RoleName TEXT)'))
+        conn.execute(text('CREATE TABLE UserRoles (UserID INTEGER, RoleID INTEGER)'))
+        conn.execute(text('INSERT INTO Users VALUES (7, :active)'), {'active': int(active)})
+        conn.execute(text("INSERT INTO Roles VALUES (1, 'reviewer')"))
+    monkeypatch.setattr(user_repo, 'engine', engine)
+    try:
+        assert user_repo.update_user_active_and_roles(7, None, ['reviewer'], []) is True
+        with engine.connect() as conn:
+            assert bool(conn.execute(text('SELECT IsActive FROM Users WHERE UserID=7')).scalar_one()) is active
+            assert conn.execute(text('SELECT RoleID FROM UserRoles WHERE UserID=7')).scalar_one() == 1
+    finally:
+        engine.dispose()
+
+
 @pytest.mark.parametrize('action,method,args', [
     ('user_active', 'set_user_active_status', (7, {'is_active': False})),
     ('user_delete', 'delete_user_account', (7,)),

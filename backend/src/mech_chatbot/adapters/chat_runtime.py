@@ -121,6 +121,7 @@ def _default_payload(request: RagStreamRequest) -> dict[str, Any]:
         **({'bom_rollup':bom_rollup_context(command.bom_rollup)} if command.bom_rollup is not None else {}),
         **({'query_plan':_query_plan_payload(command.query_plan)} if command.query_plan is not None else {}),
         **({'text_query':True} if command.text_query else {}),
+        **({'regression_scope':dict(command.regression_scope)} if command.regression_scope is not None else {}),
     }
 
 
@@ -219,10 +220,14 @@ def _map_sse_event(event_name: str, payload: Any) -> Iterable[RagStreamEvent]:
             trace_id=_optional_str(data.get("trace_id")),
             elapsed_ms=_optional_int(data.get("elapsed_ms")),
         )
+    elif name == 'cancelled':
+        yield RagStreamError(message='RAG execution cancelled',detail={**dict(data),'code':'cancelled'})
     elif name == "done":
         yield RagStreamDone(
             trace_id=_optional_str(data.get("trace_id")),
             elapsed_ms=_optional_int(data.get("elapsed_ms")),
+            outcome=_optional_str(data.get('outcome')),
+            debug_info=data.get('debug_info') if isinstance(data.get('debug_info'),Mapping) else None,
         )
 
 
@@ -273,6 +278,8 @@ class RepositoryChatStore:
             and record.advanced_rag['math'].get('schema') == 'grounded-calculation-scope-total-v1'
         ) else None
         options = {'advanced_rag':metadata,'citation_cards':list(record.citations)} if metadata is not None else {}
+        options['actor'] = {key:getattr(record.actor,key) for key in ('user_id','username','roles','department',
+            'allowed_departments','allowed_sites','max_security_level')}
         if self._save_answer_evidence(chat_id, list(record.evidence), **options) is False and (structured or metadata is not None):
             raise RuntimeError('Structured chat evidence was not persisted')
         if record.citations:

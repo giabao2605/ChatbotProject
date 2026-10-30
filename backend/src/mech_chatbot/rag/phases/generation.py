@@ -326,7 +326,7 @@ def generate(
     state: Any,
 ) -> GenerationResult:
     request = decision.request
-    documents = list(reranked.documents)
+    documents = list(evidence.documents or reranked.documents)
     new_part_ids = list(enrichment.new_part_ids)
     decomposition_branches = list(primary.decomposition_branches)
     stream, generation_metrics = _start_generation(

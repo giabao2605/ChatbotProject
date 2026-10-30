@@ -6,6 +6,8 @@ langchain
 langchain-core
 langchain-community
 langchain-qdrant
+langchain-huggingface==1.2.2
+fastembed==0.9.1
 pymupdf
 pdfplumber
 pillow

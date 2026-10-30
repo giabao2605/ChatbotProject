@@ -46,6 +46,7 @@ class EvidenceOutcome:
     evidence_decision: Any
     evidence_quotes: tuple[str, ...]
     reason_code: str = "evidence_approved"
+    documents: tuple[Any, ...] = ()
 
 
 def _select_citations(
@@ -195,6 +196,7 @@ def _approved_evidence_outcome(
     evidence_quotes: tuple[str, ...],
 ) -> EvidenceOutcome:
     return EvidenceOutcome(
+        documents=tuple(documents),
         context_text=context_text,
         ref_text=ref_text,
         ref_images=tuple(ref_images),
@@ -266,6 +268,9 @@ def evaluate_evidence(
     """Apply citation and answerability policy to the retrieved evidence."""
     request = decision.request
     documents = list(reranked.documents)
+    from mech_chatbot.services.feedback_service import pin_generation_evidence
+    documents = pin_generation_evidence(documents,state.request.access,
+        checkpoint=state.checkpoint,deadline=state.budget.deadline_monotonic)
     decomposition_branches = list(primary.decomposition_branches)
     if len(filter_applicable_sources(documents, request.user_question)) != len(documents):
         from mech_chatbot.rag.phases.retrieval_rerank import _empty_context_terminal

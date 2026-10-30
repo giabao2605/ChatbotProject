@@ -45,6 +45,11 @@ _REQUEST_BUDGET: ContextVar["RequestBudgetLedger | None"] = ContextVar(
     default=None,
 )
 _REQUEST_CHECKPOINT: ContextVar[Callable[[str], None] | None] = ContextVar('rag_request_checkpoint',default=None)
+_REQUEST_ACTOR: ContextVar[Mapping[str, Any] | None] = ContextVar('rag_request_actor',default=None)
+
+
+def current_request_actor():
+    return _REQUEST_ACTOR.get()
 
 
 class RequestDeadlineExceeded(TimeoutError):
@@ -133,6 +138,8 @@ class AccessScope:
     allowed_departments: frozenset[str] = frozenset()
     max_security_level: str = "public"
     allowed_sites: frozenset[str] = frozenset()
+    user_id: int | None = None
+    username: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -913,6 +920,10 @@ class DefaultRagExecutor:
         from mech_chatbot.rag.semantic_cache import replay_cache_disabled
 
         with ExitStack() as stack:
+            actor_token = _REQUEST_ACTOR.set({'user_id':request.access.user_id,'username':request.access.username,
+                'execution_scope':{'roles':request.access.roles,'allowed_departments':request.access.allowed_departments,
+                    'allowed_sites':request.access.allowed_sites,'max_security_level':request.access.max_security_level}})
+            stack.callback(_REQUEST_ACTOR.reset, actor_token)
             context_token = _EXECUTION_CONTEXT.set(invocation.mode)
             stack.callback(_EXECUTION_CONTEXT.reset, context_token)
             if invocation.mode in {"evaluation", "pilot_replay"} or request.text_query:

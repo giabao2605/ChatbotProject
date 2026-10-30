@@ -740,3 +740,37 @@ describe("StatView public behavior", () => {
     expect(wrapper.text()).toContain("Đã xảy ra lỗi");
   });
 });
+
+
+describe("ResourcePage request ordering", () => {
+  it.each(["success", "failure"])("ignores stale %s after the latest response", async (outcome) => {
+    let resolveOld!: (rows: ApiRow[]) => void;
+    let rejectOld!: (reason: Error) => void;
+    const load = vi.fn().mockImplementationOnce(() => new Promise<ApiRow[]>((resolve, reject) => {
+      resolveOld = resolve; rejectOld = reject;
+    })).mockResolvedValueOnce([{ name: "latest" }]);
+    const wrapper = mountResource({ title: "Requests", load });
+    await nextTick();
+    await (wrapper.vm as unknown as { refresh: () => Promise<void> }).refresh();
+    if (outcome === "success") resolveOld([{ name: "stale" }]);
+    else rejectOld(new Error("stale error"));
+    await flushPromises();
+    expect(wrapper.text()).toContain("latest");
+    expect(wrapper.text()).not.toContain("stale");
+    expect(wrapper.find(".spinner").exists()).toBe(false);
+  });
+
+  it("keeps loading until the latest request settles", async () => {
+    const pending: ((rows: ApiRow[]) => void)[] = [];
+    const wrapper = mountResource({ title: "Requests", load: () => new Promise(resolve => pending.push(resolve)) });
+    await nextTick();
+    const latest = (wrapper.vm as unknown as { refresh: () => Promise<void> }).refresh();
+    pending[0]([{ name: "old" }]);
+    await flushPromises();
+    expect(wrapper.find(".spinner").exists()).toBe(true);
+    pending[1]([{ name: "latest" }]);
+    await latest;
+    await nextTick();
+    expect(wrapper.find(".spinner").exists()).toBe(false);
+  });
+});

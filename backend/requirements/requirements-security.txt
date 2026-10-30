@@ -22,10 +22,10 @@ streamlit==1.66.1
 yarl==1.25.1
 filelock==4.2.1
 fsspec==2026.6.0
-langgraph-sdk==0.4.4
+langgraph-sdk==0.4.6
 pip==26.2
 sentence-transformers==5.6.0
 setuptools==84.1.0
 soupsieve==2.9
-tornado==6.5.9
+tornado==6.6
 msgpack==1.2.3

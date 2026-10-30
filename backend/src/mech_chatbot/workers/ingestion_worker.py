@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from mech_chatbot.adapters.worker_status import worker_heartbeat
 
@@ -12,6 +13,11 @@ from mech_chatbot.composition.worker_runtime import WorkerRuntime, build_worker_
 from mech_chatbot.config.logging import LoggingConfig, configure_logging, logger
 from mech_chatbot.config.repository_runtime import bind_repository_runtime
 from mech_chatbot.config.settings import Settings, load_settings
+from mech_chatbot.workers.single_instance import (
+    WORKER_ALREADY_RUNNING,
+    WorkerAlreadyRunning,
+    worker_lock,
+)
 
 
 _READY_ENV = "INGESTION_WORKER_READY_FILE"
@@ -65,26 +71,44 @@ def _reconcile(runtime: WorkerRuntime, last_publication: float, last_serving: fl
     return last_publication, last_serving
 
 
-def run_worker(runtime: WorkerRuntime | None = None) -> None:
+def run_worker(
+    runtime: WorkerRuntime | None = None,
+    *,
+    runtime_factory: Callable[[], WorkerRuntime] | None = None,
+) -> None:
+    """Acquire host ownership before runtime construction or heartbeat changes."""
+    try:
+        with worker_lock():
+            _run_worker(runtime, runtime_factory=runtime_factory)
+    except WorkerAlreadyRunning:
+        raise SystemExit(WORKER_ALREADY_RUNNING) from None
+
+
+def _run_worker(
+    runtime: WorkerRuntime | None,
+    *,
+    runtime_factory: Callable[[], WorkerRuntime] | None,
+) -> None:
     """Poll, claim, and delegate jobs; business decisions stay in the runner."""
 
     owns_runtime = runtime is None
-    if owns_runtime:
+    if owns_runtime and runtime_factory is not None:
+        resolved_runtime = runtime_factory()
+    elif owns_runtime:
         settings_snapshot = load_settings()
         configure_logging(LoggingConfig.from_settings(settings_snapshot))
         resolved_runtime = build_worker_runtime(settings_snapshot)
     else:
         resolved_runtime = runtime
     readiness_marker = _readiness_path()
-    _clear_readiness_marker(readiness_marker)
-    last_publication_reconcile = 0.0
-    last_serving_reconcile = 0.0
-
-    database_engine = getattr(resolved_runtime.database_runtime, "engine", None)
-    dependencies = resolved_runtime.pipeline_dependencies
-    qdrant_client = getattr(dependencies, "qdrant_client", None)
-    qdrant_collection = getattr(dependencies, "collection_name", None)
     try:
+        _clear_readiness_marker(readiness_marker)
+        last_publication_reconcile = 0.0
+        last_serving_reconcile = 0.0
+        database_engine = getattr(resolved_runtime.database_runtime, "engine", None)
+        dependencies = resolved_runtime.pipeline_dependencies
+        qdrant_client = getattr(dependencies, "qdrant_client", None)
+        qdrant_collection = getattr(dependencies, "collection_name", None)
         if (
             database_engine is None
             or qdrant_client is None
@@ -131,9 +155,11 @@ def run_worker(runtime: WorkerRuntime | None = None) -> None:
                         resolved_runtime.settings.error_sleep_seconds
                     )
     finally:
-        _clear_readiness_marker(readiness_marker)
-        if owns_runtime:
-            resolved_runtime.close()
+        try:
+            _clear_readiness_marker(readiness_marker)
+        finally:
+            if owns_runtime:
+                resolved_runtime.close()
 
 
 if __name__ == "__main__":

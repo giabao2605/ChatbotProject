@@ -18,6 +18,12 @@ from mech_chatbot.config.settings import Settings, WorkerProcessSettings
 from mech_chatbot.workers import ingestion_worker
 
 
+@pytest.fixture(autouse=True)
+def temporary_worker_state(monkeypatch, tmp_path):
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "programdata"))
+    monkeypatch.delenv("INGESTION_WORKER_READY_FILE", raising=False)
+
+
 class _StopWorker(BaseException):
     pass
 
@@ -392,3 +398,50 @@ def test_run_worker_parses_one_settings_snapshot_at_process_start(monkeypatch) -
 
     assert len(parse_calls) == 1
     assert build_calls == [parsed]
+
+
+def test_busy_worker_never_builds_runtime_or_touches_owner_heartbeat(monkeypatch, tmp_path):
+    from mech_chatbot.workers.single_instance import worker_lock, WORKER_ALREADY_RUNNING
+
+    marker = tmp_path / "owner.ready"
+    marker.write_text("owner heartbeat", encoding="utf-8")
+    monkeypatch.setenv("INGESTION_WORKER_READY_FILE", str(marker))
+    builds = []
+    with worker_lock():
+        with pytest.raises(SystemExit) as stopped:
+            ingestion_worker.run_worker(runtime_factory=lambda: builds.append(True))
+    assert stopped.value.code == WORKER_ALREADY_RUNNING
+    assert builds == []
+    assert marker.read_text(encoding="utf-8") == "owner heartbeat"
+
+
+def test_factory_runtime_closes_before_worker_releases_lock(monkeypatch):
+    from mech_chatbot.workers.single_instance import WorkerAlreadyRunning, worker_lock
+
+    closed = []
+    runtime = _runtime(FakeStore([None]), FakeRunner(), FakeClock())
+
+    def close(_self):
+        with pytest.raises(WorkerAlreadyRunning):
+            with worker_lock():
+                pytest.fail("lock released before runtime closed")
+        closed.append(True)
+
+    monkeypatch.setattr(WorkerRuntime, "close", close)
+    with pytest.raises(_StopWorker):
+        ingestion_worker.run_worker(runtime_factory=lambda: runtime)
+    assert closed == [True]
+    with worker_lock():
+        pass
+
+
+def test_factory_runtime_closes_when_heartbeat_cleanup_fails(monkeypatch, tmp_path):
+    marker = tmp_path / "not-a-file"
+    marker.mkdir()
+    monkeypatch.setenv("INGESTION_WORKER_READY_FILE", str(marker))
+    closed = []
+    monkeypatch.setattr(WorkerRuntime, "close", lambda _self: closed.append(True))
+    runtime = _runtime(FakeStore([None]), FakeRunner(), FakeClock())
+    with pytest.raises(OSError):
+        ingestion_worker.run_worker(runtime_factory=lambda: runtime)
+    assert closed == [True]

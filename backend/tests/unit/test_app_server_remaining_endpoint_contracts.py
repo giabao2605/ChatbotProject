@@ -759,7 +759,8 @@ def test_feedback_correction_creates_golden_and_regression_evidence(
     monkeypatch.setattr(
         operation_routes.ui_query_service,
         "classify_feedback_and_get_source",
-        lambda *_args, **_kwargs: {"status": "classified"},
+        lambda *_args, **_kwargs: calls.append(('classify',_kwargs)) or
+            {"status": "classified", 'golden_hash':'hash-1','regression_qid':31},
     )
     monkeypatch.setattr(
         operation_routes.feedback_service,
@@ -780,8 +781,10 @@ def test_feedback_correction_creates_golden_and_regression_evidence(
     assert response.status_code == 200
     assert response.json()["golden_hash"] == "hash-1"
     assert response.json()["regression_qid"] == 31
-    assert calls[0][1]["feedback_id"] == 9
-    assert calls[1][1]["expected_doc_id"] == 42
+    assert calls[0][0] == 'classify'
+    assert calls[0][1]['actor']['username'] == 'alice'
+    assert calls[0][1]['correct_answer'] == 'Correct'
+    assert len(calls) == 1
 
 
 def test_quality_and_external_policy_contracts(monkeypatch, client_for):
@@ -930,7 +933,7 @@ def test_regression_accepts_optional_or_positive_expected_doc_id(monkeypatch, cl
     response = client_for(_profile("reviewer")).post("/api/regression/questions", json={"question": "QA regression", "expected_doc_id": expected_doc_id, "expected_keywords": "pump,torque", "department": "QA", "site": "QA"})
     assert response.status_code == 200
     assert response.json() == {"ok": True, "result": 91}
-    assert calls == [{"question": "QA regression", "expected_doc_id": normalized, "expected_keywords": "pump,torque", "department": "QA", "site": "QA", "created_by": "alice"}]
+    assert calls == [{"question": "QA regression", "expected_doc_id": normalized, "expected_keywords": "pump,torque", "department": "QA", "site": "QA", "created_by": "alice", 'max_security_level':None,'actor':_profile('reviewer')}]
 
 
 _CRUD_AUDIT_CASES = [

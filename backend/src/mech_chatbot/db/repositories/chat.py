@@ -144,7 +144,7 @@ def save_answer_sources(chat_id, retrieved_docs, *, db_engine=None):
 
 
 def save_answer_evidence(chat_id, evidence_docs, requires_authorization=None, *, db_engine=None,
-                         advanced_rag=None, citation_cards=()):
+                         advanced_rag=None, citation_cards=(), actor=None):
     """Persist the complete access basis separately from display citations.
 
     ``AnswerSource`` intentionally contains only the citations attributed in
@@ -168,6 +168,7 @@ def save_answer_evidence(chat_id, evidence_docs, requires_authorization=None, *,
     input_items = list(evidence_docs or [])
     complete = True
     structured = any(isinstance(item,dict) and 'locator' in item for item in input_items)
+    pinned = actor is not None and not structured
     result_history = advanced_rag is not None and (any(key in advanced_rag for key in ('query','text_query'))
         or isinstance(advanced_rag.get('math'),dict) and advanced_rag['math'].get('schema')=='grounded-calculation-scope-total-v1')
     for rank_no, item in enumerate(input_items, start=1):
@@ -193,13 +194,13 @@ def save_answer_evidence(chat_id, evidence_docs, requires_authorization=None, *,
         source_version = _to_int(version) if type(version) in (int,str) else None
         source_version = source_version if source_version is not None and source_version>0 else None
         if key in seen:
-            if result_history and source_version!=source_versions.get(key):
+            if (result_history or pinned) and source_version!=source_versions.get(key):
                 complete = False
             continue
         seen.add(key)
         source_versions[key] = source_version
         source_ref = provenance['source_id'] if provenance else str(item.get("source_id") or "").strip()[:80] or None
-        if result_history and source_version is None:
+        if (result_history or pinned) and source_version is None:
             complete = False
         if page_no is not None and source_ref is None:
             source_ref = f"D{doc_id}P{page_no}"
@@ -210,8 +211,8 @@ def save_answer_evidence(chat_id, evidence_docs, requires_authorization=None, *,
                 "source_ref": source_ref,
                 "security_level": _cap_len(item.get("security_level"), 30),
                 "rank_no": rank_no,
-                **({'locator_json':json.dumps(provenance,ensure_ascii=False) if provenance else None} if structured else {}),
-                **({'source_version':source_version} if result_history else {}),
+                **({'locator_json':json.dumps(provenance,ensure_ascii=False) if provenance else None} if structured or pinned else {}),
+                **({'source_version':source_version} if result_history or pinned else {}),
             }
         )
 
@@ -223,9 +224,16 @@ def save_answer_evidence(chat_id, evidence_docs, requires_authorization=None, *,
 
     try:
         with selected_engine.begin() as conn:
-            extra_column = ', SourceLocatorJson' if structured else ''
-            extra_value = ', :locator_json' if structured else ''
-            if result_history:
+            if pinned and normalized:
+                from .feedback_access import capture_sources
+                sources = capture_sources(conn, [item for item in input_items if isinstance(item,dict) and item.get('doc_id') is not None], actor)
+                pins = {(source['doc_id'],source.get('page_no')):source for source in sources}
+                for row in normalized:
+                    source = pins[(row['doc_id'],row['page_no'])]
+                    row['locator_json'] = json.dumps({'schema':'answer-source-pin-v1',**source},sort_keys=True)
+            extra_column = ', SourceLocatorJson' if structured or pinned else ''
+            extra_value = ', :locator_json' if structured or pinned else ''
+            if result_history or pinned:
                 extra_column += ', SourceVersion'
                 extra_value += ', :source_version'
             conn.execute(

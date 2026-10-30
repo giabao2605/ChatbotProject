@@ -323,7 +323,8 @@ def bulk_delete_ingestion_jobs(ids):
 # feedback.py
 # ---------------------------------------------------------------------------
 
-def list_feedbacks(only_pending):
+def list_feedbacks(only_pending, *, actor):
+	from .feedback_access import access_transaction, feedback_basis
 	query = """
         SELECT FeedbackID, ChatID, Question, BotAnswer, FailureType,
                CorrectAnswer, AddedToGoldenSet, CreatedAt,
@@ -332,14 +333,36 @@ def list_feedbacks(only_pending):
         WHERE 1 = 1
     """
 	if only_pending:
-		query += " AND ISNULL(AddedToGoldenSet, 0) = 0 AND ISNULL(IsStale, 0) = 0"
+		query += " AND COALESCE(AddedToGoldenSet, 0) = 0 AND COALESCE(IsStale, 0) = 0"
 	query += " ORDER BY CreatedAt DESC"
-	with engine.connect() as conn:
-		return conn.execute(text(query)).fetchall()
+	with access_transaction(actor, db_engine=engine, schema=False) as (conn, current):
+		rows = conn.execute(text(query)).fetchall()
+		visible = []
+		for row in rows:
+			try:
+				context = conn.execute(text('SELECT Site,SourceDocID FROM FeedbackReview WHERE FeedbackID=:fid'), {'fid':row[0]}).fetchone()
+				feedback_basis(conn, row[1], current, row[9], context[0] if context else None,context[1] if context else None)
+			except (PermissionError, ValueError, TypeError, KeyError):
+				continue
+			visible.append(row)
+		return visible
 
 
-def classify_feedback_and_get_source(fid, failure_type, correct_answer, reviewer_note):
-	with engine.begin() as conn:
+def classify_feedback_and_get_source(fid, failure_type, correct_answer, reviewer_note, *, actor):
+	from .feedback_access import access_transaction, feedback_basis
+	from .feedback import upsert_golden_answer, ensure_regression_question
+	with access_transaction(actor, db_engine=engine) as (conn, current):
+		row = conn.execute(text('SELECT ChatID,Question,SourceDocID,Department,Site FROM FeedbackReview WHERE FeedbackID=:fid'), {'fid':fid}).fetchone()
+		if not row:
+			raise PermissionError('Record unavailable')
+		basis = feedback_basis(conn, row[0], current, row[3], row[4],row[2])
+		scope = basis['scope']
+		golden_hash = regression_qid = None
+		if correct_answer and str(correct_answer).strip():
+			golden_hash = upsert_golden_answer(row[1], correct_answer, source_doc_id=row[2], department=scope['department'], site=scope['site'],
+				created_by=current['username'], feedback_id=fid, actor=current, access_basis=basis)
+			regression_qid = ensure_regression_question(row[1], expected_doc_id=row[2], department=scope['department'], site=scope['site'],
+				created_by=current['username'], actor=current, access_basis=basis,max_security_level=scope['max_security_level'])
 		conn.execute(text("""
                     UPDATE FeedbackReview
                     SET FailureType = :ft,
@@ -348,15 +371,17 @@ def classify_feedback_and_get_source(fid, failure_type, correct_answer, reviewer
                         AddedToGoldenSet = 1
                     WHERE FeedbackID = :fid
                 """), {"ft": failure_type, "ca": correct_answer, "note": reviewer_note, "fid": fid})
-		src_row = conn.execute(
-			text("SELECT SourceDocID, Department, Site FROM FeedbackReview WHERE FeedbackID = :fid"),
-			{"fid": fid},
-		).fetchone()
-	return src_row
+	return {'source_doc_id': row[2], 'department': scope['department'], 'site': scope['site'],
+		'golden_hash': golden_hash, 'regression_qid': regression_qid}
 
 
-def delete_feedback(fid):
-	with engine.begin() as conn:
+def delete_feedback(fid, *, actor):
+	from .feedback_access import access_transaction, feedback_basis
+	with access_transaction(actor, db_engine=engine, schema=False) as (conn, current):
+		row = conn.execute(text('SELECT ChatID,Department,Site,SourceDocID FROM FeedbackReview WHERE FeedbackID=:fid'), {'fid':fid}).fetchone()
+		if not row:
+			raise PermissionError('Record unavailable')
+		feedback_basis(conn, row[0], current, row[1], row[2],row[3])
 		result = conn.execute(
 			text("DELETE FROM FeedbackReview WHERE FeedbackID = :fid"),
 			{"fid": fid},
@@ -866,13 +891,15 @@ def list_users_basic():
 def update_user_active_and_roles(user_id, is_active, add_roles, del_roles):
 	with engine.begin() as conn:
 		_lock_user_administration(conn)
-		removes_admin = not is_active or any(str(role).strip().lower() == 'admin' for role in del_roles)
+		removes_admin = is_active is not None and not is_active or any(str(role).strip().lower() == 'admin' for role in del_roles)
 		if removes_admin and _user_is_admin(conn, user_id) and _other_active_admin_count(conn, user_id) <= 0:
 			return False
-		conn.execute(
-			text("UPDATE Users SET IsActive = :active WHERE UserID = :uid"),
-			{"active": 1 if is_active else 0, "uid": user_id},
-		)
+		# Role-only browser updates must preserve the independently managed status.
+		if is_active is not None:
+			conn.execute(
+				text("UPDATE Users SET IsActive = :active WHERE UserID = :uid"),
+				{"active": 1 if is_active else 0, "uid": user_id},
+			)
 		for _role in add_roles:
 			conn.execute(text("""
                                 INSERT INTO UserRoles (UserID, RoleID)

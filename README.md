@@ -5,11 +5,12 @@ An internal **Retrieval-Augmented Generation (RAG)** and knowledge-management pl
 ## Vận hành Windows production
 
 Xem [hướng dẫn vận hành chính](docs/windows-service-operations.md) trước khi cập nhật
-hoặc khởi động lại web. Candidate này dùng `backend/src` và `frontend/dist`.
-Checkout production vẫn giữ cấu trúc cũ và môi trường `chat_env` hiện hành;
-không cập nhật hoặc build đè nó trong đợt sắp xếp repo. Mã launcher nằm tại
-`scripts/windows_service`; mã mới trong Git không có nghĩa service đã chuyển.
-Đối chiếu command của Windows Service với hồ sơ phát hành để biết bản đang chạy.
+hoặc khởi động lại web. Hồ sơ ngày 30/10/2026 xác nhận production đã chuyển sang
+`98972bf`, dùng `backend/src`, `frontend/dist` và launcher `scripts/windows_service`.
+Môi trường `chat_env` hiện hành được giữ nguyên. Bản sửa audit tiếp theo chỉ ở
+worktree; chưa triển khai hoặc chạy migration. Không cập nhật/build đè checkout
+phục vụ. Luôn đối chiếu command service với hồ sơ phát hành, không suy ra bản live
+từ HEAD của worktree đang sửa.
 
 Các hướng dẫn dev và demo bên dưới phục vụ môi trường riêng. Đặc biệt,
 `scripts/ops/start_demo_lan.ps1` có chạy migration, không dùng làm lệnh restart

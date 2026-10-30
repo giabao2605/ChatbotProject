@@ -451,7 +451,7 @@ def test_golden_answer_must_be_supported_by_its_selected_source(monkeypatch):
     monkeypatch.setattr(module, "build_common_metadata_context", lambda _docs: "")
     monkeypatch.setattr(module, "build_structured_attributes_context", lambda _docs: "")
     calls = []
-    def golden(_question, *, admitted_doc_ids):
+    def golden(_question, *, admitted_doc_ids,actor=None):
         calls.append(admitted_doc_ids)
         return {"answer": "OUTDATED_UNSUPPORTED_ANSWER", "source_doc_id": 7}
     monkeypatch.setattr(feedback, "find_golden_answer", golden)

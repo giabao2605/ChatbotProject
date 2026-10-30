@@ -1,4 +1,5 @@
 # Windows x64 / CPython 3.12.3; captured from serving chat_env on 2026-10-30.
+# Candidate patches: langgraph-sdk 0.4.6 and tornado 6.6; not installed in serving chat_env.
 # Exact versions including existing runtime tools; do not use for other platforms.
 # Install from the verified wheelhouse with --no-index --find-links and --require-hashes.
 # Retain the wheelhouse, including cached source-built antlr4, langdetect and pylatexenc wheels.
@@ -114,7 +115,7 @@ langdetect==1.0.9 --hash=sha256:0d593141b8351927190c18bc967bbb3b2c9ab8555cdd5e1e
 langgraph==1.2.9 --hash=sha256:c2d98ad94333937922ba04148641c1da2bfe45b5b8e55d7b6dcb0bb2df809e76
 langgraph-checkpoint==4.1.1 --hash=sha256:25d29144b082827218e7bc3f1e9b0566a4bb007895cd6cc26f66a8428739f56e
 langgraph-prebuilt==1.1.0 --hash=sha256:51e311747d755b751d5c6b39b0c1446124d3a7643d2515017e6714b323508fc9
-langgraph-sdk==0.4.4 --hash=sha256:39afe416c91742925e6f8a93715f566d499b36e1b636b804a4ffe3190e4f4e64
+langgraph-sdk==0.4.6 --hash=sha256:57122b02bda41d37a97a5e09eb018aa8c9b3dc85c433880073779bd9324b7eea
 langsmith==0.8.18 --hash=sha256:3940183349993faef48e6c7d08e4822ee9cefd906b362d0e3c2d650314d2f282
 latex2mathml==3.81.0 --hash=sha256:d317710393fe20579aea39cfe8928fa2ad9b8780896e585326c75e89c1d1d1a4
 license-expression==30.4.4 --hash=sha256:421788fdcadb41f049d2dc934ce666626265aeccefddd25e162a26f23bcbf8a4
@@ -247,7 +248,7 @@ tomli==2.4.1 --hash=sha256:52c8ef851d9a240f11a88c003eacb03c31fc1c9c4ec64a99a0f92
 tomli_w==1.2.0 --hash=sha256:188306098d013b691fcadc011abd66727d3c414c571bb01b1a174ba8c983cf90
 torch==2.13.0 --hash=sha256:024c6cc0c1b085f2f91f20a3dc27b0471d021c31ce84b81be3afdc39f791fd9d
 torchvision==0.28.0 --hash=sha256:87dc16b2df427c1318ad335f1e2be2b3b15b2cf20f7934c83b0505a48425ee5d
-tornado==6.5.9 --hash=sha256:f810730ac71eadf009e6e5cb6d534d096887310f5649cff19d7e0d19c0bf4ee7
+tornado==6.6 --hash=sha256:48f26ed9d7beb64e5f06adc864524e581ab6d62ba8ff46eaaa1ac2d0e6d753fd
 tqdm==4.68.1 --hash=sha256:fea4a90e4023f764914569f7802a297277c5ab1a66be5144143e142e1a4031d8
 transformers==5.10.2 --hash=sha256:8a669db546f82c7c3618cb46ceb0f0afd89292bc70f319c058f8332ec63e268d
 tree-sitter==0.25.2 --hash=sha256:6d0302550bbe4620a5dc7649517c4409d74ef18558276ce758419cf09e578897

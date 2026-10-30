@@ -119,6 +119,7 @@ def _semantic_cache_terminal(
         "retrieved_docs": hit.get("evidence_snapshot") or [],
         "citation_docs": hit.get("citation_snapshot") or [],
         "cache_hit": True,
+        'evidence_complete':True,
     }
 
     def cached_stream():

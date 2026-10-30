@@ -314,7 +314,6 @@ describe("UsersView public contracts", () => {
 
     expect(api.apiGet).toHaveBeenCalledWith("/api/users/7");
     expect(api.apiSend).toHaveBeenCalledWith("/api/users/7/roles", "PATCH", {
-      is_active: true,
       add_roles: ["reviewer"],
       del_roles: ["viewer"],
     });
@@ -411,6 +410,9 @@ describe("UsersView public contracts", () => {
       Username: "blocked",
     });
     expect(wrapper.text()).toContain("permission denied");
+    expect(button(wrapper, "Lưu").attributes("disabled")).toBeDefined();
+    await button(wrapper, "Lưu").trigger("click");
+    expect(api.apiSend).not.toHaveBeenCalled();
     await button(wrapper, "Huỷ").trigger("click");
     await expect(editError).rejects.toThrow("");
 
@@ -434,5 +436,46 @@ describe("UsersView public contracts", () => {
     const wrapper = mountUsers();
     await flushPromises();
     expect(await page(wrapper).load()).toEqual([]);
+  });
+});
+
+
+describe("UsersView permission request safety", () => {
+  it("blocks saving while loading and discards responses from a previous user", async () => {
+    const wrapper = mountUsers();
+    await flushPromises();
+    let oldResolve!: (value: unknown) => void;
+    vi.mocked(api.apiGet).mockImplementationOnce(() => new Promise(resolve => { oldResolve = resolve; }) as never);
+    const first = action(wrapper, "Đổi vai trò").run({ UserID: 21, Username: "old" }).catch(() => {});
+    await nextTick();
+    expect(button(wrapper, "Lưu").attributes("disabled")).toBeDefined();
+    await button(wrapper, "Lưu").trigger("click");
+    expect(api.apiSend).not.toHaveBeenCalled();
+    await button(wrapper, "Huỷ").trigger("click");
+    await first;
+    const { pending } = await openEdit(wrapper, "Đổi vai trò", { UserID: 22, Username: "new" });
+    oldResolve({ roles: ["admin"] });
+    await flushPromises();
+    expect((checkbox(wrapper, "viewer").element as HTMLInputElement).checked).toBe(true);
+    expect((checkbox(wrapper, "admin").element as HTMLInputElement).checked).toBe(false);
+    await button(wrapper, "Lưu").trigger("click");
+    await pending;
+    expect(api.apiSend).toHaveBeenCalledWith("/api/users/22/roles", "PATCH", { add_roles: [], del_roles: [] });
+  });
+
+  it("keeps a rejected backend outcome inside the dialog without resolving its action", async () => {
+    const wrapper = mountUsers();
+    await flushPromises();
+    const resolved = vi.fn();
+    const pending = action(wrapper, "Đổi vai trò").run({ UserID: 7 }).then(resolved, () => {});
+    await flushPromises();
+    vi.mocked(api.apiSend).mockResolvedValueOnce({ ok: false, message: "Permission revoked" } as never);
+    await button(wrapper, "Lưu").trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".dialog-stub").exists()).toBe(true);
+    expect(wrapper.text()).toContain("Permission revoked");
+    expect(resolved).not.toHaveBeenCalled();
+    await button(wrapper, "Huỷ").trigger("click");
+    await pending;
   });
 });

@@ -377,26 +377,22 @@ def test_pdf_open_failure_skips_rollback_without_document_id(monkeypatch):
 def test_new_document_with_doc_id_reports_vector_rollback_failure(
     tmp_path, monkeypatch,
 ):
+    captured, _qdrant = characterization._install_common_boundaries(monkeypatch, tmp_path)
     monkeypatch.setattr(
         pipeline,
         "extract_text_from_supported_file",
-        lambda *_args, **_kwargs: ("  ", "van_ban"),
+        lambda *_args, **_kwargs: ("maintenance procedure " * 100, "van_ban"),
     )
-    monkeypatch.setattr(
-        pipeline, "reset_document_metadata", lambda *_args, **_kwargs: 701,
-    )
-    monkeypatch.setattr(
-        pipeline,
-        "get_document_info",
-        lambda _doc_id: {"external_processing_policy": "all_external"},
-    )
-    monkeypatch.setattr(
-        pipeline,
-        "_delete_vectors_for_file",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("qdrant down")
-        ),
-    )
+    monkeypatch.setattr(pipeline, "calculate_quality_status", lambda *_args: (0, "blocked"))
+    monkeypatch.setattr(pipeline, "ROLLBACK_ON_INGEST_ERROR", True)
+    deleted = []
+
+    def delete(*_args, **kwargs):
+        deleted.append(kwargs["doc_id"])
+        if len(deleted) == 2:
+            raise RuntimeError("qdrant down")
+
+    monkeypatch.setattr(pipeline, "_delete_vectors_for_file", delete)
 
     report = pipeline.process_and_ingest_file(
         str(tmp_path / "new-document.txt"),
@@ -405,11 +401,13 @@ def test_new_document_with_doc_id_reports_vector_rollback_failure(
         domain_override="generic",
         security_override="internal",
         site_override="HQ",
-        dependencies=characterization._dependencies(),
+        dependencies=captured["dependencies"],
     )
 
     assert report["status"] == "error"
     assert report["quality_status"] == "blocked"
+    assert captured["added_batches"]
+    assert deleted == [701, 701]
     assert any(
         "Rollback vector/metadata that bai: qdrant down" in item
         for item in report["warnings"]

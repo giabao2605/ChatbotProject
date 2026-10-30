@@ -704,6 +704,7 @@ def test_security_admin_user_mutations_report_repository_outcomes(
         False,
     ]
     assert calls[0][2] == {"actor_username": "alice", "actor_id": 7}
+    assert next(args for name, args, _kwargs in calls if name == "roles")[1] is None
     assert calls[-1][2] == {"actor_username": "alice", "actor_id": 7}
 
 

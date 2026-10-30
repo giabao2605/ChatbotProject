@@ -71,18 +71,22 @@ function normalizeRows(raw: ApiRow[]): { display: ApiRow[]; cols: ResourceColumn
   return { display, cols };
 }
 
+let refreshRequest = 0;
+
 async function refresh() {
+  const request = ++refreshRequest;
   loading.value = true;
   error.value = "";
   try {
     const raw = await props.load({ ...filterValues });
+    if (request !== refreshRequest) return;
     const { display, cols } = normalizeRows(raw ?? []);
     rows.value = display;
     columns.value = cols;
   } catch (err) {
-    error.value = err instanceof Error ? err.message : t("common.error");
+    if (request === refreshRequest) error.value = err instanceof Error ? err.message : t("common.error");
   } finally {
-    loading.value = false;
+    if (request === refreshRequest) loading.value = false;
   }
 }
 

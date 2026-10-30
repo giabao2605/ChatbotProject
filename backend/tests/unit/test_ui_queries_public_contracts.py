@@ -297,7 +297,6 @@ def test_reviewer_dashboard_handles_global_admin_and_missing_site_scope(
     [
         ("list_recent_documents", [(1, "manual.pdf")]),
         ("list_recent_failed_jobs", [(2, "job.pdf")]),
-        ("list_feedbacks", [(3, "question")]),
         ("list_expiring_documents", [(4, "expiring.pdf")]),
         ("list_pending_review_docs", [(5, "review.pdf")]),
         ("list_bulk_action_jobs", [(6, "bulk.pdf")]),
@@ -308,7 +307,7 @@ def test_read_lists_return_database_rows(monkeypatch, function_name, expected):
     install_engine(monkeypatch, lambda *_args: FakeResult(rows=expected))
     function = getattr(ui_queries, function_name)
 
-    result = function(True) if function_name == "list_feedbacks" else function()
+    result = function()
 
     assert result == expected
 
@@ -367,44 +366,24 @@ def test_bulk_delete_counts_missing_job_as_failure(monkeypatch):
     assert ui_queries.bulk_delete_ingestion_jobs([2147483647]) == (0, 1)
 
 
-def test_feedback_mutations_return_source_and_use_expected_params(monkeypatch):
-    source = (42, "MFG", "HCM")
-
-    def resolver(sql, _params, _index):
-        return FakeResult(one=source if "SELECT SourceDocID" in sql else None)
-
-    connection = install_engine(monkeypatch, resolver)
-
-    result = ui_queries.classify_feedback_and_get_source(
-        7, "retrieval", "correct", "reviewed"
-    )
-    ui_queries.delete_feedback(7)
-
-    assert result == source
-    assert connection.calls[0][1] == {
-        "ft": "retrieval",
-        "ca": "correct",
-        "note": "reviewed",
-        "fid": 7,
-    }
-    assert connection.calls[-1][1] == {"fid": 7}
-
+def test_feedback_mutations_require_actor_before_database_access(monkeypatch):
+    connection = install_engine(monkeypatch, lambda *_args: pytest.fail('unscoped feedback write'))
+    with pytest.raises(TypeError):
+        ui_queries.classify_feedback_and_get_source(7,'retrieval','correct','reviewed')
+    assert connection.calls == []
 
 @pytest.mark.parametrize(("rowcount", "expected"), [(1, True), (0, False)])
-def test_delete_feedback_reports_whether_a_row_was_deleted(monkeypatch, rowcount, expected):
-    install_engine(monkeypatch, lambda *_args: FakeResult(rowcount=rowcount))
+def test_delete_feedback_requires_actor_even_for_missing_rows(monkeypatch, rowcount, expected):
+    connection = install_engine(monkeypatch, lambda *_args: FakeResult(rowcount=rowcount))
+    with pytest.raises(TypeError):
+        ui_queries.delete_feedback(7)
+    assert connection.calls == []
 
-    assert ui_queries.delete_feedback(7) is expected
-
-
-def test_feedback_list_can_include_already_reviewed_rows(monkeypatch):
-    connection = install_engine(monkeypatch, lambda *_args: FakeResult(rows=[]))
-
-    ui_queries.list_feedbacks(False)
-
-    sql, _params = connection.calls[-1]
-    assert "AddedToGoldenSet" not in sql.split("WHERE 1 = 1", 1)[1]
-
+def test_feedback_list_requires_actor_for_reviewed_and_pending_rows(monkeypatch):
+    connection = install_engine(monkeypatch, lambda *_args: pytest.fail('unscoped feedback read'))
+    with pytest.raises(TypeError):
+        ui_queries.list_feedbacks(False)
+    assert connection.calls == []
 
 def test_list_documents_applies_normalized_rbac_and_filters(monkeypatch):
     expected = [(8, "public.pdf")]

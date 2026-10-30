@@ -242,7 +242,7 @@ def user_active(user_id: int, body: dict[str, Any], profile: dict[str, Any] = De
 @router.patch("/users/{user_id}/roles")
 def user_roles(user_id: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "security_admin")
-    return {"ok": bool(ui_query_service.update_user_active_and_roles(user_id, bool(body.get("is_active", True)), body.get("add_roles") or [], body.get("del_roles") or []))}
+    return {"ok": bool(ui_query_service.update_user_active_and_roles(user_id, None, body.get("add_roles") or [], body.get("del_roles") or []))}
 
 
 @router.patch("/users/{user_id}/departments")
@@ -491,33 +491,38 @@ def material_synonym_delete(synonym_id: int, profile: dict[str, Any] = Depends(c
     return {"ok": bool(result)}
 
 
+def _feedback_call(call):
+    try:
+        return call()
+    except PermissionError:
+        raise HTTPException(404, detail='Record unavailable') from None
+    except feedback_service.FeedbackSchemaUnavailable as exc:
+        raise HTTPException(503, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(422, detail=str(exc)) from None
+
+
 @router.get("/feedback")
 def feedbacks(only_pending: bool = False, profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
-    return {"feedbacks": rows_to_json(ui_query_service.list_feedbacks(only_pending=only_pending))}
+    return {"feedbacks": rows_to_json(_feedback_call(lambda: ui_query_service.list_feedbacks(only_pending=only_pending, actor=profile)))}
 
 
 @router.post("/feedback/{feedback_id}/classify")
 def feedback_classify(feedback_id: int, body: dict[str, Any], request: Request, profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "reviewer", "admin")
     correct_answer = body.get("correct_answer")
-    result = ui_query_service.classify_feedback_and_get_source(feedback_id, failure_type=body.get("failure_type"), correct_answer=correct_answer, reviewer_note=body.get("reviewer_note"))
+    result = _feedback_call(lambda: ui_query_service.classify_feedback_and_get_source(feedback_id, failure_type=body.get("failure_type"), correct_answer=correct_answer, reviewer_note=body.get("reviewer_note"), actor=profile))
     if result is not None:
         audit_service.write_audit_log(action="feedback_classify", username=profile.get("username") or "System", entity_type="FeedbackReview", entity_id=feedback_id, details={}, user_id=profile.get("user_id"))
-    golden_hash = None
-    regression_qid = None
-    if correct_answer and str(correct_answer).strip():
-        row = request.app.state.runtime.app_support_queries.feedback_review_context(feedback_id)
-        if row:
-            question, source_doc_id, department, site = row
-            golden_hash = feedback_service.upsert_golden_answer(question=question, answer=correct_answer, source_doc_id=source_doc_id, department=department, site=site, created_by=profile.get("username") or "reviewer", feedback_id=feedback_id)
-            regression_qid = feedback_service.ensure_regression_question(question=question, expected_doc_id=source_doc_id, department=department, site=site, created_by=profile.get("username") or "reviewer")
-    return {"result": row_to_json(result), "golden_hash": golden_hash, "regression_qid": regression_qid}
+    payload = row_to_json(result)
+    return {"result": payload, "golden_hash": payload.get('golden_hash') if payload else None,
+            "regression_qid": payload.get('regression_qid') if payload else None}
 
 
 @router.delete("/feedback/{feedback_id}")
 def feedback_delete(feedback_id: int, profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "admin", "reviewer")
-    result = ui_query_service.delete_feedback(feedback_id)
+    result = _feedback_call(lambda: ui_query_service.delete_feedback(feedback_id, actor=profile))
     if result:
         audit_service.write_audit_log(action="feedback_delete", username=profile.get("username") or "System", entity_type="FeedbackReview", entity_id=feedback_id, details={}, user_id=profile.get("user_id"))
     return {"ok": bool(result)}
@@ -525,7 +530,7 @@ def feedback_delete(feedback_id: int, profile: dict[str, Any] = Depends(csrf_pro
 
 @router.get("/regression/questions")
 def regression_questions(active_only: bool = True, profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
-    return {"questions": rows_to_json(feedback_service.list_regression_questions(active_only=active_only))}
+    return {"questions": rows_to_json(_feedback_call(lambda: feedback_service.list_regression_questions(active_only=active_only, actor=profile)))}
 
 
 @router.post("/regression/questions")
@@ -536,7 +541,7 @@ def regression_question_add(body: dict[str, Any], profile: dict[str, Any] = Depe
         expected_doc_id = None
     if expected_doc_id is not None and (type(expected_doc_id) is not int or expected_doc_id <= 0):
         raise HTTPException(status_code=422, detail="DocID kỳ vọng phải là số nguyên dương")
-    result = feedback_service.add_regression_question(question=str(body.get("question") or ""), expected_doc_id=expected_doc_id, expected_keywords=body.get("expected_keywords"), department=body.get("department"), site=body.get("site"), created_by=profile.get("username") or "System")
+    result = _feedback_call(lambda: feedback_service.add_regression_question(question=str(body.get("question") or ""), expected_doc_id=expected_doc_id, expected_keywords=body.get("expected_keywords"), department=body.get("department"), site=body.get("site"), max_security_level=body.get('max_security_level'), created_by=profile.get("username") or "System", actor=profile))
     if result is not None:
         audit_service.write_audit_log(action="regression_question_create", username=profile.get("username") or "System", entity_type="RegressionQuestion", entity_id=result, details={}, user_id=profile.get("user_id"))
     return {"ok": result is not None, "result": result}
@@ -545,7 +550,7 @@ def regression_question_add(body: dict[str, Any], profile: dict[str, Any] = Depe
 @router.patch("/regression/questions/{reg_qid}/active")
 def regression_question_active(reg_qid: int, body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "reviewer", "admin")
-    result = feedback_service.set_regression_question_active(reg_qid, bool(body.get("is_active")))
+    result = _feedback_call(lambda: feedback_service.set_regression_question_active(reg_qid, bool(body.get("is_active")), actor=profile))
     if result:
         audit_service.write_audit_log(action="regression_question_active", username=profile.get("username") or "System", entity_type="RegressionQuestion", entity_id=reg_qid, details={"is_active": bool(body.get("is_active"))}, user_id=profile.get("user_id"))
     return {"ok": bool(result)}
@@ -553,16 +558,17 @@ def regression_question_active(reg_qid: int, body: dict[str, Any], profile: dict
 
 @router.get("/regression/runs")
 def regression_runs(batch_id: str | None = None, profile: dict[str, Any] = Depends(require_any_role("reviewer", "admin"))):
-    return {"runs": rows_to_json(feedback_service.get_regression_runs(batch_id=batch_id))}
+    return {"runs": rows_to_json(_feedback_call(lambda: feedback_service.get_regression_runs(batch_id=batch_id, actor=profile)))}
 
 
 @router.post("/regression/run")
-def regression_run(body: dict[str, Any], profile: dict[str, Any] = Depends(csrf_profile)):
+def regression_run(body: dict[str, Any], request: Request, profile: dict[str, Any] = Depends(csrf_profile)):
     assert_any_role(profile, "reviewer", "admin")
     from mech_chatbot.rag.regression import run_regression_batch
     raw_limit = body.get("limit")
-    limit = int(raw_limit) if raw_limit else None
-    return {"ok": True, "summary": run_regression_batch(limit=limit, run_by=profile.get("username") or "System")}
+    if raw_limit is not None and (type(raw_limit) is not int or not 1 <= raw_limit <= 1000):
+        raise HTTPException(422, detail='Limit must be an integer from 1 to 1000')
+    return {"ok": True, "summary": _feedback_call(lambda: run_regression_batch(limit=raw_limit, run_by=profile.get("username") or "System", actor=profile, rag_stream=request.app.state.runtime.rag_stream))}
 
 
 @router.get("/quality/documents")

@@ -2,10 +2,10 @@
 import { ref } from "vue";
 import ResourcePage from "@/components/ResourcePage.vue";
 import { apiGet, apiSend } from "@/api/client";
-import { pickNum } from "@/utils/rows";
+import { pickNum, SECURITY_LEVELS } from "@/utils/rows";
 import type { ApiRow, CreateForm, RowAction } from "@/types";
 
-type RunSummary = { batch_id: string; total: number; passed: number; failed: number; pass_rate: number };
+type RunSummary = { batch_id: string; total: number; graded: number; ungraded: number; passed: number; failed: number; pass_rate: number | null };
 
 const runsRef = ref<InstanceType<typeof ResourcePage>>();
 const running = ref(false);
@@ -29,10 +29,12 @@ async function runRegression() {
   summaryText.value = "";
   try {
     const res = await apiSend<{ ok: boolean; summary: RunSummary }>("/api/regression/run", "POST", {});
+    if (!res.ok) throw new Error("Không chạy được regression");
     const s = res.summary;
-    summaryText.value = `Batch ${s.batch_id}: ${s.passed}/${s.total} đạt (tỉ lệ ${Math.round(
-      (s.pass_rate ?? 0) * 100,
-    )}%), ${s.failed} lỗi.`;
+    const grading = s.graded > 0 && s.pass_rate !== null
+      ? `${s.passed}/${s.graded} đã chấm đạt (tỉ lệ ${Math.round(s.pass_rate * 100)}%)`
+      : "Chưa có câu hỏi được chấm";
+    summaryText.value = `Batch ${s.batch_id}: ${grading}, ${s.failed} lỗi, ${s.ungraded} chưa đủ tiêu chí.`;
     runsRef.value?.refresh();
   } catch (e) {
     runError.value = e instanceof Error ? e.message : "Lỗi chạy regression";
@@ -47,14 +49,22 @@ const createForm: CreateForm = {
     { key: "question", label: "Câu hỏi", required: true, type: "textarea" },
     { key: "expected_doc_id", label: "DocID kỳ vọng", type: "number" },
     { key: "expected_keywords", label: "Từ khóa kỳ vọng (cách nhau dấu ,)" },
-    { key: "department", label: "Phòng ban" },
-    { key: "site", label: "Site" },
+    { key: "department", label: "Phòng ban", required: true },
+    { key: "site", label: "Site", required: true },
+    { key: "max_security_level", label: "Mức mật tối đa", type: "select", options: [
+      { label: "Mức mật hiện tại", value: "" }, ...SECURITY_LEVELS,
+    ] },
   ],
-  submit: (values) =>
-    apiSend("/api/regression/questions", "POST", {
-      ...values,
+  submit: (values) => {
+    if (!String(values.department ?? "").trim()) throw new Error("Vui lòng nhập Phòng ban");
+    if (!String(values.site ?? "").trim()) throw new Error("Vui lòng nhập Site");
+    const { max_security_level, ...question } = values;
+    return apiSend("/api/regression/questions", "POST", {
+      ...question,
+      ...(max_security_level ? { max_security_level } : {}),
       expected_doc_id: values.expected_doc_id ? Number(values.expected_doc_id) : null,
-    }),
+    });
+  },
 };
 
 function qid(row: ApiRow): number {

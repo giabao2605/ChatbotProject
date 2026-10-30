@@ -4,6 +4,7 @@ from os.path import join
 from types import SimpleNamespace
 
 import pytest
+import sys
 
 from scripts.ops import backup_system
 from scripts.ops.backup_system import _full_backup_options, cleanup_old
@@ -140,3 +141,44 @@ def test_backup_cleanup_is_opt_in_and_database_scoped(tmp_path):
     assert backup.exists()
     with pytest.raises(ValueError, match="positive integer"):
         cleanup_old(tmp_path, 0, database="Mech_Chatbot_DB")
+
+
+def test_backup_help_never_builds_runtime(monkeypatch):
+    from mech_chatbot.composition import maintenance_runtime
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("--help must not build dependencies")
+
+    monkeypatch.setattr(maintenance_runtime, "build_database_runtime", forbidden)
+    monkeypatch.setattr(maintenance_runtime, "build_qdrant_admin_runtime", forbidden)
+    monkeypatch.setattr(sys, "argv", ["backup_system.py", "--help"])
+    with pytest.raises(SystemExit) as stopped:
+        backup_system.main()
+    assert stopped.value.code == 0
+
+
+@pytest.mark.parametrize("flags, expected", [
+    (["--skip-sql"], ["qdrant", "snapshot", "close-qdrant"]),
+    (["--skip-qdrant"], ["sql", "backup", "close-sql"]),
+    (["--skip-sql", "--skip-qdrant"], []),
+])
+def test_backup_builds_only_selected_dependencies(monkeypatch, flags, expected):
+    from mech_chatbot.composition import maintenance_runtime
+    from mech_chatbot.config.settings import Settings
+
+    events = []
+    def sql(*args):
+        events.append("sql")
+        return SimpleNamespace(engine=object(), close=lambda: events.append("close-sql"))
+    def qdrant(*args):
+        events.append("qdrant")
+        return SimpleNamespace(client=object(), collection_name="backup", close=lambda: events.append("close-qdrant"))
+
+    monkeypatch.setattr(maintenance_runtime, "build_database_runtime", sql)
+    monkeypatch.setattr(maintenance_runtime, "build_qdrant_admin_runtime", qdrant)
+    monkeypatch.setattr(backup_system, "load_settings", lambda: Settings.from_env({}))
+    monkeypatch.setattr(backup_system, "backup_sql", lambda *args: events.append("backup"))
+    monkeypatch.setattr(backup_system, "backup_qdrant", lambda: events.append("snapshot"))
+    monkeypatch.setattr(sys, "argv", ["backup_system.py", *flags])
+    backup_system.main()
+    assert events == expected

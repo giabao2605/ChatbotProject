@@ -268,7 +268,7 @@ def mark_job_failed(job_id, error_message, *, db_engine=None):
                 UPDATE dbo.IngestionJobs
                 SET RetryCount = ISNULL(RetryCount, 0) + 1,
                     Status = CASE 
-                        WHEN :e LIKE '%[AUTH_ERROR]%' THEN 'failed'
+                        WHEN CHARINDEX('[AUTH_ERROR]', :e) > 0 THEN 'failed'
                         WHEN ISNULL(RetryCount, 0) + 1 >= ISNULL(MaxRetry, 3) THEN 'failed'
                         ELSE 'pending_retry'
                     END,

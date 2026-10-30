@@ -132,38 +132,12 @@ def test_get_doc_quality_ranking_maps_rows_and_reliability(fake_db, worst_first,
     assert conn.calls[0][1] == {"lim": 5}
 
 
-def test_golden_answer_public_contract_handles_validation_success_empty_and_db_failure(fake_db):
-    assert feedback.upsert_golden_answer("", "answer") is None
-    assert feedback.upsert_golden_answer("question", "") is None
-
-    conn = fake_db(_Result(), _Result())
-    digest = feedback.upsert_golden_answer(
-        "Question", "Answer", source_doc_id=4, department="Technical", site="HQ", created_by="alice"
-    )
-    assert digest == feedback._question_hash("Question")
-    assert conn.calls[-1][1]["sd"] == 4
-
-    fake_db(RuntimeError("write failed"))
-    assert feedback.upsert_golden_answer("Question", "Answer") is None
-
-    fake_db(_Result(row=None))
-    assert feedback.find_golden_answer("missing", admitted_doc_ids=[4]) is None
-
-    conn = fake_db(_Result(row=(9, "Question", "Answer", 4, "Technical", "HQ")))
-    assert feedback.find_golden_answer("Question", admitted_doc_ids=[4]) == {
-        "golden_id": 9,
-        "question": "Question",
-        "answer": "Answer",
-        "source_doc_id": 4,
-        "department": "Technical",
-        "site": "HQ",
-    }
-    assert "SourceDocID IN" in conn.calls[0][0]
-    assert conn.calls[0][1]["doc_ids"] == [4]
-
-    fake_db(RuntimeError("read failed"))
-    assert feedback.find_golden_answer("Question", admitted_doc_ids=[4]) is None
-
+def test_golden_answer_public_contract_requires_actor_and_complete_basis(fake_db):
+    conn = fake_db()
+    with pytest.raises(TypeError):
+        feedback.upsert_golden_answer('Question', 'Answer')
+    assert feedback.find_golden_answer('Question', admitted_doc_ids=[4]) is None
+    assert conn.calls == []
 
 def test_golden_answer_requires_an_admitted_source_and_defends_against_wrong_row(fake_db):
     conn = fake_db(_Result(row=(9, "Question", "Secret answer", 99, "HR", "HQ")))
@@ -172,45 +146,22 @@ def test_golden_answer_requires_an_admitted_source_and_defends_against_wrong_row
     assert feedback.find_golden_answer("Question", admitted_doc_ids=[4]) is None
 
 
-def test_regression_question_and_run_crud_use_public_shapes(fake_db):
-    assert feedback.add_regression_question(" ") is None
+def test_regression_crud_requires_explicit_actor(fake_db):
+    conn = fake_db()
+    for function, args in [(feedback.add_regression_question, ('Check pressure',)),
+                           (feedback.list_regression_questions, ()),
+                           (feedback.set_regression_question_active, (14,False)),
+                           (feedback.save_regression_run, (14,'b','answer',[3],True,True,True))]:
+        with pytest.raises(TypeError):
+            function(*args)
+    assert conn.calls == []
 
-    conn = fake_db(_Result(row=(14,)))
-    assert feedback.add_regression_question(
-        "Check pressure", expected_doc_id=3, expected_keywords=[" pressure ", "", "limit"]
-    ) == 14
-    assert conn.calls[0][1]["kw"] == "pressure, limit"
-
-    conn = fake_db(_Result(rows=[(14, "Q", 3, "pressure", "Tech", "HQ", True, "now")]))
-    assert feedback.list_regression_questions()[0]["reg_qid"] == 14
-    assert "WHERE IsActive = 1" in conn.calls[0][0]
-
-    conn = fake_db(_Result())
-    assert feedback.set_regression_question_active(14, False) is True
-    assert conn.calls[0][1] == {"a": 0, "id": 14}
-
-    conn = fake_db(_Result())
-    assert feedback.save_regression_run(14, "batch", "answer", [3, None, 7], True, False, True) is True
-    assert conn.calls[0][1]["m"] == "3,7"
-    assert conn.calls[0][1]["dh"] == 1
-
-    fake_db(_Result(row=None))
-    assert feedback.get_latest_regression_batch() is None
-
-    fake_db(_Result(rows=[]))
-    assert feedback.get_regression_runs(batch_id="") == []
-
-    fake_db(_Result(rows=[(1, 14, "Q", 1, 1, 1, "3", 3, 12, None, "A", "now")]))
-    assert feedback.get_regression_runs("batch")[0]["passed"] == 1
-
-
-def test_get_regression_runs_resolves_latest_batch(fake_db, monkeypatch):
-    monkeypatch.setattr(feedback, "get_latest_regression_batch", lambda: "latest")
-    conn = fake_db(_Result(rows=[]))
-
-    assert feedback.get_regression_runs() == []
-    assert conn.calls[0][1] == {"b": "latest"}
-
+def test_get_regression_runs_cannot_read_latest_batch_without_actor(fake_db, monkeypatch):
+    conn = fake_db()
+    monkeypatch.setattr(feedback, 'get_latest_regression_batch', lambda: pytest.fail('unscoped batch lookup'))
+    with pytest.raises(TypeError):
+        feedback.get_regression_runs()
+    assert conn.calls == []
 
 def test_cleanup_dangling_records_returns_per_operation_counts(fake_db):
     fake_db_conn = fake_db(
@@ -266,19 +217,8 @@ def test_update_chat_feedback_fails_closed_on_db_error(fake_db):
     assert feedback.update_chat_feedback(1, -1, voter_username="alice") is False
 
 
-def test_ensure_regression_question_deduplicates_or_delegates(fake_db, monkeypatch):
-    assert feedback.ensure_regression_question(" ") is None
-
-    fake_db(_Result(rows=[(4, "  KIỂM tra áp suất ")]))
-    assert feedback.ensure_regression_question("kiem tra ap suat") == 4
-
-    fake_db(RuntimeError("lookup failed"))
-    captured = {}
-
-    def add(question, **kwargs):
-        captured.update({"question": question, **kwargs})
-        return 8
-
-    monkeypatch.setattr(feedback, "add_regression_question", add)
-    assert feedback.ensure_regression_question("new", expected_doc_id=2, expected_keywords=["x"]) == 8
-    assert captured["expected_doc_id"] == 2
+def test_ensure_regression_question_never_deduplicates_without_actor(fake_db, monkeypatch):
+    conn = fake_db()
+    with pytest.raises(TypeError):
+        feedback.ensure_regression_question('kiem tra ap suat')
+    assert conn.calls == []

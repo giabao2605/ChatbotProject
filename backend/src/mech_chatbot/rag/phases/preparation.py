@@ -241,6 +241,7 @@ def _exact_cache_terminal(
         "citation_docs": hit.get("citation_snapshot") or [],
         "cache_hit": True,
         "cache_type": "exact",
+        'evidence_complete':True,
     }
 
     def exact_cached_stream():

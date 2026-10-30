@@ -37,14 +37,7 @@ if (!$createdNew) {
 $mutex.WaitOne() | Out-Null
 $mutexOwned = $true
 
-$resolvedReadyFile = [System.IO.Path]::GetFullPath($ReadyFile)
 $workerProcess = $null
-
-function Remove-ReadinessMarker {
-    if (Test-Path -LiteralPath $resolvedReadyFile) {
-        Remove-Item -LiteralPath $resolvedReadyFile -Force -ErrorAction SilentlyContinue
-    }
-}
 
 function Write-SupervisorLog {
     param([string]$Message)
@@ -55,7 +48,6 @@ function Write-SupervisorLog {
 try {
     $restartDelay = [Math]::Max(1, $RestartDelaySeconds)
     while ($true) {
-        Remove-ReadinessMarker
         $workerProcess = Start-Process `
             -FilePath $PythonExe `
             -ArgumentList @("run_worker.py") `
@@ -65,6 +57,8 @@ try {
             -WindowStyle Hidden `
             -PassThru
 
+        # Cache the process handle so Windows PowerShell retains the exit code.
+        $null = $workerProcess.Handle
         Write-SupervisorLog ("started worker pid={0}" -f $workerProcess.Id)
         try {
             $workerProcess.WaitForExit()
@@ -74,13 +68,15 @@ try {
             Wait-Process -InputObject $workerProcess -ErrorAction SilentlyContinue
         }
         $exitCode = $workerProcess.ExitCode
-        Remove-ReadinessMarker
+        if ($exitCode -eq 73) {
+            Write-SupervisorLog "Another ingestion worker owns this host; supervisor stopping."
+            exit 73
+        }
         Write-SupervisorLog ("worker pid={0} exited code={1}; restarting in {2}s" -f $workerProcess.Id, $exitCode, $restartDelay)
         Start-Sleep -Seconds $restartDelay
     }
 }
 finally {
-    Remove-ReadinessMarker
     if ($workerProcess -and !$workerProcess.HasExited) {
         Stop-Process -Id $workerProcess.Id -Force -ErrorAction SilentlyContinue
     }

@@ -1,5 +1,11 @@
 # Sắp xếp repository — 30/10/2026
 
+> Hồ sơ bên dưới ghi thời điểm chuẩn bị restructure. Sau đó receipt tại
+> `C:/ProgramData/MechRAGServices/restructure-deploy-c2859a0f16e140b2a7c1d9c3ee5cce45/`
+> xác nhận đã triển khai `98972bf`. Xem [runbook hiện hành](windows-service-operations.md).
+> Bản sửa audit tiếp theo trong worktree chưa triển khai; các kết quả kiểm chứng
+> lịch sử dưới đây không được dùng làm kết quả cho bản sửa đó.
+
 ## Kết quả và giới hạn
 
 Candidate nằm trên nhánh `codex/repo-restructure`, tại
@@ -106,3 +112,93 @@ hoặc bỏ candidate, mở checkout riêng từ tag backup đã xác minh; gi�
 và receipt cho tới khi quyết định có cần tiếp tục. Không reset/clean hoặc xóa
 worktree phục vụ. Khi có đợt triển khai riêng, phải cấp release cho đúng commit,
 giữ dữ liệu/cấu hình/asset rollback và thực hiện đầy đủ điều kiện vận hành Windows.
+
+## Bản sửa audit từ `98972bf` (chưa triển khai)
+
+Bản sửa nằm trong worktree `repo-restructure`, nhánh `codex/repo-restructure`.
+Các receipt phía trên thuộc đợt chuyển cấu trúc trước đó; không dùng để chứng minh
+bản sửa audit. Receipt mới ở `.local/runs/audit-confirmed-fixes` và
+`.local/runs/audit-dependencies`. Không commit/push, đổi checkout phục vụ, `.env`,
+`chat_env`, service hoặc dữ liệu thật trong đợt này.
+
+### Đối chiếu 16 phát hiện
+
+| Mục | Thay đổi | Bằng chứng trong phạm vi offline |
+|---|---|---|
+| 1 | Regression nhận actor xác thực, giới hạn phạm vi từng case và kiểm lại quyền khi đọc kết quả | Test HTTP/repository và terminal regression; review độc lập phần quyền |
+| 2 | Feedback/golden kiểm toàn bộ nguồn, phiên bản/hash và manifest; từ chối thao tác ngoài quyền trong transaction | Reviewer hợp lệ, nguồn thứ hai bị cấm, thu hồi quyền, nguồn/manifest thay đổi |
+| 3 | Endpoint đổi vai trò giữ nguyên `IsActive`; client cũ không thể kích hoạt qua trường này | Test repository với tài khoản bật/tắt và hợp đồng HTTP |
+| 4 | Dialog quyền khóa lưu khi đang tải/tải lỗi, bỏ phản hồi dialog cũ | Component tests tải chậm và chuyển A sang B |
+| 5 | Thay vector một lần sau kiểm DocID/quyền nhập lại; xóa lỗi thì dừng trước khi ghi | Trang đầu lỗi, xóa lỗi, thiếu DocID, PDF/non-PDF và rollback |
+| 6 | Nhận `[AUTH_ERROR]` theo chuỗi literal; giữ quota và giới hạn retry | Test phân loại lỗi auth/tạm thời/quota |
+| 7 | Phân biệt terminal thất bại/hủy/thiếu; thiếu tiêu chí thành `ungraded`, mẫu số chỉ gồm `graded` | Regression events/batch và component summary |
+| 8 | Bảy test không còn đọc file ngoài Git; tám lỗi retrieval do fixture thiếu timeout đã sửa | 22 test safety/retrieval đạt, giữ assertion hủy/deadline/quyền |
+| 9 | Khai báo trực tiếp `langchain-huggingface` và `fastembed`, giữ phiên bản khóa | 278 gói cài offline bằng hash, `pip check` và 15 import đạt |
+| 10 | Backup parse trước dựng runtime, chỉ dựng dependency được chọn | `--help`, từng cờ skip và cả hai cờ với stub |
+| 11 | Runbook cập nhật deployment `98972bf`, snapshot phục hồi và GitHub chưa đồng bộ | `docs/windows-service-operations.md`; không sửa receipt lịch sử |
+| 12 | Khóa hệ điều hành chung trước dựng runtime; chỉ owner quản lý heartbeat, supervisor dừng mã 73 | Hai process khác cwd, crash nhả khóa, loser không dựng runtime/chạm marker |
+| 13 | CLI bootstrap `backend/src`, truyền `thu_muc` dạng chuỗi | Subprocess/import và ingestion stub |
+| 14 | `{ok:false}` giữ dialog và báo thất bại | Component tests của quản trị tài khoản |
+| 15 | Bảng chỉ áp dụng dữ liệu/lỗi/loading của request mới nhất | Component tests phản hồi về sai thứ tự |
+| 16 | Vite 8.1.6, Vitest/coverage 4.1.12, langgraph-sdk 0.4.6, Tornado 6.6 | Audit Python 278 gói và npm graph 202 gói: không có advisory được báo tại thời điểm kiểm |
+
+Audit Python gồm dependency runtime và công cụ; audit npm gồm 41 prod và 162 dev
+(các nhóm phân loại có thể chồng lấp). Không suy ra không còn lỗ hổng từ kết quả
+audit. Lock frontend chỉ đổi closure của bộ công cụ mục tiêu; môi trường Python
+kiểm tra nằm riêng tại `.local/venvs/audit-dependencies`.
+
+### Kiểm chứng bản sửa audit
+
+- Frontend trên Vite 8.1.6/Vitest 4.1.12: 86/86 component test đạt; typecheck và
+  build đạt. Coverage của ba component sửa: 99,41% dòng, 90,59% nhánh
+  (`frontend-focused.xml`, `frontend-coverage/coverage-summary.json`). Đây không
+  phải coverage toàn frontend. Cảnh báo stub `Textarea` trong test vẫn còn.
+- Ingestion/retry: lượt tập trung 133/133 đạt (`INGEST-focused-final.xml`).
+  Receipt coverage lượt này chỉ đo dòng; không dùng làm bằng chứng nhánh.
+- Worker/backup/CLI/service launcher: 69/69 đạt (`WORKER-final.xml`). Các subprocess
+  khóa và supervisor dùng thư mục tạm, không chạy service hay ghi ProgramData thật.
+- Fixture safety/retrieval: 22/22 đạt (`FIXTURE-green3.xml`). Đổi vai trò backend:
+  16/16 đạt (`roles-green.xml`). Không cộng các lượt có test trùng thành tổng suite.
+- Dependency: `../audit-dependencies/result.json`, `pip-audit.json`,
+  `npm-audit.json`, `imports.log` và `pip-check.log` ghi kết quả môi trường riêng.
+
+Lượt bàn giao cuối trên mã đã cố định: **814/814 đạt**, không skip, trong 92,40 giây
+(`handoff.xml`, `handoff.log`, `handoff-options.json`). Phạm vi gồm 41 file test
+liên quan và 18 kiểm tra kiến trúc; có HTTP/SSE/component giả lập, SQLite và
+subprocess tạm. Không chạy toàn suite. Các lượt trước được giữ làm bằng chứng
+tái hiện/sửa lỗi, không cộng vào tổng lượt cuối.
+
+Coverage Python của **dòng thực thi và điểm rẽ nhánh được thay đổi** đạt 91,98%
+dòng (619/673), 83,33% nhánh (215/258): `final-coverage.json` và
+`changed-coverage.json`. Giữ ngưỡng 80% dòng/nhánh; không dùng số này thay cho
+coverage toàn backend hoặc kết quả CI. Cảnh báo deprecation Starlette/httpx và
+SQLite datetime adapter vẫn còn, không ảnh hưởng kết quả lượt kiểm tra này.
+
+Review độc lập phần quyền và ingestion/worker đã hoàn tất, không còn phát hiện
+mức chặn trong phạm vi bản sửa. Review quyền đã đối chiếu nguồn văn bản,
+structured/graph, nhóm dòng cùng trang, metadata đổi cùng phiên bản, tài liệu
+chia sẻ, actor có nhiều phòng ban và thứ tự citation khác evidence. Deadline/hủy
+được giữ cả khi phát sinh trong lúc đọc actor. `git diff --check` đạt; checkout
+phục vụ vẫn sạch tại `98972bf`, candidate chưa commit.
+
+Không còn blocker sửa mã đã xác nhận trong 16 mục. Triển khai là công việc riêng:
+chưa có kiểm chứng SQL Server/ACL/service thực tế cho bản sửa, chưa áp dụng schema
+mới và chưa cấp phát hành cho candidate. Không gọi lượt kiểm tra này là CI xanh
+hay production-ready.
+
+Migration `V0048__feedback_regression_access_basis.sql` chỉ được soạn, chưa chạy.
+Schema thiếu phải từ chối rõ ràng; null không phải public và không tự backfill
+bằng chứng cũ. Khi lên lịch triển khai riêng, cần áp dụng migration trước khi mở
+chức năng phụ thuộc các cột mới. Bản sửa này không làm thay đổi hệ thống đang chạy.
+
+Luồng nguồn thường được chứng minh bằng đoạn văn/trích xuất ảnh hiện hành, giữ
+pin từ trước sinh đáp án đến khi lưu; metadata chung và thuộc tính đã xác minh
+cũng tham gia fingerprint. Payload dẫn xuất (bảng/title block/YCKT/HDCV,
+community/calculation) thiếu bằng chứng cấu trúc đầy đủ không được tự chứng nhận:
+feedback bị ẩn, regression không đạt điều kiện bằng chứng. Không coi kiểm tra
+PDF văn bản là bằng chứng hỗ trợ mọi loại nguồn Advanced RAG.
+
+Chưa kiểm tải dài, SQL Server thật, reboot, backup/restore hoặc rollback thật.
+Khóa worker chỉ bảo vệ cùng host với phiên bản đã cập nhật. Rollback ingestion
+sau khi đã xóa vector cũ không khôi phục lại vector cũ; vẫn giữ cơ chế dọn vector
+mới theo DocID và phục hồi metadata hiện có, không bổ sung hệ thống snapshot vector.

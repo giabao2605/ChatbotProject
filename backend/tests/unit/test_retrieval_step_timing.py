@@ -42,7 +42,8 @@ def test_embedding_and_qdrant_timings_are_separate_without_changing_results_or_r
     runtime.vectorstore = SimpleNamespace(embeddings=dense,sparse_embeddings=sparse)
     runtime.client = client
     runtime.retrieve = partial(pipeline_steps._retrieve,vectorstore=runtime.vectorstore,client=client,
-                               collection_name='fixture-timing')
+                               collection_name='fixture-timing',
+                               qdrant_timeout_seconds=runtime.qdrant_timeout_seconds)
     with caplog.at_level(logging.INFO,logger='RagTrace'):
         events = _run('Chi phí của quy trình nghỉ phép là bao nhiêu?',trace_id='query-timing',executor=executor)
     assert events[-1].outcome=='answered' and '[SRC:D17P2]' in _answer(events)
@@ -103,7 +104,8 @@ def test_cancel_between_native_adapter_steps_prevents_the_next_sdk_call(offline_
     runtime.vectorstore=SimpleNamespace(embeddings=Dense(),sparse_embeddings=Sparse())
     runtime.client=Client()
     runtime.retrieve=partial(pipeline_steps._retrieve,vectorstore=runtime.vectorstore,client=runtime.client,
-                             collection_name='fixture-timing')
+                             collection_name='fixture-timing',
+                             qdrant_timeout_seconds=runtime.qdrant_timeout_seconds)
     monkeypatch.setattr('langchain_qdrant.QdrantVectorStore',QdrantVectorStore)
     with caplog.at_level(logging.INFO,logger='RagTrace'):
         events=list(executor.run(RagRequest('Quy trình nghỉ phép có những bước nào?',AccessScope()),
@@ -137,7 +139,8 @@ def test_native_sparse_rpc_failure_is_attributed_without_retry_or_payload_disclo
     runtime.client=Client()
     runtime.vectorstore=SimpleNamespace(embeddings=Dense(),sparse_embeddings=Sparse())
     runtime.retrieve=partial(pipeline_steps._retrieve,vectorstore=runtime.vectorstore,client=runtime.client,
-                             collection_name='fixture-timing')
+                             collection_name='fixture-timing',
+                             qdrant_timeout_seconds=runtime.qdrant_timeout_seconds)
     monkeypatch.setattr('langchain_qdrant.QdrantVectorStore',QdrantVectorStore)
     with caplog.at_level(logging.INFO,logger='RagTrace'):
         events=_run('Chi phí của quy trình nghỉ phép là bao nhiêu?',trace_id='sparse-rpc-error',executor=executor)
@@ -192,7 +195,8 @@ def native_hybrid_fallback(offline_pipeline, monkeypatch, request):
         validate_embeddings=False, validate_collection_config=False)
     runtime.vectorstore, runtime.client = original, client
     runtime.retrieve = partial(pipeline_steps._retrieve, vectorstore=original, client=client,
-                               collection_name='explicit-collection')
+                               collection_name='explicit-collection',
+                               qdrant_timeout_seconds=runtime.qdrant_timeout_seconds)
     def unsupported_explicit_adapter(**kwargs):
         raise RuntimeError('Explicit adapter unavailable')
     monkeypatch.setattr('langchain_qdrant.QdrantVectorStore', unsupported_explicit_adapter)

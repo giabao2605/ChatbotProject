@@ -14,8 +14,8 @@ from dotenv import load_dotenv
 if sys.stdout.encoding != 'utf-8':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
-# Thêm đường dẫn project root để import
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Nạp package từ backend/src khi chạy CLI trực tiếp.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend", "src"))
 load_dotenv()
 
 from mech_chatbot.config.logging import logger
@@ -55,7 +55,7 @@ if __name__ == "__main__":
             so_file_loi += 1
             continue
 
-        thu_muc = os.path.basename(os.path.dirname(file_path)) or "data", "raw"
+        thu_muc = os.path.basename(os.path.dirname(file_path)) or "raw"
         ten_file = os.path.basename(file_path)
         print(f"\n=== ĐANG XỬ LÝ: {ten_file} (Thư mục: {thu_muc}) ===")
         logger.info(f"Đang xử lý file: {ten_file}")

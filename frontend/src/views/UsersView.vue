@@ -65,6 +65,8 @@ onMounted(async () => {
 const dlg = reactive({
   visible: false,
   busy: false,
+  loading: false,
+  loadFailed: false,
   error: "",
   mode: "create" as EditMode,
   userId: 0,
@@ -83,6 +85,7 @@ const sel = reactive({
   max_level: "public",
   password: "",
 });
+let dialogRequest = 0;
 let originalRoles: string[] = [];
 let resolveDlg: (() => void) | null = null;
 let rejectDlg: ((e: unknown) => void) | null = null;
@@ -124,6 +127,9 @@ function resetSelections() {
 }
 
 function openCreate(): Promise<void> {
+  dialogRequest += 1;
+  dlg.loading = false;
+  dlg.loadFailed = false;
   dialogTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   return new Promise((resolve, reject) => {
     resolveDlg = resolve;
@@ -144,6 +150,9 @@ function openCreate(): Promise<void> {
 }
 
 function openEdit(row: ApiRow, mode: Exclude<EditMode, "create">): Promise<void> {
+  const request = ++dialogRequest;
+  dlg.loading = true;
+  dlg.loadFailed = false;
   dialogTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   return new Promise((resolve, reject) => {
     resolveDlg = resolve;
@@ -155,11 +164,11 @@ function openEdit(row: ApiRow, mode: Exclude<EditMode, "create">): Promise<void>
     resetSelections();
     dlg.visible = true;
     // Prefill gia tri hien tai tu GET /api/users/{id}.
-    void prefill(dlg.userId);
+    void prefill(dlg.userId, request);
   });
 }
 
-async function prefill(id: number) {
+async function prefill(id: number, request: number) {
   try {
     const d = await apiGet<{
       roles?: string[];
@@ -167,24 +176,35 @@ async function prefill(id: number) {
       clearance?: string;
       sites?: string[];
     }>(`/api/users/${id}`);
+    if (request !== dialogRequest || !dlg.visible) return;
     sel.roles = [...(d.roles ?? [])];
     sel.departments = [...(d.departments ?? [])];
     sel.sites = [...(d.sites ?? [])];
     sel.max_level = d.clearance || "public";
     originalRoles = [...(d.roles ?? [])];
   } catch (err) {
+    if (request !== dialogRequest || !dlg.visible) return;
+    dlg.loadFailed = true;
     dlg.error = err instanceof Error ? err.message : "Không tải được quyền hiện tại";
+  } finally {
+    if (request === dialogRequest) dlg.loading = false;
   }
 }
 
+async function sendUpdate(path: string, method: "POST" | "PATCH", body: unknown) {
+  const result = await apiSend<{ ok?: boolean; message?: string; result?: { message?: string } }>(path, method, body);
+  if (result?.ok === false) throw new Error(result.message || result.result?.message || "Không lưu được người dùng");
+}
+
 async function submit() {
+  if (dlg.busy || dlg.loading || dlg.loadFailed || !dlg.visible) return;
   dlg.busy = true;
   dlg.error = "";
   try {
     if (dlg.mode === "create") {
       if (!form.username.trim()) throw new Error("Nhập tên đăng nhập");
       if (form.password.length < 8) throw new Error("Mật khẩu tối thiểu 8 ký tự");
-      await apiSend("/api/users", "POST", {
+      await sendUpdate("/api/users", "POST", {
         username: form.username.trim(),
         password: form.password,
         display_name: form.display_name || null,
@@ -197,20 +217,19 @@ async function submit() {
     } else if (dlg.mode === "roles") {
       const addRoles = sel.roles.filter((r) => !originalRoles.includes(r));
       const delRoles = originalRoles.filter((r) => !sel.roles.includes(r));
-      await apiSend(`/api/users/${dlg.userId}/roles`, "PATCH", {
-        is_active: true,
+      await sendUpdate(`/api/users/${dlg.userId}/roles`, "PATCH", {
         add_roles: addRoles,
         del_roles: delRoles,
       });
     } else if (dlg.mode === "departments") {
-      await apiSend(`/api/users/${dlg.userId}/departments`, "PATCH", { departments: [...sel.departments] });
+      await sendUpdate(`/api/users/${dlg.userId}/departments`, "PATCH", { departments: [...sel.departments] });
     } else if (dlg.mode === "sites") {
-      await apiSend(`/api/users/${dlg.userId}/sites`, "PATCH", { sites: [...sel.sites] });
+      await sendUpdate(`/api/users/${dlg.userId}/sites`, "PATCH", { sites: [...sel.sites] });
     } else if (dlg.mode === "clearance") {
-      await apiSend(`/api/users/${dlg.userId}/clearance`, "PATCH", { max_level: sel.max_level });
+      await sendUpdate(`/api/users/${dlg.userId}/clearance`, "PATCH", { max_level: sel.max_level });
     } else if (dlg.mode === "password") {
       if (sel.password.length < 8) throw new Error("Mật khẩu tối thiểu 8 ký tự");
-      await apiSend(`/api/users/${dlg.userId}/password`, "PATCH", { password: sel.password });
+      await sendUpdate(`/api/users/${dlg.userId}/password`, "PATCH", { password: sel.password });
     }
     dlg.visible = false;
     resolveDlg?.();
@@ -224,6 +243,8 @@ async function submit() {
 }
 
 function cancel() {
+  dialogRequest += 1;
+  dlg.loading = false;
   dlg.visible = false;
   rejectDlg?.(new Error(""));
   resolveDlg = null;
@@ -272,6 +293,7 @@ const rowActions: RowAction[] = [
 
   <Dialog v-model:visible="dlg.visible" :header="dialogTitle" modal :style="{ width: '460px' }" @hide="cancel" @after-hide="onDialogAfterHide">
     <div class="stack-form">
+      <p v-if="dlg.loading" role="status">Đang tải quyền hiện tại…</p>
       <Message v-if="dlg.error" severity="error" v-text="dlg.error"></Message>
 
       <!-- Tạo người dùng -->
@@ -372,7 +394,7 @@ const rowActions: RowAction[] = [
 
     <template #footer>
       <Button label="Huỷ" severity="secondary" outlined :disabled="dlg.busy" @click="cancel" />
-      <Button label="Lưu" :loading="dlg.busy" @click="submit" />
+      <Button label="Lưu" :loading="dlg.busy" :disabled="dlg.busy || dlg.loading || dlg.loadFailed" @click="submit" />
     </template>
   </Dialog>
 </template>

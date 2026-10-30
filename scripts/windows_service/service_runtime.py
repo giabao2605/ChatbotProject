@@ -89,13 +89,11 @@ def run(role, stop_file):
         from mech_chatbot.composition.worker_runtime import build_worker_runtime
         from mech_chatbot.workers.ingestion_worker import run_worker
         configure_logging(LoggingConfig.from_settings(settings))
-        runtime = build_worker_runtime(settings, worker_id='MechRAGWorker')
-        stoppable = replace(runtime, clock=StopAwareClock(stop_file.exists),
-                            job_store=StopAwareJobStore(runtime.job_store, stop_file.exists))
-        try:
-            run_worker(stoppable)
-        finally:
-            runtime.close()
+        def worker_runtime():
+            runtime = build_worker_runtime(settings, worker_id='MechRAGWorker')
+            return replace(runtime, clock=StopAwareClock(stop_file.exists),
+                           job_store=StopAwareJobStore(runtime.job_store, stop_file.exists))
+        run_worker(runtime_factory=worker_runtime)
         return
     import uvicorn
     if role == 'app':

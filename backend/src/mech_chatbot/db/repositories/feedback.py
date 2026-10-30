@@ -3,12 +3,16 @@ Loi goi cheo module dung tham chieu _r_<module>.<ten> (tranh circular import).
 KHONG sua tay truc tiep neu chua doc AGENTS; day la mot phan cua package db/repositories.
 """
 import hashlib
+import json
 import unicodedata
 from datetime import datetime
 from sqlalchemy import bindparam, text
 from ..engine import _ensure_engine, engine
 from mech_chatbot.config.logging import logger
 from ._shared import _cap_len
+from .feedback_access import access_transaction, allowed_basis, capture_sources, decode_basis, pin_generation_sources
+from mech_chatbot.application.feedback_access import access_basis as make_basis, validated_scope, effective_actor, valid_result_manifest
+from mech_chatbot.auth.authorization import normalized_roles
 
 __all__ = [
     'QUALITY_HALF_LIFE_DAYS',
@@ -182,29 +186,27 @@ def get_doc_quality_ranking(limit=50, worst_first=True):
     return out
 
 
-def upsert_golden_answer(question, answer, source_doc_id=None, department=None, site=None, created_by="System", feedback_id=None):
+def upsert_golden_answer(question, answer, source_doc_id=None, department=None, site=None, created_by="System", feedback_id=None, *, actor, access_basis):
     """P3-4: Luu cau tra loi da duoc chuyen gia duyet thanh Golden Answer (gom theo hash cau hoi)."""
     if not question or not answer:
         return None
     _ensure_engine()
     qhash = _question_hash(question)
-    try:
-        with engine.begin() as conn:
-            conn.execute(text("UPDATE GoldenAnswer SET IsActive = 0 WHERE QuestionHash = :h AND IsActive = 1"), {"h": qhash})
-            conn.execute(text(
-                "INSERT INTO GoldenAnswer (FeedbackID, QuestionHash, QuestionText, GoldenAnswer, SourceDocID, Department, Site, CreatedBy, IsActive) "
-                "VALUES (:fid, :h, :q, :a, :sd, :dept, :site, :cb, 1)"
-            ), {"fid": feedback_id, "h": qhash, "q": _cap_len(question, 4000), "a": answer,
-                "sd": source_doc_id, "dept": _cap_len(department, 100), "site": _cap_len(site, 100), "cb": _cap_len(created_by, 256)})
-        logger.info(f"[golden] Da luu Golden Answer (hash={(qhash[:8] if qhash else '?')}).")
-        return qhash
-    except Exception as e:
-        logger.error(f"[golden] Loi upsert Golden Answer: {e}", exc_info=True)
-        return None
+    with access_transaction(actor, db_engine=engine) as (conn, current):
+        if not allowed_basis(conn, access_basis, current) or not access_basis['sources']:
+            raise PermissionError('Record unavailable')
+        basis_json = json.dumps(access_basis, sort_keys=True)
+        conn.execute(text("UPDATE GoldenAnswer SET IsActive = 0 WHERE QuestionHash = :h AND AccessBasisJson=:basis AND IsActive = 1"), {"h": qhash, 'basis': basis_json})
+        conn.execute(text(
+            "INSERT INTO GoldenAnswer (FeedbackID, QuestionHash, QuestionText, GoldenAnswer, SourceDocID, Department, Site, CreatedBy, IsActive,AccessBasisJson) "
+            "VALUES (:fid, :h, :q, :a, :sd, :dept, :site, :cb, 1,:basis)"
+        ), {"fid": feedback_id, "h": qhash, "q": _cap_len(question, 4000), "a": answer,
+            "sd": source_doc_id, "dept": _cap_len(department, 100), "site": _cap_len(site, 100), "cb": _cap_len(current['username'], 256), 'basis': basis_json})
+    return qhash
 
 
-def find_golden_answer(question, *, admitted_doc_ids=()):
-    """Read an active approved answer only from an admitted source document."""
+def find_golden_answer(question, *, admitted_doc_ids=(), actor=None):
+    """Require current access to every pinned source and admit every source to this turn."""
     try:
         admitted_doc_ids = tuple(admitted_doc_ids)
         if any(type(value) not in (int, str) for value in admitted_doc_ids):
@@ -212,23 +214,28 @@ def find_golden_answer(question, *, admitted_doc_ids=()):
         doc_ids = sorted({int(value) for value in admitted_doc_ids})
     except (TypeError, ValueError, OverflowError):
         return None
-    if not str(question or "").strip() or not doc_ids or doc_ids[0] <= 0:
+    if not actor or not str(question or "").strip() or not doc_ids or doc_ids[0] <= 0:
         return None
     _ensure_engine()
     qhash = _question_hash(question)
     if not qhash:
         return None
     try:
-        with engine.connect() as conn:
-            row = conn.execute(text(
-                "SELECT TOP 1 GoldenID, QuestionText, GoldenAnswer, SourceDocID, Department, Site "
+        with access_transaction(actor, db_engine=engine, review=False) as (conn, current):
+            if actor.get('execution_scope') is not None:
+                current = effective_actor(current,actor['execution_scope'])
+            rows = conn.execute(text(
+                "SELECT GoldenID, QuestionText, GoldenAnswer, SourceDocID, Department, Site,AccessBasisJson "
                 "FROM GoldenAnswer WHERE QuestionHash = :h AND IsActive = 1 "
                 "AND SourceDocID IN :doc_ids ORDER BY CreatedAt DESC"
-            ).bindparams(bindparam("doc_ids", expanding=True)), {"h": qhash, "doc_ids": doc_ids}).fetchone()
-        if not row or row[3] not in doc_ids:
-            return None
-        return {"golden_id": row[0], "question": row[1], "answer": row[2],
-                "source_doc_id": row[3], "department": row[4], "site": row[5]}
+            ).bindparams(bindparam("doc_ids", expanding=True)), {"h": qhash, "doc_ids": doc_ids}).fetchall()
+            for row in rows:
+                basis = decode_basis(row[6])
+                if (basis and basis['sources'] and {source['doc_id'] for source in basis['sources']}.issubset(doc_ids)
+                        and allowed_basis(conn, basis, current)):
+                    return {"golden_id": row[0], "question": row[1], "answer": row[2],
+                            "source_doc_id": row[3], "department": row[4], "site": row[5]}
+        return None
     except Exception as e:
         logger.error(f"[golden] Loi find Golden Answer: {e}", exc_info=True)
         return None
@@ -251,7 +258,35 @@ def normalize_question(q):
         return str(q or "").strip().lower()
 
 
-def add_regression_question(question, expected_doc_id=None, expected_keywords=None, department=None, site=None, created_by="System"):
+def _regression_basis(conn, current, department, site, max_security_level, expected_doc_id, provided):
+    scope = validated_scope(current, department, site, max_security_level)
+    if not conn.execute(text("SELECT 1 FROM Departments WHERE DeptCode=:dept AND Status='active' AND IsActive=1"), {'dept':scope['department']}).fetchone():
+        raise ValueError('A valid active department is required')
+    if not conn.execute(text('SELECT 1 FROM Sites WHERE SiteCode=:site AND IsActive=1'), {'site':scope['site']}).fetchone():
+        raise ValueError('A valid active site is required')
+    basis = provided or make_basis(scope)
+    if not allowed_basis(conn,basis,current):
+        raise PermissionError('Record unavailable')
+    if expected_doc_id is not None:
+        from .structured_evidence import _source
+        row = conn.execute(text('SELECT VersionNo FROM TaiLieu WHERE DocID=:doc'), {'doc':expected_doc_id}).fetchone()
+        if not row:
+            raise PermissionError('Record unavailable')
+        narrowed = {**current, 'roles':list(normalized_roles(current['roles']) - {'admin'}),
+                    'allowed_departments':[scope['department']], 'allowed_sites':[scope['site']],
+                    'max_security_level':scope['max_security_level']}
+        _source(conn,expected_doc_id,row[0],narrowed)
+        if provided is None:
+            pages = conn.execute(text('SELECT PageNo,TextExtract,LocalOCRText,VisionSummary FROM DocumentPages WHERE DocID=:doc ORDER BY PageNo'), {'doc':expected_doc_id}).fetchall()
+            if not pages:
+                raise PermissionError('Record unavailable')
+            docs = [{'doc_id':expected_doc_id,'version_no':row[0],'trang':page[0],
+                     'text':next((value for value in page[1:] if value),'')} for page in pages]
+            basis = make_basis(scope,capture_sources(conn,pin_generation_sources(conn,docs,narrowed),narrowed))
+    return scope, basis
+
+
+def add_regression_question(question, expected_doc_id=None, expected_keywords=None, department=None, site=None, created_by="System", *, actor, max_security_level=None, access_basis=None):
     """P3-5: them 1 cau hoi vao bo hoi quy."""
     if not question or not str(question).strip():
         return None
@@ -259,52 +294,68 @@ def add_regression_question(question, expected_doc_id=None, expected_keywords=No
     kw = expected_keywords
     if isinstance(expected_keywords, (list, tuple)):
         kw = ", ".join([str(x).strip() for x in expected_keywords if str(x).strip()])
-    with engine.begin() as conn:
+    with access_transaction(actor, db_engine=engine) as (conn, current):
+        scope, basis = _regression_basis(conn,current,department,site,max_security_level,expected_doc_id,access_basis)
+        returning = 'RETURNING RegQID' if conn.dialect.name == 'sqlite' else ''
+        output = '' if returning else 'OUTPUT INSERTED.RegQID'
         row = conn.execute(text(
-            "INSERT INTO RegressionQuestion (QuestionText, ExpectedDocID, ExpectedKeywords, Department, Site, CreatedBy, IsActive) "
-            "OUTPUT INSERTED.RegQID "
-            "VALUES (:q, :ed, :kw, :dept, :site, :cb, 1)"
+            "INSERT INTO RegressionQuestion (QuestionText, ExpectedDocID, ExpectedKeywords, Department, Site, CreatedBy, IsActive,AccessBasisJson) "
+            f"{output} VALUES (:q, :ed, :kw, :dept, :site, :cb, 1,:basis) {returning}"
         ), {"q": _cap_len(question, 2000), "ed": expected_doc_id, "kw": kw,
-            "dept": _cap_len(department, 100), "site": _cap_len(site, 100), "cb": _cap_len(created_by, 256)}).fetchone()
+            "dept": scope['department'], "site": scope['site'], "cb": _cap_len(current['username'], 256), 'basis':json.dumps(basis,sort_keys=True)}).fetchone()
     return row[0] if row else None
 
 
-def list_regression_questions(active_only=True):
+def list_regression_questions(active_only=True, *, actor):
     """P3-5: liet ke cau hoi hoi quy."""
     _ensure_engine()
-    q = ("SELECT RegQID, QuestionText, ExpectedDocID, ExpectedKeywords, Department, Site, IsActive, CreatedAt "
+    q = ("SELECT RegQID, QuestionText, ExpectedDocID, ExpectedKeywords, Department, Site, IsActive, CreatedAt,AccessBasisJson "
          "FROM RegressionQuestion")
     if active_only:
         q += " WHERE IsActive = 1"
     q += " ORDER BY CreatedAt DESC"
-    cols = ["reg_qid", "question", "expected_doc_id", "expected_keywords", "department", "site", "is_active", "created_at"]
-    with engine.connect() as conn:
+    cols = ["reg_qid", "question", "expected_doc_id", "expected_keywords", "department", "site", "is_active", "created_at", 'access_basis']
+    with access_transaction(actor, db_engine=engine) as (conn, current):
         rows = conn.execute(text(q)).fetchall()
-    return [dict(zip(cols, r)) for r in rows]
+        return [{**dict(zip(cols, r)), 'access_basis':decode_basis(r[8]),
+                 'max_security_level':decode_basis(r[8])['scope']['max_security_level']}
+                for r in rows if allowed_basis(conn,r[8],current)]
 
 
-def set_regression_question_active(reg_qid, is_active):
+def set_regression_question_active(reg_qid, is_active, *, actor):
     """P3-5: bat/tat 1 cau hoi hoi quy."""
     _ensure_engine()
-    with engine.begin() as conn:
+    with access_transaction(actor, db_engine=engine) as (conn, current):
+        row = conn.execute(text('SELECT AccessBasisJson FROM RegressionQuestion WHERE RegQID=:id'), {'id':reg_qid}).fetchone()
+        if not row or not allowed_basis(conn,row[0],current):
+            raise PermissionError('Record unavailable')
         conn.execute(text("UPDATE RegressionQuestion SET IsActive = :a WHERE RegQID = :id"),
                      {"a": 1 if is_active else 0, "id": reg_qid})
     return True
 
 
-def save_regression_run(reg_qid, batch_id, answer_text, matched_doc_ids, doc_hit, keyword_hit, passed, duration_ms=None, error_text=None):
+def save_regression_run(reg_qid, batch_id, answer_text, matched_doc_ids, doc_hit, keyword_hit, passed, duration_ms=None, error_text=None, *, actor, result_manifest):
     """P3-5: luu ket qua 1 lan chay hoi quy."""
     _ensure_engine()
     mids = matched_doc_ids
     if isinstance(matched_doc_ids, (list, tuple)):
         mids = ",".join([str(x) for x in matched_doc_ids if x is not None])
-    with engine.begin() as conn:
+    with access_transaction(actor, db_engine=engine) as (conn, current):
+        if valid_result_manifest(result_manifest) is None:
+            raise ValueError('Invalid regression result manifest')
+        if result_manifest['actor'] != {'user_id':current['user_id'],'username':current['username']}:
+            raise PermissionError('Record unavailable')
+        if (not allowed_basis(conn,result_manifest.get('question_basis'),current)
+                or not allowed_basis(conn,result_manifest.get('execution_basis'),current)):
+            raise PermissionError('Record unavailable')
+        if result_manifest.get('status') != 'completed':
+            answer_text, passed = '', False
         conn.execute(text(
-            "INSERT INTO RegressionRun (RegQID, RunBatchID, AnswerText, MatchedDocIDs, DocHit, KeywordHit, Passed, DurationMs, ErrorText) "
-            "VALUES (:q, :b, :a, :m, :dh, :kh, :p, :dur, :err)"
+            "INSERT INTO RegressionRun (RegQID, RunBatchID, AnswerText, MatchedDocIDs, DocHit, KeywordHit, Passed, DurationMs, ErrorText,ResultManifestJson) "
+            "VALUES (:q, :b, :a, :m, :dh, :kh, :p, :dur, :err,:manifest)"
         ), {"q": reg_qid, "b": _cap_len(batch_id, 64), "a": answer_text, "m": _cap_len(mids, 500),
             "dh": 1 if doc_hit else 0, "kh": 1 if keyword_hit else 0, "p": 1 if passed else 0,
-            "dur": duration_ms, "err": _cap_len(error_text, 1000)})
+            "dur": duration_ms, "err": _cap_len(error_text, 1000), 'manifest':json.dumps(result_manifest,sort_keys=True)})
     return True
 
 
@@ -316,21 +367,37 @@ def get_latest_regression_batch():
     return row[0] if row else None
 
 
-def get_regression_runs(batch_id=None):
+def get_regression_runs(batch_id=None, *, actor):
     """P3-5: lay chi tiet cac lan chay cua 1 batch (mac dinh batch moi nhat)."""
     _ensure_engine()
-    if batch_id is None:
-        batch_id = get_latest_regression_batch()
-    if not batch_id:
-        return []
     cols = ["run_id", "reg_qid", "question", "passed", "doc_hit", "keyword_hit", "matched_doc_ids", "expected_doc_id", "duration_ms", "error", "answer", "created_at"]
-    with engine.connect() as conn:
+    with access_transaction(actor, db_engine=engine) as (conn, current):
         rows = conn.execute(text(
-            "SELECT rr.RunID, rr.RegQID, rq.QuestionText, rr.Passed, rr.DocHit, rr.KeywordHit, rr.MatchedDocIDs, rq.ExpectedDocID, rr.DurationMs, rr.ErrorText, rr.AnswerText, rr.CreatedAt "
+            "SELECT rr.RunID, rr.RegQID, rq.QuestionText, rr.Passed, rr.DocHit, rr.KeywordHit, rr.MatchedDocIDs, rq.ExpectedDocID, rr.DurationMs, rr.ErrorText, rr.AnswerText, rr.CreatedAt,rr.ResultManifestJson,rr.RunBatchID "
             "FROM RegressionRun rr LEFT JOIN RegressionQuestion rq ON rq.RegQID = rr.RegQID "
-            "WHERE rr.RunBatchID = :b ORDER BY rr.RunID ASC"
+            "WHERE (:b IS NULL OR rr.RunBatchID = :b) ORDER BY rr.CreatedAt DESC,rr.RunID ASC"
         ), {"b": batch_id}).fetchall()
-    return [dict(zip(cols, r)) for r in rows]
+        result = []
+        visible_batch = batch_id
+        for row in rows:
+            try:
+                manifest = valid_result_manifest(row[12])
+                if (manifest is None
+                        or not allowed_basis(conn,manifest.get('question_basis'),current)
+                        or not allowed_basis(conn,manifest.get('execution_basis'),current)):
+                    continue
+            except (ValueError,TypeError,AttributeError):
+                continue
+            visible_batch = visible_batch or row[13]
+            if row[13] != visible_batch:
+                continue
+            item = {**dict(zip(cols,row)), 'status':manifest.get('status'), 'grading':manifest.get('grading')}
+            item.update(question=manifest['question'],expected_doc_id=manifest['expected_doc_id'],
+                        passed=manifest['passed'],doc_hit=manifest['doc_hit'],keyword_hit=manifest['keyword_hit'])
+            if item['status'] != 'completed':
+                item.update(answer='', passed=False)
+            result.append(item)
+        return result
 
 
 def cleanup_dangling_records():
@@ -406,7 +473,7 @@ def update_chat_feedback(chat_id, danh_gia, voter_username=None):
 
 
 def ensure_regression_question(question, expected_doc_id=None, expected_keywords=None,
-                              department=None, site=None, created_by="System"):
+                              department=None, site=None, created_by="System", *, actor, max_security_level=None, access_basis=None):
     """P1-6: them cau hoi vao bo hoi quy NEU CHUA co (dedupe theo cau hoi da chuan hoa).
     Dung khi tu dong nap Golden Answer -> regression, tranh trung khi reviewer luu lai nhieu lan.
     """
@@ -414,14 +481,13 @@ def ensure_regression_question(question, expected_doc_id=None, expected_keywords
         return None
     _ensure_engine()
     target = normalize_question(question)
-    try:
-        with engine.connect() as conn:
-            rows = conn.execute(text("SELECT RegQID, QuestionText FROM RegressionQuestion")).fetchall()
-        for rid, qt in rows:
-            if normalize_question(qt) == target:
+    with access_transaction(actor, db_engine=engine) as (conn, current):
+        _, basis = _regression_basis(conn,current,department,site,max_security_level,expected_doc_id,access_basis)
+        rows = conn.execute(text('SELECT RegQID,QuestionText,AccessBasisJson FROM RegressionQuestion')).fetchall()
+        for rid, qt, payload in rows:
+            if normalize_question(qt) == target and decode_basis(payload) == basis:
                 return rid
-    except Exception as e:
-        logger.error(f"ensure_regression_question kiem tra loi: {e}", exc_info=True)
-    return add_regression_question(question, expected_doc_id=expected_doc_id,
+        return add_regression_question(question, expected_doc_id=expected_doc_id,
                                    expected_keywords=expected_keywords, department=department,
-                                   site=site, created_by=created_by)
+                                   site=site, created_by=created_by, actor=current,
+                                   max_security_level=max_security_level,access_basis=basis)

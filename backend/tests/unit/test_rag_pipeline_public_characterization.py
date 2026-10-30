@@ -460,7 +460,7 @@ def test_safety_policy_runs_before_an_eligible_exact_cache_lookup(monkeypatch):
     assert events[-1].refusal_reason == "safety_block"
 
 
-def test_exact_cache_hit_returns_attributed_answer_without_retrieval(
+def test_unpinned_exact_cache_falls_back_to_current_retrieval(
     monkeypatch, offline_pipeline
 ):
     from mech_chatbot.db.repositories import semantic_cache
@@ -512,12 +512,11 @@ def test_exact_cache_hit_returns_attributed_answer_without_retrieval(
     )
 
     assert cache_reads == [True]
-    assert qdrant_calls == []
-    assert _answer(events) == cache_row["answer"]
+    assert qdrant_calls
+    assert _answer(events) != cache_row["answer"]
     assert isinstance(events[-1], RagCompleted)
     assert events[-1].outcome == "answered"
-    assert events[-1].diagnostics["cache_hit"] is True
-    assert events[-1].diagnostics["cache_type"] == "exact"
+    assert not events[-1].diagnostics.get('cache_hit')
 
 
 def test_chitchat_completes_without_retrieving_documents(offline_pipeline):

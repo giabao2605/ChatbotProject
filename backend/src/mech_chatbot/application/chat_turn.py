@@ -48,6 +48,7 @@ class ChatTurnCommand:
     query_plan: QueryPlan | None = None
     text_query: bool = False
     scope_total: str | None = None
+    regression_scope: Mapping[str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,6 +136,8 @@ class RagStreamError:
 class RagStreamDone:
     trace_id: str | None = None
     elapsed_ms: int | None = None
+    outcome: str | None = None
+    debug_info: Mapping[str, Any] | None = None
 
 
 RagStreamEvent: TypeAlias = (

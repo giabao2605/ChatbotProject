@@ -9,23 +9,36 @@ from mech_chatbot.db.repositories import semantic_cache as cache_repository_modu
 from mech_chatbot.rag import semantic_cache
 from mech_chatbot.rag.execution import AccessScope
 from mech_chatbot.application.protected_files import DocumentAccessRecord
+from mech_chatbot.config.repository_runtime import bind_repository_runtime
+from sqlalchemy import text
+import json
+from .test_feedback_scoped_flow import scoped_db
 
-ACTOR = AccessScope(roles=frozenset({"viewer"}), allowed_departments=frozenset({"Technical"}),
-    allowed_sites=frozenset({"HQ"}), max_security_level="internal")
+ACTOR = AccessScope(user_id=9,username='reviewer',roles=frozenset({"viewer"}), allowed_departments=frozenset({"ENG"}),
+    allowed_sites=frozenset({"HN"}), max_security_level="internal")
+CACHE_EVIDENCE = []
 
 
 pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
-def cache_repository(monkeypatch: pytest.MonkeyPatch):
+def cache_repository(monkeypatch: pytest.MonkeyPatch,scoped_db):
     from mech_chatbot.adapters.protected_files import SqlProtectedFileStore
     from mech_chatbot.db.repositories import doc_metadata
+    from mech_chatbot.db.repositories.feedback_access import pin_generation_sources
+    engine,profile = scoped_db
+    with engine.begin() as conn:
+        conn.execute(text('UPDATE TaiLieu SET DocID=41 WHERE DocID=1'))
+        conn.execute(text('UPDATE PhongBanChiaSe SET DocID=41 WHERE DocID=1'))
+        conn.execute(text('UPDATE DocumentPages SET DocID=41,PageNo=4 WHERE DocID=1'))
+        evidence = pin_generation_sources(conn,[{'doc_id':41,'version_no':2,'trang':4,'quote':'12 bar','text':'approved content'}],profile)
+    monkeypatch.setitem(globals(),'CACHE_EVIDENCE',evidence)
     monkeypatch.setattr(doc_metadata, 'get_common_metadata_for_rag', lambda ids: {int(i): {'tags': None} for i in ids})
     monkeypatch.setattr(SqlProtectedFileStore, "load_document", lambda *_: DocumentAccessRecord(
         doc_id=41, ten_file="manual.pdf", file_path=None, thu_muc=None,
-        security_level="internal", site="HQ", lifecycle_status="published",
-        review_status="approved", departments=("Technical",)))
+        security_level="internal", site="HN", lifecycle_status="published",
+        review_status="approved", departments=("ENG",),version_no=2))
     boundary = SimpleNamespace(
         sc_delete=Mock(),
         sc_docs_all_current=Mock(return_value=True),
@@ -37,7 +50,8 @@ def cache_repository(monkeypatch: pytest.MonkeyPatch):
     )
     for name, operation in vars(boundary).items():
         monkeypatch.setattr(cache_repository_module, name, operation)
-    return boundary
+    with bind_repository_runtime(db_engine=engine):
+        yield boundary
 
 
 def _cache_row(**overrides):
@@ -51,7 +65,7 @@ def _cache_row(**overrides):
         "source_doc_ids": "[41]",
         "est_cost": "0.0025",
         "citation_snapshot": '[{"doc_id": 41, "page": 4}]',
-        "evidence_snapshot": '[{"doc_id": 41, "quote": "12 bar"}]',
+        "evidence_snapshot": json.dumps(CACHE_EVIDENCE),
         **overrides,
     }
 
@@ -68,7 +82,7 @@ def _store(cache_repository, **overrides):
         "model": "answer-model-v1",
         "est_cost": "0.0025",
         "citation_snapshot": [{"doc_id": 41, "page": 4}],
-        "evidence_snapshot": [{"doc_id": 41, "quote": "12 bar"}],
+        "evidence_snapshot": CACHE_EVIDENCE,
         **overrides,
     }
     semantic_cache.store(**arguments)
@@ -102,7 +116,7 @@ def test_exact_lookup_returns_authorized_snapshot(cache_repository):
         "ref_images": ["diagram.png"],
         "score": 1.0,
         "citation_snapshot": [{"doc_id": 41, "page": 4}],
-        "evidence_snapshot": [{"doc_id": 41, "quote": "12 bar"}],
+        "evidence_snapshot": CACHE_EVIDENCE,
     }
 
 
@@ -158,7 +172,7 @@ def test_semantic_lookup_ignores_invalid_embeddings_and_returns_best_authorized_
         "ref_images": ["diagram.png"],
         "score": 1.0,
         "citation_snapshot": [{"doc_id": 41, "page": 4}],
-        "evidence_snapshot": [{"doc_id": 41, "quote": "12 bar"}],
+        "evidence_snapshot": CACHE_EVIDENCE,
     }
 
 
@@ -269,7 +283,7 @@ def test_store_serializes_complete_entry_for_repository_boundary(cache_repositor
         "est_cost": 0.0025,
         "question_hash": "808f57fd60122a9086d0d06f9329daef010585cc35b69347270442f0ca440569",
         "citation_snapshot": '[{"doc_id": 41, "page": 4}]',
-        "evidence_snapshot": '[{"doc_id": 41, "quote": "12 bar"}]',
+        "evidence_snapshot": json.dumps(CACHE_EVIDENCE),
     }
 
 

@@ -376,6 +376,7 @@ def _rollback_failed_ingestion(
     thu_muc,
     rollback_on_error,
     persistence,
+    vector_write_started,
 ):
     if report["status"] != "error" or not rollback_on_error:
         return
@@ -390,12 +391,13 @@ def _rollback_failed_ingestion(
         return
 
     try:
-        _delete_vectors_for_file(
-            ten_file,
-            thu_muc,
-            doc_id=doc_id,
-            dependencies=dependencies,
-        )
+        if vector_write_started:
+            _delete_vectors_for_file(
+                ten_file,
+                thu_muc,
+                doc_id=doc_id,
+                dependencies=dependencies,
+            )
         persistence.mark_document_ingest_failed(
             ten_file,
             thu_muc,
@@ -487,6 +489,7 @@ def _finalize_pipeline_transaction(
     context,
     rollback_on_error,
     persistence,
+    vector_write_started,
 ):
     _finalize_quality_report(report, context)
     if report.get("quality_status") == "blocked":
@@ -517,6 +520,7 @@ def _finalize_pipeline_transaction(
         thu_muc=thu_muc,
         rollback_on_error=rollback_on_error,
         persistence=persistence,
+        vector_write_started=vector_write_started,
     )
     report["message"] = _build_final_report_message(report, context)
     return report
@@ -649,6 +653,7 @@ def process_and_ingest_pdf(
     doc = None
     pdf_table_reader = None
     doc_id = None
+    vector_write_started = False
     try:
         doc = fitz.open(pdf_path)
         report["total_pages"] = len(doc)
@@ -662,6 +667,9 @@ def process_and_ingest_pdf(
         )
         doc_id = governed_document.doc_id
         doc_info = governed_document.info
+        _delete_vectors_for_file(
+            ten_file, thu_muc, doc_id=doc_id, dependencies=dependencies,
+        )
         structured_snapshot = _prepare_structured_snapshot(report, pdf_path, doc_id, doc_info, persistence)
         external_policy = governed_document.external_policy
         report["classification_failed"] = bool(doc_info.get("classification_failed"))
@@ -1190,23 +1198,12 @@ def process_and_ingest_pdf(
                             _embed_src = _cpref + "\n" + chunk.page_content
                     chunk.page_content = tokenize_cached(_embed_src)
 
-                # Document Versioning: Xoa vector cu cua file nay truoc khi add (chi xoa 1 lan o trang 1)
-                if page_num == 0:
-                    try:
-                        _delete_vectors_for_file(
-                            ten_file,
-                            thu_muc,
-                            doc_id=doc_id,
-                            dependencies=dependencies,
-                        )
-                    except Exception as e:
-                        logger.warning(f"Khong xoa duoc vector cu (bo qua, tiep tuc): {ten_file}: {e}")
-
                 _emit_progress(
                     progress_callback,
                     "embedding",
                     "Đang tạo embedding...",
                 )
+                vector_write_started = True
                 _add_docs_with_retry(all_chunks, dependencies=dependencies)
                 report["total_chunks"] += len(all_chunks)
 
@@ -1252,6 +1249,7 @@ def process_and_ingest_pdf(
         ),
         rollback_on_error=runtime_config.rollback_on_error,
         persistence=persistence,
+        vector_write_started=vector_write_started,
     )
 
 
@@ -1307,6 +1305,7 @@ def process_and_ingest_file(
     )
     sensitive_scan = {"is_sensitive": False, "categories": [], "match_counts": {}}
     doc_id = None
+    vector_write_started = False
     rendered_image_path = None
     try:
         # Create/load the governed document before any reader or metadata path
@@ -1320,6 +1319,9 @@ def process_and_ingest_file(
         )
         doc_id = governed_document.doc_id
         doc_info = governed_document.info
+        _delete_vectors_for_file(
+            ten_file, thu_muc, doc_id=doc_id, dependencies=dependencies,
+        )
         report["classification_failed"] = bool(
             doc_info.get("classification_failed")
         )
@@ -1587,22 +1589,12 @@ def process_and_ingest_file(
             chunk.page_content = tokenize_cached(_embed_src)
 
         if all_chunks:
-            # Document Versioning: Xoa vector cu
-            try:
-                _delete_vectors_for_file(
-                    ten_file,
-                    thu_muc,
-                    doc_id=doc_id,
-                    dependencies=dependencies,
-                )
-            except Exception as e:
-                logger.warning(f"Khong xoa duoc vector cu (bo qua, tiep tuc): {ten_file}: {e}")
-
             _emit_progress(
                 progress_callback,
                 "embedding",
                 "Đang tạo embedding...",
             )
+            vector_write_started = True
             _add_docs_with_retry(all_chunks, dependencies=dependencies)
             report["total_chunks"] += len(all_chunks)
 
@@ -1631,6 +1623,7 @@ def process_and_ingest_file(
         ),
         rollback_on_error=runtime_config.rollback_on_error,
         persistence=persistence,
+        vector_write_started=vector_write_started,
     )
 
 __all__ = [

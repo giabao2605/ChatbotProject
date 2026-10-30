@@ -30,6 +30,7 @@ def serialize_debug_documents(docs=None) -> list[dict[str, Any]]:
             "score": doc.metadata.get("relevance_score"),
             "security_level": doc.metadata.get("security_level"),
             "external_processing_policy": doc.metadata.get("external_processing_policy"),
+            **({'evidence_pin':dict(doc.metadata['evidence_pin'])} if isinstance(doc.metadata.get('evidence_pin'),dict) else {}),
             "graph_edge_id": doc.metadata.get("graph_edge_id"),
             "graph_confidence": doc.metadata.get("graph_confidence"),
             "graph_relation_type": doc.metadata.get("graph_relation_type"),
@@ -55,6 +56,8 @@ def make_debug_info(docs=None) -> dict[str, Any]:
     return {
         "pipeline_namespace": namespace,
         "retrieved_docs": serialize_debug_documents(docs),
+        'evidence_complete':bool(docs) and all(isinstance(doc.metadata.get('evidence_pin'),dict)
+            or 'locator' in doc.metadata for doc in docs),
     }
 
 
@@ -116,6 +119,7 @@ def make_source_snapshot(docs=None) -> list[dict[str, Any]]:
                 ),
                 "score": metadata.get("relevance_score"),
                 "security_level": metadata.get("security_level"),
+                **({'evidence_pin':dict(metadata['evidence_pin'])} if isinstance(metadata.get('evidence_pin'),dict) else {}),
             }
         )
     return snapshots

@@ -24,10 +24,10 @@ from mech_chatbot.db.engine import build_database_runtime
 Result = TypeVar("Result")
 
 
-def _repository_runtime_is_bound(*, include_qdrant: bool) -> bool:
+def _repository_runtime_is_bound(*, include_qdrant: bool, include_sql: bool = True) -> bool:
     bound_engine = current_repository_engine()
     bound_qdrant, _bound_collection = current_qdrant_runtime()
-    return bound_engine is not None and (
+    return (not include_sql or bound_engine is not None) and (
         not include_qdrant or bound_qdrant is not None
     )
 
@@ -37,15 +37,17 @@ def configured_repository_runtime(
     settings: Settings,
     *,
     include_qdrant: bool,
+    include_sql: bool = True,
 ) -> Iterator[None]:
     """Bind CLI-owned dependencies from one explicit settings snapshot."""
 
-    if _repository_runtime_is_bound(include_qdrant=include_qdrant):
+    if _repository_runtime_is_bound(include_qdrant=include_qdrant, include_sql=include_sql):
         yield
         return
 
-    database_runtime = build_database_runtime(
-        SqlSettings.from_settings(settings)
+    database_runtime = (
+        build_database_runtime(SqlSettings.from_settings(settings))
+        if include_sql else None
     )
     qdrant_runtime = None
     try:
@@ -54,7 +56,7 @@ def configured_repository_runtime(
                 QdrantSettings.from_settings(settings)
             )
         with bind_repository_runtime(
-            db_engine=database_runtime.engine,
+            db_engine=getattr(database_runtime, "engine", None),
             qdrant_client=getattr(qdrant_runtime, "client", None),
             qdrant_collection=getattr(
                 qdrant_runtime,
@@ -68,7 +70,8 @@ def configured_repository_runtime(
             if qdrant_runtime is not None:
                 qdrant_runtime.close()
         finally:
-            database_runtime.close()
+            if database_runtime is not None:
+                database_runtime.close()
 
 
 def with_configured_repository_runtime(

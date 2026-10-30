@@ -1,13 +1,21 @@
 # Vận hành Windows và chuyển launcher vào Git
 
-Ngày chuẩn bị: 30/10/2026. **Chưa chuyển production.** Đường dẫn mới chỉ là mã
-ứng viên trong worktree cho tới khi có receipt chuyển đổi và kiểm tra web đạt.
+Trạng thái đối chiếu ngày 30/10/2026: production đã chuyển từ `59d0c98` sang
+`98972bfdf68f8cd41e39b3ecad7c06a15f8ef744`. GitHub `main` tại lúc đối chiếu vẫn ở
+`59d0c98`; không tự pull để cập nhật checkout phục vụ.
+
+Receipt và snapshot bảo toàn nằm tại
+`C:/ProgramData/MechRAGServices/restructure-deploy-c2859a0f16e140b2a7c1d9c3ee5cce45/`:
+`result.json` ghi chuyển đổi hoàn tất, `web.json` ghi health và RAG đúng SHA,
+ba file `*-preflight.json` ghi kiểm chứng identity/release. Thư mục `configuration/`
+là bản lưu được bảo vệ; không in nội dung hoặc sao credential vào Git.
+Bản sửa audit sau mốc này chỉ ở worktree, chưa triển khai, chưa chạy migration.
 
 ## Bản chuẩn và nơi làm việc
 
 Checkout phục vụ: `C:\Users\bao.nguyen\Documents\ChatBotProject`.
-App 8080, RAG 8100 và Worker cùng dùng `src` và `chat_env` tại đây. Frontend là
-`web-ui/dist`; không build lại trong đợt chỉ chuyển launcher. Service host vẫn
+App 8080, RAG 8100 và Worker cùng dùng `backend/src` và `chat_env` tại đây. Frontend là
+`frontend/dist`; không build lại trong đợt sửa audit. Service host vẫn
 dùng Python 3.12 đã cài trong Windows. Giữ thứ tự nạp native DLL và các service
 identity hiện hành. Giữ `.env`, overlay, token, cache, dữ liệu và quyền truy cập.
 
@@ -16,8 +24,9 @@ phát hành. Checkout production ghim commit phát hành, không tự pull/reloa
 Các worktree giữ bằng chứng không phải bản production thay thế.
 
 Mã chuẩn: `scripts/windows_service/service_host.py`, `service_runtime.py`,
-`configure_service.py`. Bộ `.local/domain-service-20261021` hiện còn dùng và phải
-giữ nguyên tới sau chuyển đổi, nghiệm thu và xác nhận đường quay lui.
+`configure_service.py`. Bộ `.local/domain-service-20261021` là vị trí launcher cũ,
+không còn hiện diện đầy đủ trong checkout đang kiểm tra. Không chạy rollback
+về đường dẫn đó khi chưa phục hồi và xác minh đủ file từ snapshot tương ứng.
 
 ## Kiểm tra trạng thái, không thay đổi hệ thống
 
@@ -42,8 +51,8 @@ xác thực phải cho đúng commit và `live_authorized=true`.
 Nhánh `codex/repo-restructure` dùng `backend/src` và `frontend/dist`. Launcher
 trong candidate đã được cập nhật theo hai đường dẫn này, còn `chat_env`, `.env`,
 dữ liệu, log và hồ sơ phát hành giữ nguyên vị trí tương đối từ repo root.
-Các đường dẫn `src` và `web-ui/dist` trong mô tả release cũ bên trên là lịch sử;
-không áp dụng thay đổi cấu trúc vào checkout đang phục vụ trong đợt này.
+Các đường dẫn `src` và `web-ui/dist` trong receipt trước chuyển đổi là lịch sử;
+receipt không được sửa lại cho khớp bố cục mới.
 Xem [phạm vi, kiểm chứng và rollback](repository-restructure-20261030.md).
 Không chạy configure/preflight hoặc service host từ candidate để thử bố cục.
 
@@ -127,6 +136,13 @@ thử sẵn có; không tạo/reset tài khoản hoặc xóa hội thoại để
 
 ## Quay lui
 
+Với release `98972bf`, dùng snapshot của chính lượt chuyển đổi nêu ở đầu tài liệu
+để đối chiếu mã `59d0c98`, command, cấu hình, bundle và asset cũ. Không chỉ checkout
+commit cũ rồi giữ cấu hình/bundle mới. Lần audit này chưa diễn tập restore thật.
+Các lệnh relocate bên dưới chỉ áp dụng cho chuyển vị trí launcher, sau khi cả hai
+bộ file đã tồn tại và được kiểm chứng; chúng không tự khôi phục source, dữ liệu,
+dependency hoặc snapshot bị thiếu.
+
 Nếu nghiệm thu không đạt, ngừng nhận việc và chờ hết việc trước khi dừng sạch.
 Trong khi mã candidate còn hiện diện, công cụ hỗ trợ đảo command từng role:
 
@@ -153,3 +169,18 @@ untracked, liên kết dữ liệu và tham chiếu hồ sơ. Chưa rõ thì gi�
 Output mới dùng `.local/runs`, `.local/tmp`, `.local/venvs`. Không tự tạo lịch dọn.
 Dependency tái lập phải được dựng thử riêng; không pip install vào `chat_env`.
 Không reboot máy trong đợt này; Auto không phải bằng chứng đã thử khởi động sau reboot.
+
+## Bản sửa audit chưa triển khai
+
+Worker mới giữ khóa dùng chung tại
+`C:/ProgramData/MechRAGServices/worker-heartbeat/ingestion-worker.lock` trước khi
+dựng runtime hoặc chạm heartbeat. Không xóa file khóa hay tự đổi ACL để vượt lỗi.
+Mã thoát 73 nghĩa là đã có worker; supervisor dừng thay vì khởi động lặp.
+Khóa bảo vệ cùng host và các launcher đã cập nhật, không bảo vệ worker máy khác
+hoặc checkout lịch sử. Không tăng số worker trong mô hình này.
+
+Migration `V0048` chỉ thêm metadata quyền/nguồn cho feedback, regression và golden
+answer, chưa được chạy. Dữ liệu cũ thiếu bằng chứng không được tự coi là public
+hoặc backfill bằng suy đoán. Khi chuẩn bị release riêng phải áp dụng migration
+trước khi bật các luồng phụ thuộc; phiên bản mới từ chối nếu thiếu schema.
+Giữ migration cộng thêm khi quay lui ứng dụng, không tự xóa cột hoặc dữ liệu.

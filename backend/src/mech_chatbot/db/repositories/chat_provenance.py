@@ -35,6 +35,48 @@ def _decode(payload):
     return provenance_record(json.loads(payload))
 
 
+def source_provenance_current(conn, item, profile):
+    """Validate a persisted source pin through the existing reviewed scope/graph."""
+    record = provenance_record(item)
+    if record['source_id'] != item.get('source_id'):
+        return False
+    doc, version = record['doc_id'], record['version_no']
+    if record.get('graph_context'):
+        value = graph_query_in_connection(conn,GraphQuery(**record['graph_context']),profile,deadline=monotonic()+120)
+        if graph_fingerprint(value) != record['graph_hash']:
+            return False
+        sources = [(s,str(edge['occurrence_id'])) for edge in (*value.get('edges',()),
+                    *((value.get('manifest') or {}).get('occurrences',()))) for s in edge['sources']]
+        if value['status']=='complete' and not value.get('edges'):
+            sources.extend((s,'assembly:'+str(s['doc_id'])) for s in (value.get('manifest') or {}).get('assembly_sources',()))
+        return any((str(s['doc_id']),str(s['version']),s.get('source_snapshot_id') or s.get('snapshot_id'),
+                    s['page'],s['source_hash'],row_key) ==
+                   (str(doc),str(version),record['snapshot_id'],record['locator']['page'],record['source_hash'],record['locator']['row_key'])
+                   for s,row_key in sources)
+    scope = approved_scope_in_connection(conn,record.get('scope_id'),profile)
+    if (scope is None or reviewed_scope_fingerprint(scope)!=record.get('scope_hash')
+            or scope.snapshot_id!=record['snapshot_id']):
+        return False
+    if not scope.facts:
+        return record.get('fact_count')==0 and any(str(loc.doc_id)==str(doc) and str(loc.version)==str(version)
+            and digest==record['source_hash'] and json.dumps(asdict(loc),sort_keys=True)==json.dumps(record['locator'],sort_keys=True)
+            for loc,digest in source_bindings(scope))
+    groups = {}
+    for fact in scope.facts:
+        loc = fact.locator
+        row = (loc.row_key,loc.cell) if not (loc.page or loc.sheet) else ()
+        groups.setdefault((loc.doc_id,loc.version,loc.page,loc.sheet,loc.table_index,row),[]).append(fact)
+    for facts in groups.values():
+        locator = asdict(facts[0].locator)
+        if len(facts)>1:
+            locator = {**locator,'cell':None,'row_key':'','bbox':None}
+        if (record.get('fact_count')==len(facts) and str(locator['doc_id'])==str(doc) and str(locator['version'])==str(version)
+                and all(fact.source_hash==record['source_hash'] for fact in facts)
+                and json.dumps(locator,sort_keys=True)==json.dumps(record['locator'],sort_keys=True)):
+            return True
+    return False
+
+
 def load_structured_history(conn, chat_id, profile):
     """Validate the complete calculation basis before releasing any source card."""
     complete = conn.execute(text(f'SELECT IsStructuredComplete FROM {table(conn,"ChatEvidenceManifest")} WHERE ChatID=:chat'),

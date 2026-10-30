@@ -200,6 +200,37 @@ def test_environment_and_stopping_preserve_runtime_contract():
     assert not runtime.expected_exit(True, 1)
 
 
+def test_service_defers_worker_runtime_until_locked_worker_calls_factory(monkeypatch, tmp_path):
+    from dataclasses import dataclass
+    from mech_chatbot.composition import worker_runtime
+    from mech_chatbot.config import logging as logging_config
+    from mech_chatbot.config.settings import Settings
+    from mech_chatbot.workers import ingestion_worker
+
+    @dataclass(frozen=True)
+    class FakeRuntime:
+        clock: object
+        job_store: object
+
+    built = Mock(return_value=FakeRuntime(object(), Mock()))
+    monkeypatch.setattr(worker_runtime, "build_worker_runtime", built)
+    monkeypatch.setattr(runtime, "settings_for_role", lambda role: Settings.from_env({}))
+    monkeypatch.setattr(logging_config, "configure_logging", lambda config: None)
+    observed = []
+
+    def run_worker(*, runtime_factory):
+        built.assert_not_called()
+        result = runtime_factory()
+        assert isinstance(result.clock, runtime.StopAwareClock)
+        assert isinstance(result.job_store, runtime.StopAwareJobStore)
+        observed.append(result)
+
+    monkeypatch.setattr(ingestion_worker, "run_worker", run_worker)
+    runtime.run("worker", tmp_path / "stop")
+    built.assert_called_once()
+    assert len(observed) == 1
+
+
 @pytest.mark.parametrize("values", [("other", "NT SERVICE\\MechRAGApp", 0, 0),
     ("Mech_Chatbot_DB", "dbo", 0, 0), ("Mech_Chatbot_DB", "NT SERVICE\\MechRAGApp", 1, 0),
     ("Mech_Chatbot_DB", "NT SERVICE\\MechRAGApp", 0, 1)])

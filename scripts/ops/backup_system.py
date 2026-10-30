@@ -35,6 +35,7 @@ import os
 import re
 import sys
 import datetime as _dt
+from contextlib import nullcontext
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(_HERE))
@@ -44,7 +45,7 @@ if _SRC not in sys.path:
 
 from sqlalchemy import text  # noqa: E402
 
-from mech_chatbot.composition.maintenance_runtime import with_configured_repository_runtime  # noqa: E402
+from mech_chatbot.composition.maintenance_runtime import configured_repository_runtime  # noqa: E402
 from mech_chatbot.config.repository_runtime import current_qdrant_runtime  # noqa: E402
 from mech_chatbot.config.settings import load_settings  # noqa: E402
 from mech_chatbot.db.engine import _ensure_engine, engine  # noqa: E402
@@ -167,7 +168,6 @@ def cleanup_old(sql_dir, keep_days, *, database):
             print(f"[cleanup] da xoa backup cu: {fp}")
 
 
-@with_configured_repository_runtime(include_qdrant=True)
 def main():
     parser = argparse.ArgumentParser(description="Backup SQL + Qdrant (P1.8)")
     parser.add_argument("--sql-dir", default=None, help="Thu muc backup tren MAY CHU SQL (vd D:\\Backups).")
@@ -176,6 +176,16 @@ def main():
     parser.add_argument("--keep-days", type=int, help="Opt-in: don file backup cu hon N ngay (chi khi sql_dir truy cap duoc cuc bo).")
     args = parser.parse_args()
 
+    runtime = nullcontext() if args.skip_sql and args.skip_qdrant else configured_repository_runtime(
+        load_settings(),
+        include_sql=not args.skip_sql,
+        include_qdrant=not args.skip_qdrant,
+    )
+    with runtime:
+        _run_backup(args)
+
+
+def _run_backup(args):
     print(f"=== Backup he thong @ {_timestamp()} ===")
     errors = []
 

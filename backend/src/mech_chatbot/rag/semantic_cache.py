@@ -214,6 +214,12 @@ def _validated_cache_payload(best, actor):
                 if int(item["doc_id"]) == doc_id and item.get("version_no") is not None:
                     if str(item["version_no"]) != str(record.version_no):
                         return None
+        from dataclasses import asdict
+        from mech_chatbot.db.repositories.feedback_access import access_transaction, capture_sources
+        from mech_chatbot.application.feedback_access import effective_actor
+        identity = asdict(actor)
+        with access_transaction(identity,schema=False,review=False) as (conn,current):
+            capture_sources(conn,evidence,effective_actor(current,identity))
     except Exception:
         return None
     return doc_ids, citations, evidence

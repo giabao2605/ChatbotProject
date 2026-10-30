@@ -288,7 +288,7 @@ beforeEach(() => {
         return Promise.reject(new Error(`Unexpected write: ${method} ${path}`)) as never;
       }
       return Promise.resolve(path === "/api/regression/run"
-        ? { ok: true, summary: { batch_id: "b-1", total: 5, passed: 4, failed: 1, pass_rate: 0.8 } }
+        ? { ok: true, summary: { batch_id: "b-1", total: 7, graded: 5, ungraded: 2, passed: 4, failed: 1, pass_rate: 0.8 } }
         : { ok: true }) as never;
     },
   );
@@ -1029,7 +1029,7 @@ describe("lifecycle, queue, and regression operations", () => {
     const contracts = pages(wrapper);
     expect(await contracts[0].load?.()).toEqual([{ RegQID: 14 }]);
     expect(await contracts[1].load?.()).toEqual([{ batch_id: "old" }]);
-    await contracts[0].createForm?.submit({ question: "Q?", expected_doc_id: "12" });
+    await contracts[0].createForm?.submit({ question: "Q?", expected_doc_id: "12", department: "QA", site: "HN" });
     for (const action of contracts[0].rowActions ?? []) await action.run({ RegQID: 14 });
     expect(vi.mocked(api.apiSend)).toHaveBeenCalledWith(
       "/api/regression/questions/14/active",
@@ -1044,7 +1044,37 @@ describe("lifecycle, queue, and regression operations", () => {
 
     await button(wrapper, "Chạy regression").trigger("click");
     await flushPromises();
-    expect(wrapper.text()).toContain("Batch b-1: 4/5 đạt");
+    expect(wrapper.text()).toContain("Batch b-1: 4/5 đã chấm đạt");
+    expect(wrapper.text()).toContain("2 chưa đủ tiêu chí");
     expect(vi.mocked(api.apiSend)).toHaveBeenCalledWith("/api/regression/run", "POST", {});
+  });
+});
+
+
+describe("Regression grading and scope form", () => {
+  it("shows an ungraded batch without inventing a zero pass rate", async () => {
+    vi.mocked(api.apiSend).mockResolvedValueOnce({ ok: true, summary: {
+      batch_id: "none", total: 2, graded: 0, ungraded: 2, passed: 0, failed: 0, pass_rate: null,
+    }} as never);
+    const wrapper = mountView(RegressionView);
+    await button(wrapper, "Chạy regression").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Chưa có câu hỏi được chấm");
+    expect(wrapper.text()).toContain("2 chưa đủ tiêu chí");
+    expect(wrapper.text()).not.toContain("0%");
+  });
+
+  it("requires department and site and omits the default clearance from manual questions", async () => {
+    const wrapper = mountView(RegressionView);
+    const form = pages(wrapper)[0].createForm!;
+    expect(form.fields.find(field => field.key === "department")?.required).toBe(true);
+    expect(form.fields.find(field => field.key === "site")?.required).toBe(true);
+    expect(() => form.submit({ question: "Q" })).toThrow(/Phòng ban|Site/);
+    await form.submit({ question: "Q", department: "QA", site: "HN", max_security_level: "" });
+    expect(api.apiSend).toHaveBeenLastCalledWith("/api/regression/questions", "POST", {
+      question: "Q", department: "QA", site: "HN", expected_doc_id: null,
+    });
+    await form.submit({ question: "Q", department: "QA", site: "HN", max_security_level: "internal" });
+    expect(api.apiSend).toHaveBeenLastCalledWith("/api/regression/questions", "POST", expect.objectContaining({ max_security_level: "internal" }));
   });
 });

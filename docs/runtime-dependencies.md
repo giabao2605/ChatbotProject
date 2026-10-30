@@ -1,5 +1,14 @@
 # Dựng lại môi trường Windows đang vận hành
 
+> Bản sửa audit chưa triển khai cập nhật hai pin trong lock candidate:
+> `langgraph-sdk 0.4.4 -> 0.4.6`, `tornado 6.5.9 -> 6.6`; bổ sung khai báo trực tiếp
+> `langchain-huggingface==1.2.2` và `fastembed==0.9.1`. Lock candidate không còn là
+> bản sao nguyên trạng môi trường live. Receipt dựng/audit mới ở
+> `.local/runs/audit-dependencies/` của worktree; venv riêng là
+> `.local/venvs/audit-dependencies`. Không sửa `chat_env` hoặc receipt cũ.
+> Wheelhouse lịch sử vẫn cần giữ; dựng lock candidate cần thêm hai wheel đã vá
+> từ lượt audit. Để khôi phục đúng release cũ, dùng lock và wheelhouse của release đó.
+
 Phạm vi: CPython 3.12.3, Windows x64, bộ gói trong `chat_env` của checkout phục vụ
 được chụp ngày 30/10/2026. Không nâng gói, cài thử hoặc sửa môi trường đang chạy.
 
