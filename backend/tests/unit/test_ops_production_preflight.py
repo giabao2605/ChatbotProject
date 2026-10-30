@@ -623,7 +623,7 @@ def test_lan_runs_full_preflight_before_starting_runtime_processes():
         encoding="utf-8"
     )
 
-    pythonpath = launcher.index('$env:PYTHONPATH = "src"')
+    pythonpath = launcher.index('$env:PYTHONPATH = "backend/src"')
     preflight = launcher.index('"scripts\\ops\\production_preflight.py" --skip-health')
     runtime_start = launcher.index("$ragProc = Start-ProcessWithEnv")
 
