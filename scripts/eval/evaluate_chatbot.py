@@ -1,8 +1,10 @@
 import json
 import sys
 import os
+from pathlib import Path
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'backend/src'))
 
 from mech_chatbot.rag.execution import (
     AccessScope,
@@ -13,7 +15,7 @@ from mech_chatbot.rag.execution import (
 )
 
 def run_eval():
-    eval_file = os.path.join("tests", "golden_questions.json")
+    eval_file = ROOT / "backend/tests/golden_questions.json"
     if not os.path.exists(eval_file):
         print(f"File {eval_file} not found.")
         return

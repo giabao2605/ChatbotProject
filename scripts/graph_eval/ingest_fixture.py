@@ -13,7 +13,7 @@ from sqlalchemy import text
 from scripts.graph_eval.constants import DEFAULT_OUTPUT, FIXTURE_BATCH, FIXTURE_COLLECTION, LIVE_OPT_IN, ROOT
 from scripts.graph_eval.generate_fixture import generate_fixture
 
-SRC = ROOT / "src"
+SRC = ROOT / "backend" / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 

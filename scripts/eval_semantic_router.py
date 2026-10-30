@@ -33,7 +33,7 @@ import time
 
 # Cho phep chay truc tiep tu goc repo (layout src/)
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_SRC = os.path.join(os.path.dirname(_HERE), "src")
+_SRC = os.path.join(os.path.dirname(_HERE), "backend", "src")
 if os.path.isdir(_SRC) and _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 

@@ -20,7 +20,7 @@ from sqlalchemy import text
 
 
 ROOT = Path(__file__).resolve().parents[2]
-for candidate in (ROOT, ROOT / "src"):
+for candidate in (ROOT, ROOT / "backend" / "src"):
     if str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 

@@ -63,9 +63,9 @@ if ($Mode -eq 'Payload') {
         $env:RUN_EVAL_TESTS = '0'
         $env:RUN_QUERY_TASK_PROOF = '0'
         $env:RAG_EXECUTION_CONTEXT = 'test'
-        $env:PYTHONPATH = (Join-Path $projectRoot 'src') + ';' + $projectRoot
+        $env:PYTHONPATH = (Join-Path $projectRoot 'backend/src') + ';' + $projectRoot
         $testReport = Join-Path $ProofRoot 'lifecycle-tests.xml'
-        & $PythonExe -m pytest tests/unit/test_query_pilot_windows_job.py tests/unit/test_query_pilot_scheduled_host.py `
+        & $PythonExe -m pytest backend/tests/unit/test_query_pilot_windows_job.py backend/tests/unit/test_query_pilot_scheduled_host.py `
             -p no:cacheprovider -o 'addopts=' -q --tb=short `
             "--junitxml=$testReport"
         $testExitCode = $LASTEXITCODE

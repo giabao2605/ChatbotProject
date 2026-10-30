@@ -3,8 +3,8 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT / "src") not in sys.path:
-    sys.path.insert(0, str(ROOT / "src"))
+if str(ROOT / "backend" / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "backend" / "src"))
 from mech_chatbot.config.constants import EVALUATION_SOURCE_COLLECTIONS
 
 FIXTURE_BATCH = "graph-eval-v1"

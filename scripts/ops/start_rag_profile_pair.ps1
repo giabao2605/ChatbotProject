@@ -37,7 +37,7 @@ if ([string]::IsNullOrWhiteSpace($PythonExe)) {
     $PythonExe = Join-Path $projectRoot "chat_env\Scripts\python.exe"
 }
 $pythonExe = (Resolve-Path -LiteralPath $PythonExe).Path
-$pythonPath = Join-Path $projectRoot "src"
+$pythonPath = Join-Path $projectRoot "backend/src"
 $stateDir = Join-Path $projectRoot ".agents\state"
 $statePath = Join-Path $stateDir "rag-profile-pair.json"
 $logsDir = Join-Path $projectRoot "logs\rag-profile-pair"

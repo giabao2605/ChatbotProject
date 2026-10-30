@@ -84,7 +84,7 @@ def recreate_database(*, server: str, database: str) -> None:
 def apply_all_migrations(*, database: str) -> None:
     environment = dict(os.environ)
     environment["SQL_DATABASE"] = database
-    environment["PYTHONPATH"] = str(PROJECT_ROOT / "src")
+    environment["PYTHONPATH"] = str(PROJECT_ROOT / "backend" / "src")
     subprocess.run([sys.executable, str(MIGRATION_RUNNER)], cwd=PROJECT_ROOT, env=environment, check=True)
 
 

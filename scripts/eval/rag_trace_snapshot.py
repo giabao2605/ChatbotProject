@@ -12,7 +12,7 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-_SRC = Path(__file__).resolve().parents[2] / "src"
+_SRC = Path(__file__).resolve().parents[2] / "backend" / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 

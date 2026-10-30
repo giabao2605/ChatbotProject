@@ -512,10 +512,15 @@ def build_candidate_environment(
     }
     if enabled != _QUERY_ONLY_FLAGS:
         raise OperatorStopped("runtime_feature_scope_invalid")
+    source = source_root / 'backend/src'
+    if not (source / 'mech_chatbot').is_dir():
+        source = source_root / 'src'
+    if not (source / 'mech_chatbot').is_dir():
+        raise OperatorStopped('source_package_unavailable')
     return {
         **{str(name): str(value) for name, value in parent.items()},
         **{str(name): str(value) for name, value in rendered.items()},
-        "PYTHONPATH": f"{source_root}{os.pathsep}{source_root / 'src'}",
+        "PYTHONPATH": os.pathsep.join(map(str, (source_root, source_root / 'backend', source))),
         "EXTERNAL_PROCESSING_POLICY": "all_external",
         "RAG_SNAPSHOT_FINGERPRINT": snapshot_fingerprint,
         "RAG_EVAL_FORCE_AMBIGUOUS": "false",

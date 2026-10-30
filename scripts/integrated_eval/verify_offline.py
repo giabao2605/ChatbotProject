@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SRC = ROOT / "src"
+SRC = ROOT / "backend" / "src"
 for value in (ROOT, SRC):
     if str(value) not in sys.path:
         sys.path.insert(0, str(value))
@@ -29,10 +29,10 @@ def verify(matrix_path, output):
     ).strip()
     command = [
         sys.executable, "-m", "pytest",
-        "tests/unit/test_integrated_hardening.py",
-        "tests/unit/test_semantic_cache_stream_lifecycle.py",
-        "tests/unit/test_strict_stream_guard.py",
-        "tests/unit/test_rollout_guardrails.py", "-q",
+        "backend/tests/unit/test_integrated_hardening.py",
+        "backend/tests/unit/test_semantic_cache_stream_lifecycle.py",
+        "backend/tests/unit/test_strict_stream_guard.py",
+        "backend/tests/unit/test_rollout_guardrails.py", "-q",
     ]
     result = subprocess.run(
         command, cwd=ROOT, check=False, capture_output=True, text=True

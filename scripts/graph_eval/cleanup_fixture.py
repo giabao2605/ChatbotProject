@@ -11,7 +11,7 @@ from pathlib import Path
 
 from scripts.graph_eval.constants import DEFAULT_OUTPUT, FIXTURE_BATCH, FIXTURE_COLLECTION, LIVE_OPT_IN, ROOT
 
-SRC = ROOT / "src"
+SRC = ROOT / "backend" / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 

@@ -4,7 +4,7 @@ import time
 
 # Them src vao sys.path khi chay script truc tiep.
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
+sys.path.insert(0, os.path.join(PROJECT_ROOT, "backend", "src"))
 
 from qdrant_client.http import models
 from mech_chatbot.adapters.qdrant_runtime import build_qdrant_admin_runtime

@@ -24,6 +24,7 @@ dist/
 *.egg
 
 # ===== Node / Vue frontend (web-ui/) =====
+# Keep legacy paths for historical checkout artifacts.
 node_modules/
 web-ui/dist/
 web-ui/.vite/
@@ -31,6 +32,13 @@ web-ui/.vitest/
 web-ui/coverage/
 web-ui/playwright-report/
 web-ui/test-results/
+frontend/dist/
+frontend/.vite/
+frontend/.vitest/
+frontend/coverage/
+frontend/coverage-query-ui/
+frontend/playwright-report/
+frontend/test-results/
 *.tsbuildinfo
 
 # ===== Testing & QA =====

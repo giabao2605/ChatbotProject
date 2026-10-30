@@ -99,7 +99,7 @@ _UPLOAD_REVIEW_SAMPLES = {
 
 
 def _ensure_source_root_importable() -> None:
-    source_root = _PROJECT_ROOT / "src"
+    source_root = _PROJECT_ROOT / "backend" / "src"
     source_text = str(source_root)
     if source_text not in sys.path:
         sys.path.insert(0, source_text)

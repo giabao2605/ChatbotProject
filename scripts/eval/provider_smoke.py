@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol, TypedDict
 
 ROOT = Path(__file__).resolve().parents[2]
-SRC = ROOT / "src"
+SRC = ROOT / "backend" / "src"
 for value in (ROOT, SRC):
     if str(value) not in sys.path:
         sys.path.insert(0, str(value))

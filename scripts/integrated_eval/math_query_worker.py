@@ -68,7 +68,12 @@ def run_quality_arm_process(*, source_root, python, environment, manifest_paths,
     root = Path(source_root).resolve(strict=True)
     # load_settings discovers .env upward from its config module. Reject that
     # implicit input rather than changing application-wide dotenv behavior.
-    config_root = root / "src/mech_chatbot/config"
+    source = root / "backend/src"
+    if not (source / "mech_chatbot").is_dir():
+        source = root / "src"
+    if not (source / "mech_chatbot").is_dir():
+        raise ValueError("matrix_worker_source_package_unavailable")
+    config_root = source / "mech_chatbot/config"
     if any((path / ".env").exists() or (path / ".env").is_symlink()
            for path in (config_root, *config_root.parents)):
         raise ValueError("matrix_worker_dotenv_forbidden")
@@ -85,7 +90,8 @@ def run_quality_arm_process(*, source_root, python, environment, manifest_paths,
 import sys, json, contextlib, os
 from pathlib import Path
 root = Path.cwd()
-sys.path[:0] = [str(root), str(root / "src")]
+source = root / "backend/src" if (root / "backend/src/mech_chatbot").is_dir() else root / "src"
+sys.path[:0] = [str(root), str(root / "backend"), str(source)]
 from scripts.integrated_eval.math_query_worker import evaluate_quality_arm
 packet = json.loads(sys.stdin.read())
 with open(os.devnull, "w") as sink, contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):

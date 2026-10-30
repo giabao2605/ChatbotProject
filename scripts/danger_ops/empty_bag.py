@@ -62,7 +62,7 @@ import sys
 # (giong cach cac launcher them 'src' vao sys.path).
 # ----------------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-SRC_DIR = os.path.join(BASE_DIR, "src")
+SRC_DIR = os.path.join(BASE_DIR, "backend", "src")
 for _p in (SRC_DIR, BASE_DIR):
     if _p not in sys.path:
         sys.path.insert(0, _p)

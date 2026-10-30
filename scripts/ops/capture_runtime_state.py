@@ -11,7 +11,7 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[2]
-for import_root in (ROOT, ROOT / "src"):
+for import_root in (ROOT, ROOT / "backend" / "src"):
     if str(import_root) not in sys.path:
         sys.path.insert(0, str(import_root))
 

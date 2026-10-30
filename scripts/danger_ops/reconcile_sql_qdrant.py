@@ -7,16 +7,16 @@ Muc tieu: phat hien va don dep lech du lieu giua SQL (bang TaiLieu) va vector st
 MAC DINH la DRY-RUN (chi bao cao, KHONG xoa gi). Them --fix de thuc su don dep.
 
 Cach chay (Windows PowerShell):
-    $env:PYTHONPATH="src"; python scripts\danger_ops\reconcile_sql_qdrant.py
-    $env:PYTHONPATH="src"; python scripts\danger_ops\reconcile_sql_qdrant.py --fix
-    $env:PYTHONPATH="src"; python scripts\danger_ops\reconcile_sql_qdrant.py --stuck-hours 6 --fix
+    $env:PYTHONPATH="backend/src"; python scripts\danger_ops\reconcile_sql_qdrant.py
+    $env:PYTHONPATH="backend/src"; python scripts\danger_ops\reconcile_sql_qdrant.py --fix
+    $env:PYTHONPATH="backend/src"; python scripts\danger_ops\reconcile_sql_qdrant.py --stuck-hours 6 --fix
 """
 import sys
 import argparse
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
-_SRC = _ROOT / "src"
+_SRC = _ROOT / "backend" / "src"
 if _SRC.exists() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 

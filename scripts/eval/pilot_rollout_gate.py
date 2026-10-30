@@ -30,7 +30,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
 
-_SRC = Path(__file__).resolve().parents[2] / "src"
+_SRC = Path(__file__).resolve().parents[2] / "backend" / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 

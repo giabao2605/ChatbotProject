@@ -19,7 +19,7 @@ def service_name(role):
 def child_environment(parent, root=ROOT):
     return {**parent, 'PYTHONUTF8': '1', 'PYTHONUNBUFFERED': '1',
             'INGESTION_WORKER_READY_FILE': str(STATE / 'worker-heartbeat' / 'ready.txt'),
-            'PYTHONPATH': str(root / 'src'),
+            'PYTHONPATH': str(root / 'backend' / 'src'),
             'PATH': 'C:/Program Files/Git/cmd;' + parent.get('PATH', ''),
             'GIT_CONFIG_COUNT': '1', 'GIT_CONFIG_KEY_0': 'safe.directory',
             'GIT_CONFIG_VALUE_0': root.as_posix(),
@@ -234,7 +234,7 @@ def identity_preflight(role):
         if role == 'app':
             from mech_chatbot.config.validate import assert_app_security_valid
             assert_app_security_valid(settings)
-            with (ROOT / 'web-ui/dist/index.html').open('rb') as handle:
+            with (ROOT / 'frontend/dist/index.html').open('rb') as handle:
                 handle.read(1)
             result['checks'].append('app_security_and_ui')
         from sqlalchemy import text

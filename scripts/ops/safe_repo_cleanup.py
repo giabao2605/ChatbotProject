@@ -13,7 +13,7 @@ import subprocess
 PROTECTED = (
     '.git', 'chat_env', 'src', 'data', 'database', 'logs', 'reports', 'docs',
     'scripts', 'tests', 'mech_chatbot_tests_layered', 'node_modules',
-    'web-ui/dist', 'web-ui/node_modules', '.local/domain-service-20261021',
+    'web-ui/dist', 'web-ui/node_modules', 'backend', 'frontend/dist', 'frontend/node_modules', '.local/domain-service-20261021',
     '.local/worktrees', '.local/venvs', '.local/late-interaction-env',
     '9.1.00678', '9.3.03843', '9.3.03844', '9.3.03951', '9.3.04068', '9.3.04080',
 )
@@ -65,9 +65,9 @@ def _target(root, relative, protected_paths):
                (len(parts) == 1 and parts[0].startswith('.coverage')) or
                (parts[0] == 'tmp' and len(parts) > 1) or
                (parts[0] == '.local' and len(parts) > 2) or
-               lowered in ('web-ui/tsconfig.tsbuildinfo', 'web-ui/tsconfig.node.tsbuildinfo') or
+               lowered in ('web-ui/tsconfig.tsbuildinfo', 'web-ui/tsconfig.node.tsbuildinfo', 'frontend/tsconfig.tsbuildinfo', 'frontend/tsconfig.node.tsbuildinfo') or
                any(lowered == p or lowered.startswith(p + '/') for p in
-                   ('web-ui/coverage', 'web-ui/test-results', 'web-ui/playwright-report')))
+                   ('web-ui/coverage', 'web-ui/test-results', 'web-ui/playwright-report', 'frontend/coverage', 'frontend/test-results', 'frontend/playwright-report')))
     if not allowed or any(p.casefold() == '.git' or p.casefold().startswith('.env') for p in parts):
         raise ValueError('Candidate is outside generated-output scopes')
     path = root.joinpath(*parts)

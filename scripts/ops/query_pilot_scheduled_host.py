@@ -22,7 +22,7 @@ import time
 # Direct script execution is used by Task Scheduler, with no ambient PYTHONPATH.
 if __package__ in {None, ""}:
     sys.path[:0] = [str(Path(__file__).resolve().parents[2]),
-                    str(Path(__file__).resolve().parents[2] / "src")]
+                    str(Path(__file__).resolve().parents[2] / "backend" / "src")]
 
 from scripts.ops import query_decomposition_pilot_operator as operator
 from scripts.ops.query_decomposition_pilot_operator_cli import _parser, _operator_arguments_sha256
@@ -265,6 +265,12 @@ def run_packet(packet_path: Path, expected_sha256: str) -> dict:
         raise OperatorStopped("scheduled_runtime_port_occupied")
     authorization = json.loads(args.authorization.read_bytes())
     timeout = _operator_timeout(schedule, authorization, datetime.now(timezone.utc))
+    root = args.source_root.resolve()
+    source = root / 'backend/src'
+    if not (source / 'mech_chatbot').is_dir():
+        source = root / 'src'
+    if not (source / 'mech_chatbot').is_dir():
+        raise ValueError('source_package_unavailable')
     host_create_time = _process_create_time()
     state_root = _host_root(run_root)
     state_root.mkdir(parents=False, exist_ok=False)
@@ -280,8 +286,7 @@ def run_packet(packet_path: Path, expected_sha256: str) -> dict:
         "retry_authorized": False, "catch_up_authorized": False,
         "recorded_at": operator._format(datetime.now(timezone.utc)),
     })
-    root = args.source_root.resolve()
-    environment = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root / "src"), str(root))),
+    environment = {**os.environ, "PYTHONPATH": os.pathsep.join(map(str, (source, root / 'backend', root))),
                    "RAG_SERVICE_TOKEN": service_token,
                    "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1",
                    "RAG_QUERY_PILOT_HOST_CONTAINED": "1",

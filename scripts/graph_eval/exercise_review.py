@@ -12,7 +12,7 @@ from sqlalchemy import text
 
 from scripts.graph_eval.constants import FIXTURE_BATCH, LIVE_OPT_IN, ROOT
 
-SRC = ROOT / "src"
+SRC = ROOT / "backend" / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 

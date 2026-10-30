@@ -13,7 +13,7 @@ import time
 from typing import Any, Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT / "backend" / "src"))
 
 from mech_chatbot.composition.maintenance_runtime import configured_repository_runtime
 from mech_chatbot.config.settings import ExternalAiSettings, load_settings

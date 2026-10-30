@@ -11,7 +11,7 @@ from sqlalchemy import text
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SRC = ROOT / "src"
+SRC = ROOT / "backend" / "src"
 for item in (ROOT, SRC):
     if str(item) not in sys.path:
         sys.path.insert(0, str(item))

@@ -28,6 +28,15 @@ def _require(condition, reason):
         raise ValueError(reason)
 
 
+def _source_paths(source_root, paths):
+    root = Path(source_root)
+    if (root / 'backend/src/mech_chatbot').is_dir():
+        return {('backend/' + path if path.startswith(('src/mech_chatbot/', 'tests/')) else path)
+                for path in paths}
+    _require((root / 'src/mech_chatbot').is_dir(), 'Source package unavailable')
+    return paths
+
+
 def _object(reference, root):
     value = load_json_reference(reference, root=root)
     _require(type(value) is dict, 'Hash-pinned JSON object required')
@@ -235,7 +244,7 @@ def _verify_source_capture(reference, root, source_root, required_paths=_CORE):
         _require(identity not in identities, 'Duplicate canonical source path')
         identities = identities | {identity}
         _require(hashlib.sha256(target.read_bytes()).hexdigest() == item['sha256'], 'Source hash drift')
-    _require(required_paths <= identities, 'Capture missing required source seams')
+    _require(_source_paths(base, required_paths) <= identities, 'Capture missing required source seams')
     return capture
 
 

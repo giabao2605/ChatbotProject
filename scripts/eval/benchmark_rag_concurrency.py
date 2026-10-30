@@ -30,7 +30,7 @@ from urllib.parse import urlsplit, urlunsplit
 import requests
 
 ROOT = Path(__file__).resolve().parents[2]
-SRC = ROOT / "src"
+SRC = ROOT / "backend" / "src"
 for import_root in (ROOT, SRC):
     if str(import_root) not in sys.path:
         sys.path.insert(0, str(import_root))

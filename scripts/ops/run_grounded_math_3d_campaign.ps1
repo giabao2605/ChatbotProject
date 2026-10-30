@@ -59,7 +59,14 @@ if (
 if (Test-Path -LiteralPath $StopMarkerPath) {
     exit 0
 }
-$env:PYTHONPATH = (Join-Path $ToolingRoot 'src') + ';' + $ToolingRoot
+$sourceDir = Join-Path $ToolingRoot 'backend\src'
+if (-not (Test-Path -LiteralPath (Join-Path $sourceDir 'mech_chatbot') -PathType Container)) {
+    $sourceDir = Join-Path $ToolingRoot 'src'
+}
+if (-not (Test-Path -LiteralPath (Join-Path $sourceDir 'mech_chatbot') -PathType Container)) {
+    throw 'source_package_unavailable'
+}
+$env:PYTHONPATH = $sourceDir + ';' + (Join-Path $ToolingRoot 'backend') + ';' + $ToolingRoot
 
 $pilotGate = Join-Path $ToolingRoot 'scripts\ops\grounded_math_pilot_gate.py'
 $operatorTraffic = Join-Path $ToolingRoot 'scripts\ops\grounded_math_operator_traffic.py'

@@ -30,7 +30,7 @@ from scripts.eval.provider_smoke import (
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SRC = ROOT / "src"
+SRC = ROOT / "backend" / "src"
 CONTROLLED_DEMO_COLLECTION = "TaiLieuKyThuat_v2"
 
 def build_feature_environment(

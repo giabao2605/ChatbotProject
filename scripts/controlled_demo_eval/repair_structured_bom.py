@@ -16,7 +16,7 @@ import sys
 
 from scripts.crag_eval.constants import ROOT
 
-SRC = ROOT / "src"
+SRC = ROOT / "backend" / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 

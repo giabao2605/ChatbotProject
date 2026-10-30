@@ -12,7 +12,7 @@ from pathlib import Path
 from scripts.graph_eval.constants import FIXTURE_BATCH, FIXTURE_COLLECTION
 
 ROOT = Path(__file__).resolve().parents[2]
-SRC = ROOT / "src"
+SRC = ROOT / "backend" / "src"
 REQUIRED_GRAPH_MIGRATIONS = frozenset({"V0033", "V0034", "V0037", "V0038"})
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))

@@ -12,9 +12,9 @@ LUU Y QUAN TRONG:
   - Snapshot Qdrant nam tren server Qdrant (hoac Qdrant Cloud). Dung Qdrant API/Console de tai ve.
 
 Cach chay (Windows PowerShell):
-    $env:PYTHONPATH="src"; python scripts\ops\backup_system.py
-    $env:PYTHONPATH="src"; python scripts\ops\backup_system.py --sql-dir "D:\\Backups" --keep-days 14
-    $env:PYTHONPATH="src"; python scripts\ops\backup_system.py --skip-qdrant
+    $env:PYTHONPATH="backend/src"; python scripts\ops\backup_system.py
+    $env:PYTHONPATH="backend/src"; python scripts\ops\backup_system.py --sql-dir "D:\\Backups" --keep-days 14
+    $env:PYTHONPATH="backend/src"; python scripts\ops\backup_system.py --skip-qdrant
 
 Lich dinh ky: dung Windows Task Scheduler chay hang ngay (full + log nhieu lan/ngay).
 
@@ -38,7 +38,7 @@ import datetime as _dt
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(_HERE))
-_SRC = os.path.join(_ROOT, "src")
+_SRC = os.path.join(_ROOT, "backend", "src")
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 

@@ -1,8 +1,8 @@
 import sys
 import os
 
-# Thêm src/ vào Python path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+# Keep the root launcher usable from any working directory.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "backend", "src"))
 
 # Chạy RAG Server
 import uvicorn

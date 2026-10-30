@@ -4,7 +4,7 @@ $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $projectRoot
-$env:PYTHONPATH = "src"
+$env:PYTHONPATH = "backend/src"
 
 $pythonExe = Join-Path $projectRoot "chat_env\Scripts\python.exe"
 $logsDir = Join-Path $projectRoot "logs"
@@ -81,16 +81,16 @@ if (!$AllowDirtyWorktree) {
 }
 
 # Build Vue sources before starting the static app server. Without this step,
-# start_demo_lan.ps1 would keep serving an old web-ui/dist even after source
+# start_demo_lan.ps1 would keep serving an old frontend/dist even after source
 # files were overwritten by a patch.
 $npmCommand = Get-Command npm.cmd -ErrorAction SilentlyContinue
 if (!$npmCommand) {
     $npmCommand = Get-Command npm -ErrorAction SilentlyContinue
 }
 if (!$npmCommand) {
-    throw "Khong tim thay npm. Hay cai Node.js LTS de build web-ui."
+    throw "Khong tim thay npm. Hay cai Node.js LTS de build frontend."
 }
-$webUiDir = Join-Path $projectRoot "web-ui"
+$webUiDir = Join-Path $projectRoot "frontend"
 Write-Output "Dang build Vue frontend..."
 Push-Location $webUiDir
 try {
@@ -301,7 +301,7 @@ $ragProc = Start-ProcessWithEnv `
     -RedirectStandardOutput $ragOutLog `
     -RedirectStandardError $ragErrLog `
     -Environment @{
-        PYTHONPATH = "src"
+        PYTHONPATH = "backend/src"
         OMP_NUM_THREADS = "4"
         RAG_DEPLOYMENT_ID = $deploymentId
         RAG_DEPLOYMENT_GIT_SHA = $head
@@ -332,14 +332,14 @@ $workerSupervisorProc = Start-ProcessWithEnv `
     -RedirectStandardOutput $workerSupervisorOutLog `
     -RedirectStandardError $workerSupervisorErrLog `
     -Environment @{
-        PYTHONPATH = "src"
+        PYTHONPATH = "backend/src"
         INGESTION_WORKER_READY_FILE = $workerReadyFile
     }
 $ownedProcesses += $workerSupervisorProc
 
 $baseAppEnv = @{
     INGESTION_WORKER_READY_FILE = $workerReadyFile
-    PYTHONPATH       = "src"
+    PYTHONPATH       = "backend/src"
     APP_SERVER_HOST  = "0.0.0.0"
     APP_SERVER_PORT  = "8080"
     RAG_SERVER_URL   = $ragServerUrl

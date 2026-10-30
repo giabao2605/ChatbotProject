@@ -1,0 +1,124 @@
+"""Cau hinh chung cho pytest.
+
+- Them repo, backend va backend/src vao sys.path de import scripts, tests va mech_chatbot.
+- Khai bao fixtures dung chung (user gia lap cho test RBAC).
+- Tu dong skip test integration/eval khi chua bat bien moi truong tuong ung.
+"""
+import os
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+os.environ.setdefault("RAG_EXECUTION_CONTEXT", "test")
+
+# --- Path setup -------------------------------------------------------------
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+for _path in (_REPO_ROOT, _REPO_ROOT / "backend", _REPO_ROOT / "backend" / "src"):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
+
+
+# --- Skip rules theo bien moi truong ---------------------------------------
+def pytest_collection_modifyitems(config, items):
+    run_db = os.getenv("RUN_DB_TESTS") == "1"
+    run_qdrant = os.getenv("RUN_QDRANT_TESTS") == "1"
+    # A configured URL is common in a developer .env and must not make the
+    # default test suite issue paid/external RAG requests.  Live evaluation is
+    # intentionally an explicit opt-in.
+    run_eval = os.getenv("RUN_EVAL_TESTS") == "1" and bool(os.getenv("RAG_SERVER_URL"))
+    skip_db = pytest.mark.skip(reason="Can SQL Server that: dat RUN_DB_TESTS=1")
+    skip_qdrant = pytest.mark.skip(reason="Can Qdrant that: dat RUN_QDRANT_TESTS=1")
+    skip_eval = pytest.mark.skip(
+        reason="Can RAG server that: dat RUN_EVAL_TESTS=1 va RAG_SERVER_URL=..."
+    )
+    for item in items:
+        if "integration" in item.keywords:
+            needs_qdrant = "qdrant" in item.name.lower() or "consistency" in item.name.lower()
+            if needs_qdrant and not run_qdrant:
+                item.add_marker(skip_qdrant)
+            elif not needs_qdrant and not run_db:
+                item.add_marker(skip_db)
+        if item.get_closest_marker("eval") is not None and not run_eval:
+            item.add_marker(skip_eval)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def configured_integration_repository_runtime(request):
+    if (
+        os.getenv("RUN_DB_TESTS") != "1"
+        or request.node.get_closest_marker("integration") is None
+    ):
+        yield
+        return
+
+    from mech_chatbot.composition.maintenance_runtime import (
+        configured_repository_runtime,
+    )
+    from mech_chatbot.config.settings import load_settings
+
+    with configured_repository_runtime(
+        load_settings(),
+        include_qdrant=os.getenv("RUN_QDRANT_TESTS") == "1",
+    ):
+        yield
+
+
+# --- Fixtures: user gia lap cho test phan quyen -----------------------------
+@pytest.fixture
+def make_user():
+    """Tao dict user giong output cua auth.service.authenticate_user."""
+    def _make(
+        username="tester",
+        roles=None,
+        allowed_departments=None,
+        max_security_level="internal",
+        allowed_sites=None,
+        department="CHUNG",
+    ):
+        return {
+            "user_id": 1,
+            "username": username,
+            "display_name": username,
+            "department": department,
+            "roles": roles or ["viewer"],
+            "allowed_departments": allowed_departments or ["CHUNG"],
+            "max_security_level": max_security_level,
+            "allowed_sites": allowed_sites or [],
+        }
+    return _make
+
+
+@pytest.fixture
+def isolated_app_lifespan(monkeypatch):
+    """Keep unit-test app lifespans independent from external databases."""
+
+    from mech_chatbot.api import app_server
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.pool import StaticPool
+
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool,
+    )
+    monkeypatch.setattr(
+        app_server.app.state,
+        "database_builder",
+        lambda _settings: SimpleNamespace(engine=engine, close=engine.dispose),
+    )
+    qdrant_runtime = SimpleNamespace(
+        client=object(),
+        collection_name="unit-test-collection",
+        close=lambda: None,
+    )
+    monkeypatch.setattr(
+        app_server.app.state,
+        "qdrant_builder",
+        lambda _settings: qdrant_runtime,
+    )
+    monkeypatch.setattr(
+        app_server,
+        "refresh_expired_status",
+        lambda **_kwargs: {},
+    )

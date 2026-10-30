@@ -1,9 +1,9 @@
 """P1-5: Runner danh gia RAGAS-style tren golden set + gate CI + bao cao A/B.
 
 Vi du:
-    PYTHONPATH=src python scripts/eval/run_ragas_eval.py
-    PYTHONPATH=src python scripts/eval/run_ragas_eval.py --set-baseline
-    PYTHONPATH=src python scripts/eval/run_ragas_eval.py --limit 20 --tolerance 0.05
+    PYTHONPATH=backend/src python scripts/eval/run_ragas_eval.py
+    PYTHONPATH=backend/src python scripts/eval/run_ragas_eval.py --set-baseline
+    PYTHONPATH=backend/src python scripts/eval/run_ragas_eval.py --limit 20 --tolerance 0.05
 
 Exit code != 0 neu co regression (dung cho CI gating).
 """
@@ -15,7 +15,7 @@ import datetime
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(_HERE))
-for _p in (_ROOT, os.path.join(_ROOT, "src"), _HERE):
+for _p in (_ROOT, os.path.join(_ROOT, "backend", "src"), _HERE):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 

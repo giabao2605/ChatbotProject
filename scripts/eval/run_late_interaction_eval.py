@@ -40,7 +40,7 @@ class IsolatedEncoder:
     def __init__(self, python_executable: Path):
         env = dict(os.environ)
         env["HF_HUB_OFFLINE"] = "1"
-        env["PYTHONPATH"] = "src"
+        env["PYTHONPATH"] = "backend/src"
         env["PYTHONIOENCODING"] = "utf-8"
         self.process = subprocess.Popen(
             [str(python_executable), "scripts/late_interaction/encoder_worker.py"],
@@ -166,7 +166,7 @@ def _snapshot_rows(points):
 def _retrieve_in_worker(manifest, repetitions, top_k, cache_path, *, source_collection):
     env = dict(os.environ)
     env["QDRANT_COLLECTION"] = source_collection
-    env["PYTHONPATH"] = "src"
+    env["PYTHONPATH"] = "backend/src"
     env["PYTHONIOENCODING"] = "utf-8"
     subprocess.run(
         [

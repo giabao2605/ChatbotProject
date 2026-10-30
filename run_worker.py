@@ -14,14 +14,14 @@ except Exception:
     # Neu moi truong khong co onnxruntime thi bo qua (khong lam vo worker).
     pass
 
-# Thêm src/ vào Python path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+# Keep the root launcher usable from any working directory.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "backend", "src"))
 
 # Chạy Ingestion Worker
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
     from mech_chatbot.config.validate import assert_config_valid
     assert_config_valid()
     from mech_chatbot.workers.ingestion_worker import run_worker

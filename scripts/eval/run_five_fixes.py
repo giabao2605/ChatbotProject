@@ -104,7 +104,12 @@ def main():
     ap.add_argument("--arm", required=True)
     ap.add_argument("--limit-usd", type=float, default=4)
     args = ap.parse_args()
-    sys.path.insert(0, str(args.source / "src"))
+    source = args.source / "backend" / "src"
+    if not (source / "mech_chatbot").is_dir():
+        source = args.source / "src"
+    if not (source / "mech_chatbot").is_dir():
+        raise ValueError("source package unavailable")
+    sys.path.insert(0, str(source))
     os.chdir(args.runtime_root)
     os.environ.update(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", HF_HUB_DISABLE_TELEMETRY="1",
                       HF_HOME="C:/Users/bao.nguyen/.cache/huggingface",

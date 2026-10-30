@@ -7,6 +7,7 @@ import json
 import math
 from pathlib import Path
 import sqlite3
+import sys
 import time
 
 from sqlalchemy import create_engine, text
@@ -24,8 +25,9 @@ from mech_chatbot.governance.artifact_references import load_json_reference, res
 from scripts.eval.run_fixed_math_v2 import run_fixed_case, _frozen_case, _case_request
 from scripts.eval.semantic_task_routing import (
     compile_task_label, grade_task_observation, compile_candidate_task_label,
-    grade_candidate_task_observation, _verify_source_capture,
+    grade_candidate_task_observation, _verify_source_capture, _source_paths,
 )
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'backend'))
 from tests.unit.test_rag_bom_chat import FixtureEngine
 from tests.unit.test_graph_v2_repository import SqliteConnection
 
@@ -151,7 +153,7 @@ def _verify_assay_source(config,root,source_root):
     v4 = config.get('task_routing_contract') == CANDIDATE_TASK_ROUTING
     required = _REQUIRED | ({'src/mech_chatbot/domain/task_routing.py', 'src/mech_chatbot/rag/candidate_task_routing.py',
         'src/mech_chatbot/rag/pipeline.py', 'src/mech_chatbot/rag/query_plan.py'} if v4 else set())
-    _require(required <= {f['path'].replace('\\','/').casefold() for f in capture['files']},'Assay source seams missing')
+    _require(_source_paths(source_root, required) <= {f['path'].replace('\\','/').casefold() for f in capture['files']},'Assay source seams missing')
 
 
 def _inputs(config_reference,root,source_root,settings):
