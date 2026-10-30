@@ -10,7 +10,7 @@ gốc; giao diện được phục vụ từ `web-ui/dist`. Mã launcher chuẩn
 `scripts/windows_service`; việc có mã mới trong Git không có nghĩa service đã chuyển.
 Đối chiếu command của Windows Service với hồ sơ phát hành để biết bản đang chạy.
 
-Các hướng dẫn dev, demo và Docker bên dưới phục vụ môi trường riêng. Đặc biệt,
+Các hướng dẫn dev và demo bên dưới phục vụ môi trường riêng. Đặc biệt,
 `scripts/ops/start_demo_lan.ps1` có chạy migration, không dùng làm lệnh restart
 production. Không thử dependency hoặc build đè frontend tại checkout đang phục vụ.
 

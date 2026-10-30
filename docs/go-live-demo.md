@@ -51,7 +51,7 @@ Semantic cache can bang DB tu migration `V0014__semantic_cache.sql`. Truoc demo,
 
 Neu chua chac, kiem tra DB co bang semantic cache. Khong bat cache neu migration nay chua co.
 
-## 4. Chay khong can Docker
+## 4. Chay demo tren Windows
 
 Tao va kich hoat virtual environment:
 
@@ -161,24 +161,7 @@ chính phòng đó đạt readiness bằng dữ liệu thật. Checklist nằm t
 
 Voi `MAX_CONCURRENT_RAG=4`, demo nen moi 5-10 nguoi dung va nhac moi nguoi khong spam cau hoi lien tuc. Neu CPU gan 100%, RAM tang manh, hoac nhieu loi busy/timeout, giam toc demo hoac ha `MAX_CONCURRENT_RAG=2`.
 
-## 8. Docker van la tuy chon
-
-Neu muon chay Docker Compose:
-
-```powershell
-docker compose -f docker/docker-compose.yml up -d --build
-```
-
-Kiem tra trang thai:
-
-```powershell
-docker compose -f docker/docker-compose.yml ps
-docker compose -f docker/docker-compose.yml logs -f rag-server
-```
-
-Trong Docker Compose, RAG port `8100` chi bind `127.0.0.1`. Nguoi dung demo chi truy cap app-api/Vue qua port `8080`.
-
-## 9. Rollback nhanh
+## 8. Rollback nhanh
 
 Neu cache gay loi do DB migration thieu:
 
