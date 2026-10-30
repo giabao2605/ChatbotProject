@@ -94,7 +94,7 @@ def test_http_history_keeps_source_version_and_title_in_the_authorization_snapsh
 def test_http_history_revision_links_apply_to_ordinary_and_branch_records(history_store,monkeypatch,tmp_path,kind):
     from sqlalchemy.pool import StaticPool
     from mech_chatbot.api import file_access
-    from mech_chatbot.adapters.protected_files import SqlProtectedFileStore, FilesystemProtectedFileStorage
+    from mech_chatbot.adapters.protected_files import FilesystemProtectedFileStorage
     from mech_chatbot.application.chat_result_history import serialize_history_result
     seed_history(history_store)
     image=tmp_path/'page.png';image.write_bytes(b'verified preview')
@@ -115,12 +115,12 @@ def test_http_history_revision_links_apply_to_ordinary_and_branch_records(histor
     app=FastAPI();app.include_router(routes.router)
     app.dependency_overrides[csrf_profile]=lambda:PROFILE
     app.state.database_runtime=SimpleNamespace(engine=engine)
-    app.state.runtime=SimpleNamespace(app_support_queries=SqlAppSupportQueries(engine=engine))
+    app.state.runtime=SimpleNamespace(db_engine=engine,app_support_queries=SqlAppSupportQueries(engine=engine))
     monkeypatch.setattr(routes,'get_chat_history',partial(chat.get_chat_history,db_engine=engine))
-    monkeypatch.setattr(file_access,'_store',lambda:SqlProtectedFileStore(engine_provider=lambda:engine))
     monkeypatch.setattr(file_access,'_storage',lambda:FilesystemProtectedFileStorage(
         project_root=tmp_path,raw_root=tmp_path,processed_root=tmp_path))
     try:
+        assert file_access.page_image_path(1, 1, db_engine=engine) == image.resolve()
         response=TestClient(app).post('/api/chat/history',json={'session_id':'s1'})
         assert response.status_code==200
         answer=response.json()['messages'][-1]
@@ -166,7 +166,7 @@ def test_http_history_never_releases_data_after_snapshot_or_deadline_failure(his
                     from sqlalchemy.exc import SQLAlchemyError
                     raise SQLAlchemyError('Private database detail')
                 raise EvidenceSnapshotLost('Private database detail')
-        monkeypatch.setattr(file_access,'_store',lambda:LostStore())
+        monkeypatch.setattr(file_access,'_store',lambda _db_engine:LostStore())
     target = {'initial_sql':'FROM LichSuChat','authorization_sql':'SELECT e.ChatID',
               'column_sql':'PRAGMA table_info','result_sql':'SELECT AdvancedRagJson'}.get(failure)
     if target:
