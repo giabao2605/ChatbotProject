@@ -217,6 +217,20 @@ def test_strict_profile_reads_rights_on_the_existing_evidence_snapshot(strict_st
     assert profile['preferred_language'] == 'en'
 
 
+def test_strict_profile_filters_retired_grants_before_evidence_pinning(strict_store):
+    from sqlalchemy import text
+    from mech_chatbot.db.repositories.feedback_access import access_transaction
+    with strict_store.begin() as conn:
+        conn.execute(text("INSERT INTO Departments VALUES ('Old','archived',0),('Disabled','disabled',0)"))
+        conn.execute(text("UPDATE Departments SET IsActive=0 WHERE DeptCode='CHUNG'"))
+        conn.execute(text("INSERT INTO UserDepartments VALUES (7,'Old'),(7,'Disabled'),(7,'CHUNG')"))
+    with access_transaction({'user_id':7,'username':'bob'},db_engine=strict_store,schema=False,review=False) as (_,profile):
+        assert profile['allowed_departments'] == ['Technical']
+        assert profile['roles'] == ['reviewer']
+        assert profile['allowed_sites'] == ['HN']
+        assert profile['max_security_level'] == 'internal'
+
+
 @pytest.mark.parametrize('table', ['Users', 'Roles', 'UserDepartments', 'Departments', 'UserSecurityClearance', 'UserSites'])
 def test_strict_profile_never_falls_back_after_an_acl_query_failure(strict_store, table):
     from sqlalchemy import event
@@ -253,8 +267,12 @@ def test_strict_department_catalog_never_grants_unknown_or_inactive_departments(
         conn.execute(text('UPDATE UserDepartments SET Department=:code'), {'code': code})
         conn.execute(text('UPDATE Departments SET Status=:status,IsActive=:active WHERE DeptCode=:code'),
                      {'code': code, 'status': status, 'active': active})
-    with pytest.raises(PermissionError, match='Actor profile unavailable'):
-        core.load_user_profile(user_id=7, username='bob', strict=True)
+    if code == 'Legacy':
+        with pytest.raises(PermissionError, match='Actor profile unavailable'):
+            core.load_user_profile(user_id=7, username='bob', strict=True)
+    else:
+        profile = core.load_user_profile(user_id=7, username='bob', strict=True)
+        assert profile['allowed_departments'] == []
 
 
 def test_strict_profile_allows_real_empty_sites_and_never_adds_department_rights(strict_store):

@@ -51,9 +51,11 @@ def _strict_departments(conn, allowed):
            or type(active) not in (int, bool) or active not in (0,1) for code,status,active in rows):
         raise PermissionError('Actor profile unavailable')
     active_codes = {code for code,status,active in rows if status == 'active' and active == 1}
-    if any(not isinstance(code, str) or code not in active_codes for code in allowed):
+    known_codes = {code for code,_,_ in rows}
+    if any(not isinstance(code, str) or code not in known_codes for code in allowed):
         raise PermissionError('Actor profile unavailable')
-    return allowed
+    # Retired grants can remain in SQL; they remove access without invalidating the actor.
+    return [code for code in allowed if code in active_codes]
 
 
 def _build_user_profile(conn, user, *, strict=False):
