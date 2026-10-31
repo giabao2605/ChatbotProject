@@ -271,6 +271,7 @@ def evaluate_evidence(
     from mech_chatbot.services.feedback_service import pin_generation_evidence
     documents = pin_generation_evidence(documents,state.request.access,
         checkpoint=state.checkpoint,deadline=state.budget.deadline_monotonic)
+    reranked = replace(reranked,documents=tuple(documents))
     decomposition_branches = list(primary.decomposition_branches)
     if len(filter_applicable_sources(documents, request.user_question)) != len(documents):
         from mech_chatbot.rag.phases.retrieval_rerank import _empty_context_terminal

@@ -1,20 +1,97 @@
 # Kế hoạch kiểm chứng và phát hành bản sửa audit 30/10/2026
 
+## Kết quả lượt triển khai đã được duyệt
+
+Chủ dự án đã duyệt ký/deploy đúng `002a9d3`, giữ dữ liệu và xác nhận không có
+người/tác vụ ngoài gửi việc mới trong thời gian bảo trì. Release đã ký hợp lệ,
+giữ nguyên grants/versions; `main` local đã fast-forward đến đúng SHA, chưa push.
+
+- Cutover đã đạt health lúc **16:48:58 ngày 30/10/2026 (Asia/Saigon)**. Ba service
+  đạt probe dưới đúng Windows/SQL identity, SHA và bundle; local/public HTTP 200,
+  SQL OK, worker ready. Bundle SHA256:
+  `970f5a8094bc2286a0244160b2de0754d2ca4d669fe5f328bd7855a5461be961`.
+- SQL backup mới dùng COPY_ONLY/CHECKSUM và RESTORE VERIFYONLY đạt. V0048 đã áp
+  dụng; số hàng nghiệp vụ và hash nội dung cũ của ba bảng liên quan không đổi.
+  6.411 file dữ liệu/tài liệu/hồ sơ đã đối chiếu không đổi trước khởi động.
+  Môi trường Python, frontend và cấu hình cũ được giữ, không xóa dữ liệu.
+- API smoke đạt login/chat có citation/mở nguồn/history chứa câu hỏi/logout;
+  frontend local/public khớp gói. Tuy nhiên tiêu chí API history quá yếu: chỉ
+  kiểm câu hỏi xuất hiện, chưa kiểm câu trả lời và citation còn đọc được.
+- **Browser smoke FAILED**: chat mới `2269` bị ẩn khi nạp lịch sử. SQL không có
+  `ChatEvidenceManifest`/`AnswerEvidence` cho lượt này. Đã xác nhận nguyên nhân:
+  hai đoạn văn bản gốc chứng nhận được, một `title_block` sinh từ metadata không
+  chứng nhận được; adapter chat thường bỏ qua lỗi lưu bằng chứng. Đây là lỗi
+  của candidate, không phải bằng chứng quyền nguồn vừa bị thu hồi.
+- **Chưa chấp nhận triển khai**. Đã khởi chạy yêu cầu quay lui theo plan; tại lúc
+  ghi mục này còn chờ UAC, chưa có receipt quay lui hoàn tất. Không suy ra đã
+  quay lui từ receipt `complete_health_verified` của cutover. Mã sửa tiếp theo
+  chỉ chuẩn bị local; cần duyệt release mới trước triển khai commit khác.
+- Bản sửa nhỏ đã chuẩn bị local ở ba file mã: bỏ riêng `title_block` không chứng
+  nhận được trước generation, truyền tập nguồn đã lọc tới cả nhánh từ chối, và
+  báo lỗi khi lưu bằng chứng thất bại ở chat thường. Không hạ kiểm quyền, không
+  loại bằng chứng sau khi đã sinh đáp án. TDD tái hiện ba lỗi; lượt cuối **7/7
+  đạt** theo terminal, review độc lập không còn điểm chặn trong diff. Cấu hình và
+  danh sách case nằm trong `HISTORY-TITLE-green2-options.json` và
+  `HISTORY-TITLE-green2-collected.json` tại `.local/runs/audit-confirmed-fixes/`.
+  Chưa commit/deploy.
+  Test chứng minh nội dung lịch sử/ký hiệu nguồn, chưa thay browser smoke của
+  bản sửa. Câu hỏi chỉ dựa vào metadata tiêu đề chưa chứng nhận có thể bị từ chối.
+
+Receipt cutover, backup và bảo toàn:
+`C:/ProgramData/MechRAGServices/audit-deploy-9052ee9b17cf4eb189d6f3bc53aab8af/`.
+Kết quả web và trạng thái cuối của gate:
+`.local/runs/audit-deploy-20261030/postdeploy-gate.json`, `website-after.json`,
+`browser-failure.png` trong worktree. Bản backup SQL được ghi trong
+`sql-backup-migration.json`; không sửa/xóa snapshot hoặc receipt lịch sử.
+
+Các phần bên dưới giữ lại kế hoạch và bằng chứng trước phê duyệt, không thay
+trạng thái lượt triển khai vừa nêu.
+
 Tài liệu chuẩn bị, chưa phải lệnh triển khai hoặc phê duyệt production. Phạm vi
 đã cho phép: commit cục bộ bản sửa đã kiểm tra, kiểm SQL Server bằng dữ liệu giả
 trong môi trường riêng, kiểm quyền service/worker và chuẩn bị phát hành/quay lui.
 Chỉ triển khai production sau một phê duyệt riêng cho đúng commit và kế hoạch này.
+
+## Chốt tiếp tục ngày 30/10/2026
+
+Phần sửa 16 lỗi và kiểm tra tập trung đã hoàn tất. Chat tiếp tục chỉ chốt hồ sơ
+phát hành; không mở rộng sang audit host, thử token/quyền mới hoặc chạy lại suite.
+Chat trước đã dừng, chưa triển khai bản sửa.
+
+| Việc | Trạng thái và bước tiếp theo |
+|---|---|
+| Mã sửa và kiểm tra | `e8d5e4f`; có receipt 814 backend/kiến trúc, 86 component và 17 HTTP/SQL giả đạt. Tái sử dụng kết quả, không chạy lại khi mã không đổi. |
+| Commit dự kiến phát hành | `002a9d37f8fcc62916a0c33742878e494ccad55e`; so với mã đã kiểm tra chỉ khác ba file tài liệu. Bundle phải ký cho SHA này. |
+| Gói phát hành/quay lui | `packet-002a9d37` đã có code, frontend, lock của cả hai bản và 280 wheel. Chat tiếp tục đã kiểm lại hash/kích thước đủ 286 file, hash manifest/draft và nội dung hai archive frontend. |
+| Tương thích đọc khi quay lui | 10 kiểm tra SQL giả đạt cho baseline với V0048. Chưa chứng minh ghi, restore hoặc service baseline khởi động lại. |
+| Quyền Windows | Dùng lại receipt service/token đã có. Không yêu cầu thêm kiểm kê toàn host hoặc thử quyền để chốt hồ sơ. |
+| Còn cần chủ dự án duyệt | Đúng SHA, phạm vi giữ nguyên, ký release và cửa sổ bảo trì. Draft chưa ký, chưa có approval production. |
+| Làm trong cửa sổ được duyệt | Xác nhận ngừng nhận việc/chờ hết việc, snapshot mới, dừng sạch, migration, thay code/UI/dependency, probe và smoke. Nếu không xác minh được hết việc thì dừng trước khi stop service. |
+
+Gói và receipt nằm trong `.local/runs/audit-release-finalize-20261030/` của
+worktree. `release-request.draft.json` và `release-request-validation.json`
+khớp manifest; `signing_performed=false`, chữ ký/review chưa hợp lệ là trạng thái
+đúng của bản nháp, không phải lỗi cần sửa bằng cách tự duyệt. Giữ Query, Graph,
+Grounded Math và các version/phạm vi hiện hành; không mở thêm feature hoặc ghi
+nhận nghiệm thu nghiệp vụ. Việc cấp release dùng authority hiện có sau phê duyệt.
+
+Bản cập nhật tài liệu này chưa commit và không thay gói đã ghim `002a9d3`.
+Nếu chọn một SHA mới để phát hành, phải cập nhật gói/draft và cấp release cho SHA
+mới; không âm thầm ký SHA HEAD khác với gói được duyệt. Tích hợp vào `main` phải
+giữ đúng SHA đã chọn; nếu phát sinh thay đổi mã thì kiểm lại đúng phần bị ảnh hưởng.
 
 ## Mốc và hồ sơ cần chốt
 
 | Hạng mục | Giá trị cần ghi trước khi phát hành |
 |---|---|
 | Candidate mã đã kiểm tra | `e8d5e4fc8eb15ced68ac85b772707c3f79192f57` — commit local, chưa push/deploy |
+| Commit/gói dự kiến phát hành | `002a9d37f8fcc62916a0c33742878e494ccad55e` — mã thực thi không đổi so với candidate trên |
 | Baseline production theo runbook | `98972bfdf68f8cd41e39b3ecad7c06a15f8ef744`; phải đọc lại HEAD/service trước cửa sổ mới |
 | Worktree chuẩn bị | `C:/Users/bao.nguyen/.codex/worktrees/repo-restructure/ChatBotProject` |
 | Checkout phục vụ | `C:/Users/bao.nguyen/Documents/ChatBotProject` |
 | Bằng chứng bản sửa | `.local/runs/audit-confirmed-fixes/`, `.local/runs/audit-dependencies/` trong worktree |
 | Kiểm chứng bổ sung | `.local/runs/audit-release-prep-20261030/` trong worktree |
+| Gói phát hành và kiểm tương thích baseline | `.local/runs/audit-release-finalize-20261030/` trong worktree |
 | Hồ sơ còn thiếu trước deploy | Bundle/approval mới, snapshot quay lui mới, kiểm đường dẫn/khởi động production và kết quả smoke |
 
 Giữ SHA mã đã kiểm tra cùng hash frontend, lock Python/npm, wheelhouse và receipt.
@@ -91,10 +168,17 @@ Không đánh dấu các bước phát hành dưới là đã đạt trước kh
 Snapshot lịch sử của lượt đưa `98972bf` vào phục vụ nằm tại
 `C:/ProgramData/MechRAGServices/restructure-deploy-c2859a0f16e140b2a7c1d9c3ee5cce45/`.
 Đó là bằng chứng của lượt cũ; cần snapshot mới bảo toàn trạng thái đang phục vụ
-trước cửa sổ audit. Chưa diễn tập restore hoặc chứng minh baseline chạy lại với
-schema V0048 trên SQL test. Các mục này vẫn là điều kiện trước phát hành.
+trong cửa sổ audit trước khi thay đổi production. Receipt
+`baseline_sql_compat_result.json` đã xác nhận 10 kiểm tra đọc của baseline trên
+DB giả có V0048 đạt và dữ liệu kiểm tra không đổi. Chưa diễn tập restore, kiểm
+tương thích ghi hoặc khởi động baseline qua service; không gọi kết quả đọc này
+là rollback đã thử thành công.
 
-## Kiểm chứng riêng trước khi xin triển khai
+## Phạm vi kiểm chứng đã dùng trước khi xin triển khai
+
+Các bước dưới giữ phạm vi kiểm chứng ban đầu; trạng thái đạt và giới hạn phải
+đọc theo receipt ở trên, không tự yêu cầu chạy lại. Giới hạn còn lại đã tách
+trong phần chốt tiếp tục và trình tự triển khai.
 
 1. Chốt working tree và diff thuộc bản sửa; giữ nguyên WIP không liên quan. Commit
    cục bộ rồi ghi candidate SHA. Nếu tích hợp tạo commit khác, cấp release và kiểm
@@ -145,11 +229,18 @@ chứng ingestion thật hoàn tất. Không cần chạy lại toàn suite nế
   chứng ACL/lock bổ sung. Service probe thoát sạch chưa đủ: phải đọc `ok`, nonce,
   request hash, SHA và toàn bộ checks trong receipt.
 - `build_activation_bundle.py` hiện tạo v1–v7; runtime nhận v8 qua validator riêng.
-  Phải tìm và kiểm quy trình cấp v8 thực tế/authority được phép trước cửa sổ;
-  không tự sửa JSON hoặc ký thay người duyệt để bù thiếu công cụ/hồ sơ.
+  Đã tìm thấy luồng v8 của lần triển khai trước tại
+  `.local/runs/restructure-deploy-20261030/issue_release.py`, dùng signer hiện có.
+  Script lịch sử ghim baseline và chỉ dẫn cũ nên không chạy nguyên trạng cho bản
+  audit. Draft mới đã chuẩn bị; sau phê duyệt mới cấp release đúng SHA/chỉ dẫn
+  mới và xác minh chữ ký bằng validator hiện có, không dùng lại approval cũ.
 - Service runtime cố định `chat_env/Scripts/python.exe`. Venv audit chỉ là môi
-  trường kiểm chứng. Cần chốt cách thay dependency và phục hồi nguyên bộ
-  `chat_env` khi service đã dừng; không trỏ service tùy tiện sang venv thử.
+  trường kiểm chứng. Packet đã chốt wheel/lock cho cả candidate và baseline:
+  sau khi dừng sạch, bảo toàn nguyên `chat_env` cũ rồi dựng môi trường candidate
+  ngay tại đường dẫn `chat_env` cuối bằng wheel đã khóa hash. Nếu thất bại, giữ
+  môi trường lỗi và phục hồi nguyên môi trường cũ về đường dẫn ban đầu; không
+  chạy venv đã chuyển chỗ hoặc trỏ service sang venv audit. Snapshot/cấu hình
+  riêng được bảo vệ vẫn phải thu trong cửa sổ, packet không thay bước này.
 - Toàn bộ worker trên cùng host phải dùng mã khóa mới và cùng ProgramData.
   Kiểm service, supervisor, scheduled task và CLI khác checkout; worker lịch sử
   hoặc host khác không bị khóa này bảo vệ. Có worker cũ chưa xử lý thì dừng.
@@ -205,9 +296,14 @@ Giữ command tracked hiện hành nếu không đổi trong đợt này; không
 cấu hình đã thay đổi từ snapshot được bảo vệ, dừng đối chiếu nếu drift.
 
 V0048 là migration cộng thêm: giữ ba cột, constraint, `_SchemaVersions` và mọi
-dữ liệu đã ghi. Không DROP, xóa hàng hoặc backfill NULL. Kiểm baseline đọc được
-schema cộng thêm trên SQL synthetic trước cửa sổ; nếu chưa kiểm được, ghi chặn
-quay lui thay vì giả định tương thích.
+dữ liệu đã ghi. Không DROP, xóa hàng hoặc backfill NULL. Baseline đã đọc được
+schema cộng thêm trong 10 kiểm tra SQL giả nêu trên; tương thích ghi và phục hồi
+service chưa được chứng minh.
+
+Quay về `98972bf` cũng đưa trở lại các lỗi phân quyền/nguồn đã xác nhận. Kết quả
+SQL chỉ chứng minh đọc được schema, không chứng minh an toàn phân quyền. Nếu
+phải quay lui, giữ hệ thống trong bảo trì cho đến khi người vận hành chốt phạm
+vi sử dụng; không tự mở lại cho reviewer chỉ vì health đã đạt.
 
 Rollback code ingestion sau khi xóa vector cũ **không khôi phục vector cũ**.
 Cơ chế hiện có chỉ dọn vector mới theo DocID và phục hồi metadata; không có

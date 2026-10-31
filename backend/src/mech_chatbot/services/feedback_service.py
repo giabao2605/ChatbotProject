@@ -29,6 +29,9 @@ def pin_generation_evidence(documents, actor, *, checkpoint=None, deadline=None)
                 pinned = pin_generation_sources(conn,[{**metadata,'text':metadata.get('noi_dung_goc') or document.page_content}],effective)[0]
                 metadata = {**metadata,**({'evidence_pin':pinned['evidence_pin']} if 'evidence_pin' in pinned else {})}
             except PermissionError:
+                # Synthetic title metadata has no page proof; exclude it before generation.
+                if metadata.get('loai_du_lieu') == 'title_block':
+                    continue
                 # shortcut: derived text stays unpinned until its complete source proof is available.
                 pass
             duplicate = copy(document)

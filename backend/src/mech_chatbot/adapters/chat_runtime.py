@@ -280,8 +280,8 @@ class RepositoryChatStore:
         options = {'advanced_rag':metadata,'citation_cards':list(record.citations)} if metadata is not None else {}
         options['actor'] = {key:getattr(record.actor,key) for key in ('user_id','username','roles','department',
             'allowed_departments','allowed_sites','max_security_level')}
-        if self._save_answer_evidence(chat_id, list(record.evidence), **options) is False and (structured or metadata is not None):
-            raise RuntimeError('Structured chat evidence was not persisted')
+        if self._save_answer_evidence(chat_id, list(record.evidence), **options) is False:
+            raise RuntimeError('Chat evidence was not persisted')
         if record.citations:
             persisted_sources = [
                 {

@@ -243,10 +243,11 @@ def test_repository_store_keeps_structured_pins_and_reports_failed_evidence_writ
 
 
 @pytest.mark.parametrize(('selection', 'metadata'), [
+    ({}, None),
     ({'text_query':True}, {'text_query':{'schema':'query-text-v2','accepted':False,'offline_only':True,'branches':[]}}),
     ({'query_plan':object()}, {'query':{'schema':'query-plan-v2','accepted':False,'offline_only':True,'branches':[]}}),
     ({'scope_total':'a'}, {'math':{'schema':'grounded-calculation-scope-total-v1','accepted':False,'offline_only':False}}),
-], ids=['text-query', 'query', 'scope-total'])
+], ids=['ordinary', 'text-query', 'query', 'scope-total'])
 def test_repository_store_passes_branch_result_with_final_citations_and_reports_missing_migration(selection, metadata):
     captured = []
     card = {'doc_id':1,'version_no':2,'source_id':'D1P1'}
@@ -255,8 +256,9 @@ def test_repository_store_passes_branch_result_with_final_citations_and_reports_
     store = RepositoryChatStore(save_chat_history=lambda **kw:11,
         save_answer_evidence=lambda *a,**kw:captured.append(kw) or True,save_answer_sources=lambda *a:True)
     assert store.persist(record)==11
-    assert captured[0]['advanced_rag'] == metadata
-    assert captured[0]['citation_cards'] == [card]
+    if metadata is not None:
+        assert captured[0]['advanced_rag'] == metadata
+        assert captured[0]['citation_cards'] == [card]
     assert captured[0]['actor']['user_id'] == 7
     failed = RepositoryChatStore(save_chat_history=lambda **kw:11,save_answer_evidence=lambda *a,**kw:False,
         save_answer_sources=lambda *a:pytest.fail('must not pretend the advanced history was saved'))

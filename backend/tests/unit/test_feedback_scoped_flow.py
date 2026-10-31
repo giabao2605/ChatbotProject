@@ -309,13 +309,18 @@ def test_source_free_answer_does_not_pass_keyword_criterion(scoped_db):
     assert result['passed'] == 0
 
 
-def test_real_plain_pipeline_preserves_ingestion_wrapper_pin_to_feedback(scoped_db,offline_pipeline):
+@pytest.mark.parametrize('title_mode',['none','with_body','only'])
+def test_real_plain_pipeline_preserves_ingestion_wrapper_pin_to_feedback(scoped_db,offline_pipeline,monkeypatch,title_mode):
     from langchain_core.documents import Document
-    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+    from langchain_core.runnables import RunnableLambda
     from mech_chatbot.config.repository_runtime import bind_repository_runtime
     from mech_chatbot.rag.execution import AccessScope,RagRequest,RagInvocation
     engine,actor = scoped_db
-    documents,_,executor,_ = offline_pipeline
+    documents,_,executor,runtime = offline_pipeline
+    runtime.rerank_max_chunks_per_section = 4
+    # SQL common metadata does not replace a chunk's type or original text.
+    monkeypatch.setattr('mech_chatbot.db.repositories.doc_metadata.get_common_metadata_for_rag',
+        lambda ids:{doc_id:{'effective_status':'effective'} for doc_id in ids})
     source_text = 'Quy trình kiểm tra áp suất nằm trong tài liệu nội bộ.'
     with engine.begin() as conn:
         conn.execute(text('UPDATE DocumentPages SET TextExtract=:value'),{'value':source_text})
@@ -324,20 +329,43 @@ def test_real_plain_pipeline_preserves_ingestion_wrapper_pin_to_feedback(scoped_
         'file_goc':'source.pdf','loai_du_lieu':'text','noi_dung_goc':wrapped,'domain':'hr',
         'phong_ban_quyen':['ENG'],'site':'HN','security_level':'internal','external_processing_policy':'internal_only',
         'servable':True,'publication_state':'published','lifecycle_status':'published','review_status':'approved','is_current':True}))
-    executor._provider_adapter.client = FakeListChatModel(responses=[source_text+' [SRC:D1P1]'])
+    synthetic = 'Thong tin tai lieu source.pdf:\n- Ten tai lieu/san pham: SYNTHETIC-TITLE-ONLY'
+    if title_mode != 'none':
+        title = Document(page_content=synthetic,metadata={**documents[0].metadata,
+            'loai_du_lieu':'title_block','noi_dung_goc':synthetic})
+        if title_mode == 'only':
+            documents.clear()
+        documents.append(title)
+    prompts = []
+    executor._provider_adapter.client = RunnableLambda(
+        lambda value,**_:prompts.append(value.to_string()) or source_text+' [SRC:D1P1]')
     access = AccessScope(user_id=9,username='reviewer',department='ENG',roles=frozenset({'reviewer'}),
         allowed_departments=frozenset({'ENG'}),allowed_sites=frozenset({'HN'}),max_security_level='internal')
     with bind_repository_runtime(db_engine=engine):
         events = list(executor.run(RagRequest('Quy trình kiểm tra áp suất như thế nào?',access),RagInvocation('text-pin',mode='test')))
     assert isinstance(events[-1],RagCompleted)
-    assert events[-1].outcome == 'answered'
+    if title_mode == 'only':
+        assert events[-1].outcome != 'answered'
+        assert not prompts
+        assert not events[-1].diagnostics.get('retrieved_docs')
+        return
+    assert events[-1].outcome == 'answered',dict(events[-1].diagnostics)
+    assert prompts and all('SYNTHETIC-TITLE-ONLY' not in prompt for prompt in prompts)
     debug = dict(events[-1].diagnostics)
     assert debug['evidence_complete'] is True
     assert debug['retrieved_docs'][0]['evidence_pin']['page_no'] == 1
     assert chat.save_answer_evidence(31,debug['retrieved_docs'],db_engine=engine,actor=actor)
     with engine.begin() as conn:
+        assert tuple(conn.execute(text('SELECT IsComplete,EvidenceCount FROM ChatEvidenceManifest WHERE ChatID=31')).one()) == (1,1)
+        conn.execute(text('CREATE TABLE LichSuChat(ChatID INTEGER,SessionID TEXT,CauHoi_User TEXT,TraLoi_Bot TEXT,HinhAnhUpload TEXT,DanhGia INTEGER,RefImages TEXT,Username TEXT,ThoiGian TEXT)'))
+        conn.execute(text("INSERT INTO LichSuChat VALUES(31,'pin-history','Pressure?',:answer,NULL,NULL,NULL,'reviewer','2026-10-30')"),
+                     {'answer':source_text+' [SRC:D1P1]'})
         conn.execute(text("INSERT INTO FeedbackReview(FeedbackID,ChatID,Question,BotAnswer,Department,Site,SourceDocID) "
                           "VALUES(7,31,'Pressure?','source answer','ENG','HN',1)"))
+    history = chat.get_chat_history('pin-history',username='reviewer',user_clearance='internal',
+        allowed_departments=['ENG'],allowed_sites=['HN'],db_engine=engine)
+    assert history[-1]['content'] == source_text+' [SRC:D1P1]'
+    assert not history[-1].get('sources_redacted')
     assert len(ui_queries.list_feedbacks(False,actor=actor)) == 1
 
 
