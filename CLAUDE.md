@@ -13,22 +13,28 @@ Bàn giao từ Codex ngày 2026-11-03. Nguồn: `~/.codex/memories_v2/`, phiên 
 
 ## Checkout này là bản đang phục vụ production
 
-- `C:\Users\bao.nguyen\Documents\ChatBotProject` chạy production qua Windows service (App/RAG/Worker + Cloudflared, domain `mechraglab.click`). HEAD detached tại `8118dc0`, DB schema V0048.
-- Đừng sửa `backend/src` ở đây. Các file test/frontend/migration đang dirty/untracked trong checkout này là phần sót lại của GD2–GD8 sau khi khôi phục production; không xóa, không reset.
-- Làm việc mới trong worktree riêng.
+- `C:\Users\bao.nguyen\Documents\ChatBotProject` chạy production qua Windows service (App/RAG/Worker + Cloudflared, domain `mechraglab.click`). HEAD detached tại `85e527c` (tag `release/gd8-20261103`), schema V0050, bundle v8 `36c55b50`.
+- Không sửa file tracked ở đây: checkout phải sạch thì lần deploy sau mới qua preflight. Làm việc trong worktree rồi phát hành.
+- `git stash@{0}` ở checkout này giữ WIP cũ trước GD8 (57/64 file trùng candidate); chưa xóa.
 
-## Công việc đang dở: RAG "information-first" GD1–GD8
+## RAG "information-first" GD1–GD8: đã phát hành 03/11, chưa nghiệm thu nghiệp vụ
 
-- Candidate: worktree `C:\Users\bao.nguyen\.codex\worktrees\gd8-candidate-20261103\ChatBotProject`, nhánh `codex/gd8-acceptance-20261103` (đã commit `6dbe1dc` + `54d5ab5`, đã push GitHub, chưa merge main).
-- Bảng tiến độ duy nhất: `reports/rag-information-first-gd1/README.md` trong nhánh đó. Cập nhật bảng đó, không tạo báo cáo mới mỗi lượt.
-- Plan master gốc: `~/.codex/attachments/e69707e9-300e-4aa1-8206-d426b3f2c9f9/pasted-text-1.txt`; prompt GD8 cuối: `~/.codex/attachments/9f6cb287-f695-46ca-88b6-ddf84112c017/pasted-text-1.txt`.
-- Trạng thái: GD2–GD7 hoàn tất candidate; runtime thật có giới hạn đã chạy cho B02/B05 (verified), B03 (partial). GD8.5 = NO-GO.
-- Blocker còn mở (đều cần người dùng): nguồn B1 nhóm 1 (tài liệu thật có 2 phiên bản) và nhóm 3 (trạng thái áp dụng thực tế); nhóm 2 có ứng viên Inox 201/304 (Doc60, mã 8.3.06316.010) chờ duyệt đưa vào rubric; B2 baseline; ký bundle v8 (private key người dùng giữ); backup DB COPY_ONLY + cửa sổ bảo trì; migration V0049/V0050 + cutover.
-- Bài học: service account không đọc được file module mới tạo -> production từng tự Stop. Trước start phải kiểm ACL đọc của 3 service account trên file source mới.
+- Bảng tiến độ và biên nhận phát hành: `reports/rag-information-first-gd1/README.md` (mục GD8.5 cuối file).
+- Plan master gốc: `~/.codex/attachments/e69707e9-300e-4aa1-8206-d426b3f2c9f9/pasted-text-1.txt`.
+- Còn mở: kiểm trình duyệt sau phát hành (login, chat có nguồn, comprehensive dừng/tiếp tục, lịch sử); B1 thiếu nguồn nhiều phiên bản thật và trạng thái áp dụng thực tế; ứng viên mâu thuẫn Inox 201/304 (Doc60, mã 8.3.06316.010) chưa đưa vào rubric; B2 baseline chưa đo.
+
+## Cách phát hành (đã dùng cho 8118dc0 và 85e527c)
+
+- Bộ script: worktree `gd8-candidate-20261103`, thư mục `.local/runs/gd8-deploy-20261103/` (sign_release, prepare_packet, make_manifest, cutover.ps1, launch.ps1, helper, helper_sql). Sao chép thư mục, đổi OLD/NEW/WORK/PACKET/RELEASE, sửa phần migration trong helper_sql.
+- Claude chạy được: ký bundle, đóng packet, tạo manifest. Người dùng chạy `launch.ps1` trong pwsh (PowerShell 7) quyền Administrator.
+- Trước khi đưa lệnh: chạy lại toàn bộ kiểm đầu vào của helper ở chế độ chỉ đọc. GD8 mất 3 lượt vì sai đường dẫn file hỗ trợ và vì kiểm dữ liệu bắt nhầm file seed tracked.
+- Drain từ chối khi worker đang chạy vòng đồng bộ Qdrant (mỗi 10 phút, khoảng 75 giây). Sau khi start service đợi khoảng 150 giây rồi mới chạy.
+- Rollback không xóa `reports/<release>/release` trong checkout production; phải chuyển thư mục đó đi trước lần chạy lại.
+- Claude không đăng nhập production bằng mật khẩu; smoke có đăng nhập do người dùng tự làm.
 
 ## GitHub (giabao2605/ChatbotProject, PUBLIC)
 
-- `main` = `8118dc0` = production. Còn 3 nhánh remote cũ chưa merge (mỗi nhánh 1 commit, 19/09): `codex/advanced-rag-offline-20260909`, `codex/offline-math-review-prep`, `codex/query-post-pilot-prep-20260905`.
+- `main` = production + commit docs. Còn 3 nhánh remote cũ chưa merge (mỗi nhánh 1 commit, 19/09): `codex/advanced-rag-offline-20260909`, `codex/offline-math-review-prep`, `codex/query-post-pilot-prep-20260905`.
 - Repo public: không commit trích đoạn nguồn nghiệp vụ; `.gitignore` đã chặn phần lớn `reports/`. Pre-commit hook ECC quét secret; không bypass, sửa cho đúng.
 
 ## Việc khác còn treo
