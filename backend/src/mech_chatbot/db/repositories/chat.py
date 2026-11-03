@@ -637,8 +637,7 @@ def get_chat_history(
                 _assistant_imgs = ref_images
                 if row[0] in _redact_ids:
                     _assistant_content = (
-                        "Nội dung câu trả lời này dựa trên tài liệu MẬT mà bạn hiện "
-                        "không còn quyền xem. Nội dung đã được ẩn theo phân quyền."
+                        "Nội dung đã được ẩn vì không xác minh được nguồn hoặc quyền truy cập."
                     )
                     _assistant_imgs = []
                 result_payload = None

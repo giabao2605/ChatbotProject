@@ -20,6 +20,7 @@ def child_environment(parent, root=ROOT):
     return {**parent, 'PYTHONUTF8': '1', 'PYTHONUNBUFFERED': '1',
             'INGESTION_WORKER_READY_FILE': str(STATE / 'worker-heartbeat' / 'ready.txt'),
             'PYTHONPATH': str(root / 'backend' / 'src'),
+            'TESSDATA_PREFIX': parent.get('TESSDATA_PREFIX') or 'C:/Users/bao.nguyen/Documents/Tesseract-OCR/tessdata',
             'PATH': 'C:/Program Files/Git/cmd;' + parent.get('PATH', ''),
             'GIT_CONFIG_COUNT': '1', 'GIT_CONFIG_KEY_0': 'safe.directory',
             'GIT_CONFIG_VALUE_0': root.as_posix(),

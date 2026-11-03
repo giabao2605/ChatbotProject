@@ -358,3 +358,14 @@ def test_publish_actor_denies_admin_override_unless_deployment_opts_in(
 
     assert not result
     assert _issue_pairs(result) == {("knowledge_approver_user_id", "forbidden")}
+
+
+def test_publish_actor_uses_bound_policy_and_preserves_explicit_denial(install_database_row):
+    from mech_chatbot.config.repository_runtime import bind_repository_policy
+    install_database_row({'KnowledgeApproverUserID':11,'DepartmentApproverUserID':None,
+                          'ActorActive':1,'ActorInOwnerDepartment':1})
+    deny = publication._default_policy()
+    with bind_repository_policy(replace(deny,allow_admin_approval_override=True)):
+        assert publication.validate_publish_actor(42,reviewer_id=99,reviewer_roles=['admin'])
+        assert not publication.validate_publish_actor(42,reviewer_id=99,reviewer_roles=['admin'],policy=deny)
+        assert not publication.validate_publish_actor(42,reviewer_id=99,reviewer_roles=['viewer'])

@@ -28,7 +28,8 @@ def test_vector_cleanup_with_document_id_never_deletes_another_version_by_filena
     assert condition.match.value == 170
 
 
-def test_scan_page_uses_local_ocr_text_as_source():
+def test_scan_page_uses_local_ocr_text_as_source(monkeypatch):
+    monkeypatch.setenv("TESSDATA_PREFIX", "C:/ocr/tessdata")
     token = object()
 
     class Page:
@@ -37,6 +38,7 @@ def test_scan_page_uses_local_ocr_text_as_source():
 
         def get_textpage_ocr(self, **kwargs):
             assert kwargs["language"] == "eng+vie"
+            assert kwargs["tessdata"] == "C:/ocr/tessdata"
             return token
 
     text, scanned = pipeline._read_pdf_page_text(Page(), dpi=200)

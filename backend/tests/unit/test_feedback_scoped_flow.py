@@ -327,7 +327,7 @@ def test_source_free_answer_does_not_pass_keyword_criterion(scoped_db):
     assert result['passed'] == 0
 
 
-@pytest.mark.parametrize('title_mode',['none','with_body','only'])
+@pytest.mark.parametrize('title_mode',['none','with_body','only','string_page','derived'])
 def test_real_plain_pipeline_preserves_ingestion_wrapper_pin_to_feedback(scoped_db,offline_pipeline,monkeypatch,title_mode):
     from langchain_core.documents import Document
     from langchain_core.runnables import RunnableLambda
@@ -354,6 +354,10 @@ def test_real_plain_pipeline_preserves_ingestion_wrapper_pin_to_feedback(scoped_
         if title_mode == 'only':
             documents.clear()
         documents.append(title)
+    if title_mode == 'string_page':
+        documents[0].metadata['trang_so']='1'
+    if title_mode == 'derived':
+        documents[0].page_content=documents[0].metadata['noi_dung_goc']='unverified derived content'
     prompts = []
     executor._provider_adapter.client = RunnableLambda(
         lambda value,**_:prompts.append(value.to_string()) or source_text+' [SRC:D1P1]')
@@ -362,7 +366,7 @@ def test_real_plain_pipeline_preserves_ingestion_wrapper_pin_to_feedback(scoped_
     with bind_repository_runtime(db_engine=engine):
         events = list(executor.run(RagRequest('Quy trình kiểm tra áp suất như thế nào?',access),RagInvocation('text-pin',mode='test')))
     assert isinstance(events[-1],RagCompleted)
-    if title_mode == 'only':
+    if title_mode in {'only','derived'}:
         assert events[-1].outcome != 'answered'
         assert not prompts
         assert not events[-1].diagnostics.get('retrieved_docs')
@@ -546,3 +550,37 @@ def test_pinned_history_rechecks_applicability_and_source_text(scoped_db):
         assert not chat._history_pins_current(conn, 31, {**actor,"department":"NEW"}, 1)
         conn.execute(text("UPDATE DocumentPages SET TextExtract='changed' WHERE DocID=1"))
         assert not chat._history_pins_current(conn, 31, actor, 1)
+
+
+@pytest.mark.parametrize('valid',[True,False])
+def test_generation_certification_never_passes_unpinned_governed_text(scoped_db,valid):
+    from langchain_core.documents import Document
+    from mech_chatbot.rag.execution import AccessScope
+    from mech_chatbot.services.feedback_service import pin_generation_evidence
+    from mech_chatbot.config.repository_runtime import bind_repository_runtime
+    engine,actor=scoped_db
+    access=AccessScope(user_id=9,username='reviewer',roles=frozenset({'reviewer'}),
+        allowed_departments=frozenset({'ENG'}),allowed_sites=frozenset({'HN'}),max_security_level='internal')
+    doc=Document(page_content='approved content' if valid else 'derived unverified text',
+        metadata={'doc_id':1,'version_no':2,'trang':1,'loai_du_lieu':'text'})
+    with bind_repository_runtime(db_engine=engine):
+        if valid:
+            assert pin_generation_evidence([doc],access)[0].metadata['evidence_pin']['page_no']==1
+        else:
+            with pytest.raises(PermissionError):
+                pin_generation_evidence([doc],access)
+
+
+def test_generation_accepts_only_current_request_attachment(scoped_db):
+    from mech_chatbot.rag.phases.retrieval_enrichment_support import prepend_image
+    from mech_chatbot.rag.execution import AccessScope
+    from mech_chatbot.services.feedback_service import pin_generation_evidence
+    from mech_chatbot.config.repository_runtime import bind_repository_runtime
+    engine,actor=scoped_db
+    access=AccessScope(user_id=9,username='reviewer',roles=frozenset({'reviewer'}),
+        allowed_departments=frozenset({'ENG'}),allowed_sites=frozenset({'HN'}),max_security_level='internal')
+    docs=prepend_image([], '17 Nm')
+    with bind_repository_runtime(db_engine=engine):
+        assert pin_generation_evidence(docs,access,image_analysis='17 Nm')[0].page_content==docs[0].page_content
+        with pytest.raises(PermissionError):
+            pin_generation_evidence(docs,access,image_analysis='different image')

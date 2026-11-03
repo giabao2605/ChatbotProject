@@ -318,7 +318,7 @@ def test_ingestion_queue_filters_and_rbac_params(monkeypatch):
     connection = install_engine(monkeypatch, lambda *_args: FakeResult(rows=expected))
 
     rows = ui_queries.list_ingestion_jobs(
-        status="failed",
+        status="pending_review",
         dept="A",
         search="manual",
         is_admin=True,
@@ -329,8 +329,9 @@ def test_ingestion_queue_filters_and_rbac_params(monkeypatch):
     assert rows == expected
     sql, params = connection.calls[-1]
     assert "UploadedBy = :uname" in sql
+    assert "Status NOT IN" not in sql
     assert params == {
-        "status": "failed",
+        "status": "pending_review",
         "dept_pick": "A",
         "search": "%manual%",
         "uname": "alice",
@@ -345,6 +346,7 @@ def test_ingestion_queue_without_departments_is_owner_only(monkeypatch):
     ui_queries.list_ingestion_jobs(username="bob", allowed_departments=[])
 
     sql, params = connection.calls[-1]
+    assert "Status NOT IN" in sql
     assert "AND UploadedBy = :uname" in sql
     assert params == {"uname": "bob"}
 

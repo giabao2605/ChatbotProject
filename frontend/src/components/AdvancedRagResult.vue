@@ -15,7 +15,8 @@ const evidenceStatuses:Record<string,string>={full_answer:'Đủ căn cứ truy 
     <p v-if="result.math.offline_only">Kết quả đánh giá, chưa nghiệm thu phát hành.</p>
     <p>Trạng thái: {{ statuses[result.math.status] || statuses.unknown }}</p>
     <div v-for="step in result.math.steps" :key="step.step_id">
-      <p>{{ step.formula }}: {{ step.display_value ?? step.value }} {{ step.unit }}</p>
+      <p>Tổng trong phạm vi đã chọn: {{ step.display_value ?? step.value }} {{ step.unit }}</p>
+      <details><summary>Chi tiết phép tính</summary><p>{{ step.formula }}</p></details>
       <p>Trước làm tròn: {{ step.value }} {{ step.unit }}</p>
     </div>
     <div v-for="source in result.math.sources" :key="source.evidence_identity || source.source_id">
@@ -44,7 +45,7 @@ const evidenceStatuses:Record<string,string>={full_answer:'Đủ căn cứ truy 
       <div v-if="branch.math?.steps?.length" class="math-table">
         <table><thead><tr><th>Bước tính</th><th>Kết quả</th><th>Đơn vị</th></tr></thead>
           <tbody><tr v-for="step in branch.math.steps" :key="step.step_id">
-            <td>{{ step.formula }}</td><td>{{ step.status==='undefined'?'Không xác định':(step.display_value ?? step.value) }}</td><td>{{ step.unit }}</td>
+            <td><template v-if="branch.math.schema==='grounded-calculation-scope-total-v1'">Tổng trong phạm vi đã chọn<details><summary>Chi tiết phép tính</summary>{{ step.formula }}</details></template><template v-else>{{ step.formula }}</template></td><td>{{ step.status==='undefined'?'Không xác định':(step.display_value ?? step.value) }}</td><td>{{ step.unit }}</td>
           </tr></tbody>
         </table>
         <p v-if="branch.math.schema==='grounded-calculation-scope-total-v1'" v-for="step in branch.math.steps" :key="`raw-${step.step_id}`">Trước làm tròn: {{ step.value }} {{ step.unit }}</p>

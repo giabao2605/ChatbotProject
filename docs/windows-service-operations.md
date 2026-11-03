@@ -58,6 +58,29 @@ receipt không được sửa lại cho khớp bố cục mới.
 Xem [phạm vi, kiểm chứng và rollback](repository-restructure-20261030.md).
 Không chạy configure/preflight hoặc service host từ candidate để thử bố cục.
 
+## OCR cho PDF scan (QAW-02)
+
+Worker dùng OCR cục bộ của PyMuPDF với `eng+vie`. Launcher truyền rõ
+`TESSDATA_PREFIX`, mặc định là
+`C:/Users/bao.nguyen/Documents/Tesseract-OCR/tessdata`; giá trị được cấu hình
+trong môi trường service được ưu tiên. Đường dẫn này là thư mục chứa trực tiếp
+`eng.traineddata` và `vie.traineddata`, không phải thư mục cha. Không cần PATH
+của phiên đăng nhập để PyMuPDF tìm dữ liệu OCR.
+
+Trước phát hành, kiểm tra hai tệp còn tồn tại và tài khoản `NT SERVICE\MechRAGWorker`
+có quyền đọc/traverse thư mục cha. Không cấp quyền ghi, không thay ACL rộng cho
+Users/Everyone. Nếu cần sửa quyền hoặc đường dẫn, làm trong bước triển khai đã
+được duyệt; thay đổi launcher không cập nhật môi trường tiến trình đang chạy.
+
+Dưới đúng identity worker, chạy một lần Python của runtime với môi trường
+`child_environment` trong `service_runtime.py`, mở PDF scan mẫu
+`reports/public-web-qa-20261031/fixtures/QA_WEB_20261031.pdf` bằng `fitz`, rồi gọi
+`_read_pdf_page_text(page, dpi=200)`. Kết quả phải có `17 Nm`, `9 seconds` và cờ
+scan bằng `True`. Sau đó thử ingest một mẫu và xác nhận tới `pending_review`.
+Kiểm OCR bằng tài khoản phát triển chỉ xác nhận mã và dữ liệu ngôn ngữ, không
+thay thế lượt chạy bằng worker thật. Thiếu OCR hoặc PDF hỏng vẫn phải bị quality
+gate chặn, không được phục vụ nội dung rỗng.
+
 ## Chuẩn bị phát hành
 
 1. Kiểm tra mọi thay đổi nguồn và WIP; ghi commit live, candidate và main. Không

@@ -8,7 +8,7 @@ import AnswerSources from '@/components/AnswerSources.vue';
 import AdvancedRagActions from '@/components/AdvancedRagActions.vue';
 import AdvancedRagResult from '@/components/AdvancedRagResult.vue';
 import { applyScanProgress, mergeScanResult } from '@/utils/chatScan';
-import type { ChatMessage, SearchMode, SearchProgress, QueryActionState, SessionItem } from "@/types";
+import type { ChatMessage, Citation, SearchMode, SearchProgress, QueryActionState, SessionItem } from "@/types";
 
 type UiMessage = ChatMessage & {
   progress?: string[];
@@ -38,6 +38,7 @@ const catalogError = ref('');
 const historyOpen = ref(false);
 const warning = ref("");
 const error = ref("");
+const fileInput = ref<HTMLInputElement | null>(null);
 const selectedFile = ref<File | null>(null);
 const selectedPreview = ref("");
 const uploadToken = ref("");
@@ -89,6 +90,7 @@ function resetView() {
   activeController?.abort();activeController=undefined;
   contentSerial++;
   historyLoading.value=false;historyFailed.value=false;waitingSession.value=null;busy.value=false;thinking.value=false;
+  releaseMessagePreviews(messages.value);
   messages.value=[];warning.value='';error.value='';
   clearFile();
 }
@@ -128,17 +130,24 @@ async function removeSession(id: string) {
   await refreshSessions();
 }
 
+function releaseMessagePreviews(items: UiMessage[]) {
+  for (const message of items) {
+    if (message.image_url?.startsWith('blob:')) URL.revokeObjectURL(message.image_url);
+  }
+}
+
 function clearFile() {
   uploadSerial++;
   uploadLoading.value=false;
   if (selectedPreview.value) URL.revokeObjectURL(selectedPreview.value);
+  if (fileInput.value) fileInput.value.value = "";
   selectedFile.value = null;
   selectedPreview.value = "";
   uploadToken.value = "";
 }
 
-function sourceLines(value: string): string[] {
-  return formatSourceText(value).split("\n").filter(Boolean);
+function sourceLines(value: string, citations?: Citation[]): string[] {
+  return formatSourceText(value, citations).split("\n").filter(Boolean);
 }
 
 function setAssistantProgress(step: string, state: UiMessage["progressState"] = "running") {
@@ -151,8 +160,8 @@ function setAssistantProgress(step: string, state: UiMessage["progressState"] = 
 }
 
 async function onFileChange(event: Event) {
-  clearFile();
   const file = (event.target as HTMLInputElement).files?.[0];
+  clearFile();
   if (!file) return;
   selectedFile.value = file;
   selectedPreview.value = URL.createObjectURL(file);
@@ -191,7 +200,8 @@ async function send(resume?:UiMessage) {
 
   const currentSession = sessionId.value;
   if (!resume && messages.value.at(-1)?.progressState === "error" && messages.value.at(-1)?.search_progress?.search_mode !== 'comprehensive' && messages.value.at(-2)?.role === "user") {
-    messages.value.splice(-2);
+    releaseMessagePreviews(messages.value.slice(-2));
+    messages.value = messages.value.slice(0, -2);
   }
   const history = messages.value.map((message) => ({
     role: message.role,
@@ -211,6 +221,8 @@ async function send(resume?:UiMessage) {
     progressState: "running",
   }];
   const imageToken = resume ? resume.resumePayload?.image_token : uploadToken.value || null;
+  // The sent message owns this URL until it leaves the conversation.
+  if (!resume) selectedPreview.value = "";
   clearFile();
   await scrollToBottom();
 
@@ -441,7 +453,7 @@ onBeforeUnmount(()=>{catalogSerial++;resetView();});
                 <div
                   v-else-if="message.role === 'assistant'"
                   class="message-content"
-                  v-html="renderMarkdown(message.content)"
+                  v-html="renderMarkdown(message.content, message.citations)"
                 ></div>
                 <p v-else class="message-text">{{ message.content }}</p>
 
@@ -462,7 +474,7 @@ onBeforeUnmount(()=>{catalogSerial++;resetView();});
                 <details v-if="message.ref_text" class="source-block">
                   <summary>Nguồn tham khảo</summary>
                   <div class="source-card">
-                    <p v-for="line in sourceLines(message.ref_text)" :key="line">{{ line }}</p>
+                    <p v-for="line in sourceLines(message.ref_text, message.citations)" :key="line">{{ line }}</p>
                   </div>
                 </details>
                 <AdvancedRagResult v-if="message.advanced_rag" :result="message.advanced_rag"
@@ -521,10 +533,8 @@ onBeforeUnmount(()=>{catalogSerial++;resetView();});
               <Button label="Bỏ file" severity="secondary" text @click="clearFile" />
             </div>
             <div class="composer-row">
-              <label class="file-button">
-                Đính kèm
-                <input type="file" accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,.tif,.tiff" @change="onFileChange" />
-              </label>
+              <button type="button" class="file-button" :disabled="busy || historyLoading || historyFailed" @click="fileInput?.click()">Đính kèm</button>
+              <input ref="fileInput" hidden type="file" accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,.tif,.tiff" @change="onFileChange" />
               <Textarea
                 v-model="input"
                 auto-resize
@@ -883,8 +893,9 @@ onBeforeUnmount(()=>{catalogSerial++;resetView();});
   background: var(--action-hover);
   color: #ffffff;
 }
-.file-button input {
-  display: none;
+.file-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 .selected-file {
   color: var(--muted);

@@ -820,6 +820,8 @@ def test_history_uses_the_server_side_profile_scope(rag_client, monkeypatch):
     assert response.json() == {
         "messages": [{"role": "assistant", "content": "saved answer"}]
     }
+    assert observed.pop("actor")["username"] == "viewer-test"
+    assert observed.pop("allow_history") is False
     assert observed == {
         "session_id": "session-42",
         "username": "viewer-test",
@@ -1003,3 +1005,17 @@ def test_query_plan_schema_refuses_unsafe_or_oversized_client_plan(rag_client,ch
     if change=='bounds':plan['branches']=[{**branch,'graph_query':{**branch['graph_query'],'max_relations':501}}]
     response=rag_client.post('/chat',headers=SERVICE_HEADERS,json={'user_question':'Contains what?','query_plan':plan})
     assert response.status_code==422
+
+
+@pytest.mark.parametrize('path',['/chat','/chat/stream'])
+def test_external_processing_denial_is_safe_and_actionable(path,rag_client,monkeypatch):
+    from mech_chatbot.llm.external_ai import ExternalProcessingDenied
+    def denied():
+        raise ExternalProcessingDenied('internal_only: secret document details')
+        yield
+    monkeypatch.setattr(rag_server,'_open_rag_events',lambda *a,**kw:denied())
+    response=rag_client.post(path,headers=SERVICE_HEADERS,json={'username':'viewer-test','user_question':'How?'})
+    assert response.status_code == (403 if path == '/chat' else 200)
+    assert 'external_processing_denied' in response.text
+    assert 'secret document details' not in response.text
+    assert 'Please retry' not in response.text

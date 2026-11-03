@@ -2,6 +2,7 @@ import { mount, flushPromises } from "@vue/test-utils";
 import { describe, expect, it, vi } from "vitest";
 import UploadView from "@/views/UploadView.vue";
 import * as api from "@/api/client";
+import { setLocale } from "@/i18n";
 
 const push = vi.fn();
 
@@ -99,4 +100,23 @@ describe("UploadView validation", () => {
     expect(form.get("thu_muc")).toBe("CoKhi");
     expect(wrapper.text()).toContain("Đã tạo job ingest #55");
   });
+});
+
+it("translates the upload form and opens its file picker from a named button", async () => {
+  setLocale("en");
+  const wrapper = mountUploadView();
+  try {
+    await flushPromises();
+    expect(wrapper.text()).toContain("Files to ingest");
+    expect(wrapper.text()).toContain("Shared details for this upload batch");
+    expect(wrapper.text()).not.toContain("Chia sẻ thêm");
+    expect(wrapper.text()).not.toContain("Chưa chọn file");
+    const picker = wrapper.get<HTMLInputElement>('input[type="file"]');
+    const click = vi.spyOn(picker.element, "click").mockImplementation(() => {});
+    const choose = wrapper.findAll("button").find(button => button.text() === "Choose files");
+    expect(choose).toBeDefined();
+    expect(choose!.attributes("type")).toBe("button");
+    await choose!.trigger("click");
+    expect(click).toHaveBeenCalledOnce();
+  } finally { wrapper.unmount(); setLocale("vi"); }
 });

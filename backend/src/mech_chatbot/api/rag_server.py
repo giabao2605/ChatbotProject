@@ -237,6 +237,7 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 # Request / Response schemas
 # ---------------------------------------------------------------------------
+from mech_chatbot.llm.external_ai import ExternalProcessingDenied
 from mech_chatbot.api.evidence_contracts import ScopeTotalRequest, ScopeComparisonRequest, GraphQueryRequest, BomRollupRequest, QueryPlanRequest, require_comparison_context
 
 
@@ -598,6 +599,11 @@ async def chat_endpoint(
         )
         return result
 
+    except ExternalProcessingDenied:
+        raise HTTPException(status_code=403,detail={
+            'code':'external_processing_denied',
+            'message':'Chính sách dữ liệu không cho phép xử lý nội dung này bằng dịch vụ AI bên ngoài.',
+        }) from None
     except Exception as e:
         elapsed_ms = int((time.time() - t_start) * 1000)
         logger.error(f"RAG request failed after {elapsed_ms}ms: {e}", exc_info=True)
@@ -882,6 +888,14 @@ async def chat_stream_endpoint(
                     refusal_reason="client_cancelled",
                     cancelled=True,
                 )
+            except ExternalProcessingDenied:
+                if not replay:
+                    _audit_admin_query(user_profile,request_trace_id,'chat_stream',outcome='error')
+                emit('error',{
+                    'code':'external_processing_denied',
+                    'message':'Chính sách dữ liệu không cho phép xử lý nội dung này bằng dịch vụ AI bên ngoài.',
+                    'elapsed_ms':int((time.time()-started)*1000),
+                })
             except Exception as exc:
                 logger.error("RAG stream failed: %s", exc, exc_info=True)
                 if not replay:

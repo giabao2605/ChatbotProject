@@ -2,6 +2,17 @@ import { describe, expect, it } from "vitest";
 import { formatSourceText, renderMarkdown } from "@/utils/markdown";
 
 describe("renderMarkdown", () => {
+  it('preserves numbered steps separated by citations and resolves locator references safely', () => {
+    const html = renderMarkdown('1. Nhận\n\n[SRC:D17L1234ABCD]\n\n2. Duyệt', [{
+      doc_id:17,page_no:null,source_id:'D17L1234ABCD',file_name:'<ledger>.xlsx',has_vision:false,
+      original_url:'/original',locator:{doc_id:'17',version:'1',sheet:'Revenue',cell:'B2'},
+    }]);
+    expect(html).toContain('<ol start="2">');
+    expect(html).toContain('&lt;ledger&gt;.xlsx · Sheet Revenue · Ô B2');
+    expect(html).not.toContain('[SRC:');
+    expect(html).not.toContain('<ledger>');
+    expect(renderMarkdown('[SRC:D17L1234ABCD]')).toContain('Nguồn tài liệu D17');
+  });
   it("renders markdown tables for assistant answers", () => {
     const html = renderMarkdown(
       [
