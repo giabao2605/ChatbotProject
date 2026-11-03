@@ -254,7 +254,7 @@ def test_strict_retrieval_returns_exact_documents_without_broadening(
     assert active_filter == "strict-filter"
 
 
-def test_bom_retrieval_merges_strict_and_broad_results_without_duplicate_content(
+def test_bom_retrieval_keeps_distinct_sources_with_identical_content(
     steps,
     monkeypatch,
 ):
@@ -265,7 +265,7 @@ def test_bom_retrieval_merges_strict_and_broad_results_without_duplicate_content
     def retrieve(_query, _payload_filter, **kwargs):
         if kwargs["phase"] == "strict_exact":
             return [strict], "fake_rrf"
-        return [duplicate, broad], "fake_rrf"
+        return [strict, duplicate, broad], "fake_rrf"
 
     monkeypatch.setattr(steps, "_explicit_hybrid_rrf", retrieve)
 
@@ -281,10 +281,20 @@ def test_bom_retrieval_merges_strict_and_broad_results_without_duplicate_content
         collection_name="test",
     )
 
-    assert [doc.page_content for doc in docs] == ["shared content", "additional BOM row"]
+    assert [doc.metadata['doc_id'] for doc in docs] == [11, 12, 13]
     assert top_k == 15
     assert mode == "broad_fallback:fake_rrf"
     assert active_filter == "broad-filter"
+
+
+def test_batched_fusion_keeps_full_source_identity(steps):
+    first = _doc('x' * 300 + ' first', doc_id=11, version_no=1, trang_so=1)
+    other = _doc(first.page_content, doc_id=12, version_no=1, trang_so=1)
+    tail = _doc('x' * 300 + ' second', doc_id=11, version_no=1, trang_so=1)
+    revision = _doc(first.page_content, doc_id=11, version_no=2, trang_so=1)
+    fused = steps._rrf_fuse([('dense', [first, other, tail, revision]), ('bm25', [first])], 10)
+    assert len(fused) == 4
+    assert steps._merge_batched_documents([first], [first, other, tail, revision]) == [first, other, tail, revision]
 
 
 @pytest.mark.parametrize("missing_available", [True, False, "expired", "saturated"])
@@ -650,6 +660,30 @@ def test_disambiguation_keeps_all_variants_when_the_question_requests_comparison
         response_language="vi",
         current_part_ids=["PART-9"],
         trace_id="comparison-contract",
+        t_start=time.time(),
+        make_debug_info=_debug,
+        lifecycle=_Lifecycle(),
+    )
+
+    assert terminal is None
+    assert returned_docs == docs
+
+
+def test_disambiguation_keeps_mechanical_sources_for_general_policy_intent(steps):
+    docs = [
+        _doc("variant alpha", domain="mechanical", base_code="PART-9", variant_code="A"),
+        _doc("variant beta", domain="mechanical", base_code="PART-9", variant_code="B"),
+    ]
+
+    terminal, returned_docs = steps._disambiguate(
+        retrieved_docs=docs,
+        user_question="Dung sai áp dụng chung là bao nhiêu?",
+        new_part_ids=["PART-9"],
+        intent_data={"version_policy": "current_only", "query_scope": "general_policy",
+                     "need_disambiguation": True},
+        response_language="vi",
+        current_part_ids=["PART-9"],
+        trace_id="general-policy-contract",
         t_start=time.time(),
         make_debug_info=_debug,
         lifecycle=_Lifecycle(),

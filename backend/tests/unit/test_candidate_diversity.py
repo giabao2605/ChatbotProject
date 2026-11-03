@@ -44,6 +44,16 @@ def test_diversify_retains_identical_text_with_different_source_provenance():
     assert diversify_candidates(docs, max_per_document=4, cap=4) == docs
 
 
+def test_diversify_and_shadow_keys_do_not_conflate_snapshots_or_rows():
+    from mech_chatbot.rag.late_interaction import candidate_key
+    docs = [SimpleNamespace(page_content='same', metadata={
+        'doc_id': 1, 'version_no': 1, 'trang_so': 1, 'snapshot_id': snapshot,
+        'source_hash': 'a' * 64, 'row_key': row,
+    }) for snapshot, row in [('a', 'row1'), ('b', 'row1'), ('b', 'row2')]]
+    assert diversify_candidates(docs, max_per_document=4, max_per_section=4) == docs
+    assert len({candidate_key(doc) for doc in docs}) == 3
+
+
 def test_diversify_keeps_separate_pages_with_same_parent_section():
     docs = [
         SimpleNamespace(page_content=text, metadata={
@@ -55,3 +65,12 @@ def test_diversify_keeps_separate_pages_with_same_parent_section():
     assert diversify_candidates(
         docs, max_per_document=4, max_per_section=1, cap=4,
     ) == [docs[0], docs[2]]
+
+
+def test_diversify_gives_each_relevant_document_a_candidate_before_long_file_chunks():
+    long_file = [_doc(1, f"long-{index}") for index in range(8)]
+    short_files = [_doc(index, f"short-{index}") for index in (2, 3)]
+
+    result = diversify_candidates(long_file + short_files, max_per_document=4, cap=6)
+
+    assert [doc.metadata["doc_id"] for doc in result] == [1, 1, 1, 1, 2, 3]

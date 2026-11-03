@@ -7,6 +7,7 @@ service.py re-import cac ten nay nen moi cho goi cu + tests van chay.
 """
 import json
 from mech_chatbot.domain.source_ids import extract_source_ids
+from mech_chatbot.domain.evidence_identity import revision_key
 import re
 
 
@@ -310,7 +311,7 @@ def has_valid_source_citation(answer, documents, require_version=True, *, depend
                 continue
             source_id = _canonical_source_id(metadata)
             if source_id and (not require_version or version > 0):
-                pages.setdefault(source_id,set()).add(version)
+                pages.setdefault(source_id,set()).add(revision_key(metadata))
         return all(source in pages and len(pages[source]) == 1 for source in page_ids)
     if require_version and not has_required_source_citation(answer, require_version=True):
         return False
@@ -318,10 +319,49 @@ def has_valid_source_citation(answer, documents, require_version=True, *, depend
     if any(token.strip().upper() not in cited for token in re.findall(
             r'\[SRC:\s*([^\]]+)\]', str(answer), flags=re.IGNORECASE)):
         return False
-    expected = set()
+    expected = {}
     for document in documents or []:
         metadata = getattr(document, "metadata", {}) or {}
         source_id = _canonical_source_id(metadata)
         if source_id:
-            expected.add(source_id)
-    return bool(cited and expected and cited.issubset(expected))
+            expected.setdefault(source_id, set()).add(revision_key(metadata))
+    return bool(cited and expected and all(source in expected and len(expected[source]) == 1 for source in cited))
+
+
+def has_unsupported_claim_sources(answer, documents):
+    """Reject a cited section with no lexical support in its cited source."""
+    source_text = {}
+    for document in documents or ():
+        metadata = getattr(document, "metadata", {}) or {}
+        source_id = _canonical_source_id(metadata)
+        if source_id:
+            content = str(
+                metadata.get("noi_dung_goc") or getattr(document, "page_content", "") or ""
+            )
+            if content.strip():
+                source_text[source_id] = content
+    if not source_text:
+        return False, []
+    stop = {
+        "nguon", "source", "trang", "page", "version", "ver", "sourceid",
+        "theo", "trong", "tai", "lieu", "document", "documents", "duoc",
+        "co", "cho", "mot", "nhung", "cac", "the",
+    }
+    unsupported = []
+    for section in _answer_sections(answer):
+        cited = extract_source_ids(section)
+        if not cited:
+            continue
+        words = {
+            word.casefold() for word in re.findall(r"[^\W\d_]+", section, flags=re.UNICODE)
+            if len(word) >= 3 and word.casefold() not in stop
+        }
+        for source_id in cited:
+            content_words = {
+                word.casefold()
+                for word in re.findall(r"[^\W\d_]+", source_text.get(source_id, ""), flags=re.UNICODE)
+                if len(word) >= 3 and word.casefold() not in stop
+            }
+            if source_id not in source_text or not words.intersection(content_words):
+                unsupported.append(source_id)
+    return bool(unsupported), sorted(set(unsupported))

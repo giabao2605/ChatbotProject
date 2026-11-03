@@ -336,8 +336,9 @@ def _empty_context_terminal(
     request = decision.request
     logger.warning("BLOCKER: Context rong, chan goi LLM de tranh Hallucination.")
     empty_msg = notice or _t_rag(
-        "Tài liệu hiện tại không ghi chú thông tin về câu hỏi của bạn. "
-        "Vui lòng kiểm tra lại hoặc cung cấp thêm bản vẽ.",
+        "Trong phạm vi tài liệu được phép truy xuất hiện tại, mình chưa tìm thấy "
+        "đủ bằng chứng cho câu hỏi này. Bạn có thể diễn đạt thêm nội dung cần tìm; "
+        "không cần biết tên tài liệu.",
         request.response_language,
     )
 

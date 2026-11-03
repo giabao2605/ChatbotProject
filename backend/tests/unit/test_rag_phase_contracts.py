@@ -147,3 +147,4 @@ def test_rerank_empty_context_keeps_typed_terminal_with_active_filter(monkeypatc
     assert isinstance(result, PhaseTerminal)
     assert result.reason_code == "empty_context"
     assert refused == ["empty_context"]
+    assert "không cần biết tên tài liệu" in "".join(result.prepared[0])

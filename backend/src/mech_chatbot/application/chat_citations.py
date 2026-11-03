@@ -8,8 +8,10 @@ import hashlib
 import json
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
+from urllib.parse import urlencode
 
 from mech_chatbot.domain.source_ids import extract_source_ids
+from mech_chatbot.domain.evidence_identity import citation_key, revision_key, IDENTITY_METADATA_FIELDS
 
 
 def _safe_int(value: Any) -> int | None:
@@ -21,6 +23,44 @@ def _safe_int(value: Any) -> int | None:
 
 def citation_source_ids(answer: str) -> frozenset[str]:
     return frozenset(extract_source_ids(answer))
+
+
+def _ordinary_source_query(item, version):
+    snapshot, source_hash = item.get('snapshot_id'), item.get('source_hash')
+    if snapshot is None and source_hash is None:
+        return f'?citation_version={version}'
+    if (not isinstance(snapshot, str) or not 1 <= len(snapshot) <= 128
+            or not isinstance(source_hash, str) or not re.fullmatch(r'[a-fA-F0-9]{64}', source_hash)):
+        return None
+    return '?' + urlencode({'version_no': version, 'snapshot_id': snapshot, 'source_hash': source_hash})
+
+
+def source_reference_record(item):
+    """Persist excerpt identity without treating it as reviewed provenance."""
+    if not any(key in item for key in IDENTITY_METADATA_FIELDS):
+        return None
+    record = {key: item[key] for key in IDENTITY_METADATA_FIELDS if key in item}
+    record.update(doc_id=_safe_int(item.get('doc_id')), version_no=_safe_int(item.get('version_no')),
+                  page_no=_safe_int(item.get('trang') or item.get('trang_so') or item.get('page_no')))
+    if any(record[key] is None or record[key] <= 0 for key in ('doc_id', 'version_no', 'page_no')):
+        raise ValueError('Source reference requires document, version and page')
+    reference = {'schema': 'source-reference-v1', **record, 'evidence_identity': citation_key(record)}
+    if len(json.dumps(reference, ensure_ascii=False)) > 16384:
+        raise ValueError('Source reference exceeds readable size')
+    return reference
+
+
+def restore_source_reference(payload, *, doc_id, version, page):
+    if not isinstance(payload, str) or len(payload) > 16384:
+        raise ValueError('Invalid source reference')
+    record = json.loads(payload)
+    if not isinstance(record, dict) or record.get('schema') != 'source-reference-v1':
+        raise ValueError('Invalid source reference schema')
+    restored = source_reference_record(record)
+    if (restored is None or restored['evidence_identity'] != record.get('evidence_identity')
+            or (restored['doc_id'], restored['version_no'], restored['page_no']) != (doc_id, version, page)):
+        raise ValueError('Source reference does not match stored citation')
+    return {key: value for key, value in restored.items() if key != 'schema'}
 
 
 def structured_citation(item: Mapping[str, Any], *, page_has_vision: Callable[[int, int], bool]) -> dict[str, Any] | None:
@@ -88,9 +128,10 @@ def structured_citation(item: Mapping[str, Any], *, page_has_vision: Callable[[i
               'original_url':card['original_url']+'?'+query,'has_vision':bool(vision and image_hash),
               'page_url':card['page_url']+'?'+query+'&image_hash='+image_hash if vision and image_hash else None}
     if not (scope_id and scope_hash) and graph_context is None:
-        suffix = f'?citation_version={version}'
+        suffix = _ordinary_source_query(item, version)
         card = {**card, 'original_url': card['original_url'] + suffix,
-                'page_url': card['page_url'] + suffix if card['page_url'] else None}
+                'has_vision': bool(vision and image_hash),
+                'page_url': card['page_url'] + suffix + '&image_hash=' + image_hash if card['page_url'] and image_hash else None}
     return card
 
 
@@ -117,13 +158,19 @@ def build_citation_list(
         version = _safe_int(raw_version) if type(raw_version) in (int, str) else None
         if doc_id is None or page_no is None or version is None or version < 1:
             continue
-        key = (doc_id, page_no)
+        key = citation_key(item)
         if key in seen:
             continue
         seen.add(key)
         has_vision = page_has_vision(doc_id, page_no)
         has_preview = page_has_preview(doc_id, page_no) if page_has_preview else has_vision
+        source_query = _ordinary_source_query(item, version)
+        if item.get('snapshot_id') is not None or item.get('source_hash') is not None:
+            # A current preview path alone does not identify the retrieved image.
+            has_vision = has_preview = False
         citation = {
+            **{key: item[key] for key in IDENTITY_METADATA_FIELDS if key in item},
+            'evidence_identity': key,
             "doc_id": doc_id,
             "page_no": page_no,
             "file_name": item.get("file_goc") or item.get("file_name"),
@@ -131,11 +178,11 @@ def build_citation_list(
             "source_id": item.get("source_id") or f"D{doc_id}P{page_no}",
             "has_vision": has_vision,
             "page_url": (
-                f"/api/files/documents/{doc_id}/pages/{page_no}?citation_version={version}"
-                if has_preview
+                f"/api/files/documents/{doc_id}/pages/{page_no}{source_query}"
+                if has_preview and source_query
                 else None
             ),
-            "original_url": f"/api/files/documents/{doc_id}/original?citation_version={version}",
+            "original_url": f"/api/files/documents/{doc_id}/original{source_query}" if source_query else None,
             "version_no": version,
         }
         citations.append(citation)
@@ -154,10 +201,14 @@ def filter_citations_by_answer(
     text_answer = str(answer or "").lower().replace("\\", "/")
     cited_source_ids = citation_source_ids(answer)
     if cited_source_ids:
+        revisions = {}
+        for citation in citation_list:
+            revisions.setdefault(str(citation.get('source_id') or '').upper(), set()).add(revision_key(citation))
         return [
             citation
             for citation in citation_list
             if str(citation.get("source_id") or "").upper() in cited_source_ids
+            and len(revisions[str(citation.get('source_id') or '').upper()]) == 1
         ]
     if not allow_legacy_fallback:
         return []
@@ -236,15 +287,17 @@ def attributed_rag_citations(diagnostics: Mapping[str, Any] | None, answer: str)
             page = _safe_int(item.get('trang') or item.get('trang_so') or item.get('page_no'))
             if doc_id is None or page is None:
                 continue
-            card = {'doc_id': doc_id, 'page_no': page,
+            card = {**{key: item[key] for key in IDENTITY_METADATA_FIELDS if key in item},
+                    'evidence_identity': citation_key(item), 'doc_id': doc_id, 'page_no': page,
                     'file_name': item.get('file_goc') or item.get('file_name'),
                     'file_goc': item.get('file_goc') or item.get('file_name'),
                     'version_no': item.get('version_no'), 'score': item.get('score'),
                     'trang': page, 'source_id': str(item.get('source_id') or f'D{doc_id}P{page}').upper()}
-        if card and card['source_id'] in source_ids and card['source_id'] not in seen:
-            seen.add(card['source_id'])
+        identity = (card.get('evidence_identity') or card['source_id']) if card else None
+        if card and card['source_id'] in source_ids and identity not in seen:
+            seen.add(identity)
             result.append(card)
-    return tuple(result)
+    return tuple(filter_citations_by_answer(result, answer))
 
 
 __all__ = [

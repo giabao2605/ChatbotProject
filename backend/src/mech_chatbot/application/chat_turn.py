@@ -49,6 +49,8 @@ class ChatTurnCommand:
     text_query: bool = False
     scope_total: str | None = None
     regression_scope: Mapping[str, str] | None = None
+    search_mode: str = "quick"
+    continuation_cursor: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +62,7 @@ class RagStreamRequest:
 @dataclass(frozen=True, slots=True)
 class ChatThinking:
     message: str
+    search_progress: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +101,10 @@ class ChatDone:
     conversation_context: Mapping[str, Any] | None
     elapsed_ms: int | None
     advanced_rag: Mapping[str, Any] | None = None
+    search_progress: Mapping[str, Any] | None = None
+    verification_status: str | None = None
+    answer_outcome: str | None = None
+    source_groups: tuple[Mapping[str, Any], ...] = ()
 
 
 ChatTurnEvent: TypeAlias = (
@@ -155,6 +162,7 @@ class ChatPersistence:
     evidence: tuple[Mapping[str, Any], ...]
     citations: tuple[Mapping[str, Any], ...]
     advanced_rag: Mapping[str, Any] | None = None
+    answer_assessment: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,7 +256,7 @@ class ChatTurnRunner:
     ) -> Iterator[ChatTurnEvent]:
         yield ChatThinking("Đang suy nghĩ")
         try:
-            route = self._pilot_experiments.assign(actor, command) if command.scope_total is None and command.scope_comparison is None and command.graph_query is None and command.bom_rollup is None and command.query_plan is None and not command.text_query else None
+            route = self._pilot_experiments.assign(actor, command) if command.search_mode == "quick" and command.scope_total is None and command.scope_comparison is None and command.graph_query is None and command.bom_rollup is None and command.query_plan is None and not command.text_query else None
         except ValueError:
             yield ChatError(
                 code="pilot_configuration_invalid",
@@ -266,6 +274,9 @@ class ChatTurnRunner:
             for event in self._rag_stream.stream(rag_request, route):
                 if isinstance(event, RagMetadata):
                     metadata = event
+                    progress = (event.debug_info or {}).get("comprehensive")
+                    if isinstance(progress, Mapping):
+                        yield ChatThinking("Đang rà phạm vi nguồn", search_progress=progress)
                 elif isinstance(event, RagDelta):
                     answer_parts.append(event.text)
                     yield ChatDelta(event.text)
@@ -306,6 +317,8 @@ class ChatTurnRunner:
                 if isinstance(metadata.debug_info, Mapping)
                 else {}
             )
+            if isinstance(completed.debug_info, Mapping):
+                debug_info = {**debug_info, **completed.debug_info}
             evidence = _mapping_items(debug_info.get("retrieved_docs"))
             citation_docs = _mapping_items(debug_info.get("citation_docs"))
             citations, ref_text = self._citation_resolver(
@@ -314,6 +327,16 @@ class ChatTurnRunner:
                 answer,
             )
             citations = tuple(citations)
+            assessment = {key: debug_info[key] for key in ('verification_status', 'answer_outcome')
+                          if isinstance(debug_info.get(key), str)}
+            groups = (debug_info.get('generation_metrics') or {}).get('source_groups') or ()
+            allowed = {(c.get('source_id'), c.get('doc_id'), str(c.get('version_no'))) for c in citations}
+            assessment['source_groups'] = [dict(group) for group in groups if isinstance(group, Mapping)
+                and (group.get('source_id'), group.get('doc_id'), str(group.get('version_no'))) in allowed]
+            assessment['source_groups'] = [{**group, 'evidence_identities': [c['evidence_identity'] for c in citations
+                if c.get('evidence_identity') and (c.get('source_id'), c.get('doc_id'), str(c.get('version_no'))) ==
+                (group.get('source_id'), group.get('doc_id'), str(group.get('version_no')))]}
+                for group in assessment['source_groups']]
             advanced_rag = ({'text_query':_text_query_metadata(debug_info,citations)}
                             if command.text_query else {'query':debug_info['query_v2']}
                             if command.query_plan is not None and isinstance(debug_info.get('query_v2'),Mapping)
@@ -347,6 +370,7 @@ class ChatTurnRunner:
                         evidence=evidence,
                         citations=citations,
                         advanced_rag=advanced_rag,
+                        answer_assessment=assessment if len(assessment) > 1 else None,
                     )
                 )
                 self._record_audit(command, actor, chat_id, evidence)
@@ -369,6 +393,11 @@ class ChatTurnRunner:
                 ),
                 elapsed_ms=completed.elapsed_ms,
                 advanced_rag=advanced_rag,
+                verification_status=assessment.get('verification_status'),
+                answer_outcome=assessment.get('answer_outcome'),
+                source_groups=tuple(assessment['source_groups']),
+                search_progress=(debug_info.get("comprehensive")
+                    if isinstance(debug_info.get("comprehensive"), Mapping) else None),
             )
         except Exception as exc:
             logger.error("Chat turn failed: %s", exc, exc_info=True)

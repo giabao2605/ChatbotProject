@@ -1,4 +1,4 @@
-"""Validate structured file citations against current reviewed SQL evidence."""
+"""Validate pinned file citations against current authorized SQL evidence."""
 from fastapi import HTTPException,Query
 from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
@@ -12,7 +12,7 @@ from mech_chatbot.application.document_upload import MAX_UPLOAD_BYTES
 
 from mech_chatbot.db.repositories.structured_evidence import load_approved_scope
 from mech_chatbot.domain.structured_evidence import reviewed_scope_fingerprint, source_bindings
-from mech_chatbot.db.repositories.source_page_images import load_source_page_hash
+from mech_chatbot.db.repositories.source_page_images import load_source_page_hash, load_source_snapshot_hash
 from mech_chatbot.db.repositories.graph_v2 import retrieve_graph_v2
 from mech_chatbot.domain.graph_query import GraphQuery,graph_fingerprint
 import json
@@ -38,7 +38,7 @@ def file_pin(version_no:int|None=Query(None,ge=1),snapshot_id:str|None=Query(Non
     values=(version_no,snapshot_id,source_hash,scope_id,scope_hash,graph_context,graph_hash)
     if all(value is None for value in values) and image_hash is None:
         return None
-    if any(value is None for value in values[:3]) or bool(scope_id) != bool(scope_hash) or bool(graph_context)!=bool(graph_hash) or bool(scope_id)==bool(graph_context):
+    if any(value is None for value in values[:3]) or bool(scope_id) != bool(scope_hash) or bool(graph_context)!=bool(graph_hash) or (scope_id is not None and graph_context is not None):
         raise HTTPException(422,detail='Complete source pin required')
     try:
         query=GraphQuery(**json.loads(graph_context)) if graph_context else None
@@ -50,6 +50,19 @@ def file_pin(version_no:int|None=Query(None,ge=1),snapshot_id:str|None=Query(Non
 
 def verify_file_pin(doc_id,profile,pin,*,page_no=None):
     if pin is None:
+        return
+    if pin.scope_id is None and pin.graph_context is None:
+        try:
+            source_hash=load_source_snapshot_hash(doc_id,pin.version_no,pin.snapshot_id,profile)
+        except PermissionError:
+            raise HTTPException(404,detail='Source unavailable') from None
+        except SQLAlchemyError:
+            raise HTTPException(503,detail='Source temporarily unavailable') from None
+        if source_hash!=pin.source_hash:
+            raise HTTPException(404,detail='Source unavailable')
+        if page_no is not None and (not pin.image_hash or load_source_page_hash(doc_id,pin.version_no,pin.snapshot_id,
+                                                    pin.source_hash,page_no)!=pin.image_hash):
+            raise HTTPException(404,detail='Source image provenance unavailable')
         return
     if pin.graph_context is not None:
         query=pin.graph_context

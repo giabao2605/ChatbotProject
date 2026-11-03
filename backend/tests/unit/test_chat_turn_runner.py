@@ -31,6 +31,20 @@ from mech_chatbot.application.chat_turn import (
 pytestmark = pytest.mark.unit
 
 
+def test_verified_assessment_reaches_done_and_persistence():
+    group = {'source_id': 'D1P1', 'doc_id': 1, 'version_no': 2, 'related_texts': ['Fact'], 'claims': []}
+    runner, _, store, *_ = _runner([
+        RagDelta('Fact [SRC:D1P1]'),
+        RagStreamDone(debug_info={'verification_status': 'partial', 'answer_outcome': 'partial_answer',
+            'generation_metrics': {'source_groups': [group]}}),
+    ], citations=ScriptedCitationResolver(({'source_id': 'D1P1', 'doc_id': 1, 'version_no': 2},)))
+    done = next(event for event in runner.stream(_command(), _actor()) if isinstance(event, ChatDone))
+    assert done.verification_status == 'partial'
+    assert done.answer_outcome == 'partial_answer'
+    assert done.source_groups == ({**group, 'evidence_identities': []},)
+    assert store.records[0].answer_assessment['source_groups'] == [{**group, 'evidence_identities': []}]
+
+
 class ScriptedRagStream:
     def __init__(self, events: Iterable[object]) -> None:
         self._events = tuple(events)
@@ -196,6 +210,25 @@ def test_success_orders_events_and_aggregates_the_answer() -> None:
     )
     assert events[-1].elapsed_ms == 25
     assert events[-1].new_part_ids == ("P123",)
+
+
+def test_comprehensive_cursor_is_visible_before_generation_and_final_progress_wins():
+    initial = {"status": "active", "continuation_cursor": "initial", "checked": 0}
+    final = {"status": "complete", "continuation_cursor": "final", "checked": 2}
+    pilot = ScriptedPilotExperiments(route=object())
+    runner, _, _, _, pilot, _ = _runner((
+        RagMetadata(debug_info={"comprehensive": initial}),
+        RagDelta("Kết quả"),
+        RagStreamDone(debug_info={"comprehensive": final}),
+    ), pilot=pilot)
+    from dataclasses import replace
+    events = iter(runner.stream(replace(_command(), search_mode="comprehensive"), _actor()))
+    assert isinstance(next(events), ChatThinking)
+    assert next(events).search_progress == initial
+    remaining = list(events)
+    assert remaining[-1].search_progress == final
+    assert pilot.assignments == []
+    assert pilot.replays == []
 
 
 def test_v2_comparison_returns_versioned_steps_without_entering_v1_pilot():

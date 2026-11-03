@@ -398,7 +398,8 @@ def _make_refusal_debug(
 
 
 def _refusal_request_validation(request: Any, documents: list[Any]) -> dict:
-    from mech_chatbot.domain.serving_state import is_currently_servable
+    from mech_chatbot.domain.serving_state import is_currently_servable, is_history_servable
+    from mech_chatbot.auth.authorization import role_allows
     from mech_chatbot.rag.rbac import document_matches_access_scope
     from mech_chatbot.rag.phases.retrieval_enrichment_support import (
         is_governed_sql_bom_document,
@@ -416,11 +417,11 @@ def _refusal_request_validation(request: Any, documents: list[Any]) -> dict:
         )
         for document in documents
     )
+    allow_history = role_allows(request.user_roles, "document_history_reader")
     current_passed = bool(documents) and all(
         is_governed_sql_bom_document(document)
-        or is_currently_servable(
-            getattr(document, "metadata", None), require_current=True
-        )
+        or is_currently_servable(getattr(document, "metadata", None), require_current=True)
+        or (allow_history and is_history_servable(getattr(document, "metadata", None)))
         for document in documents
     )
     return {
@@ -444,6 +445,8 @@ def _prepare_refusal(
     request = decision.request
     documents = list(reranked.documents)
     logger.warning("Evidence gate BLOCK cau hoi: %s", answer_policy.reason)
+    if evidence_decision.telemetry_status == "verifier_unavailable":
+        raise RuntimeError("Evidence verification service unavailable")
     safe_message = make_insufficient_evidence_message(
         request.user_question,
         answer_policy.reason,

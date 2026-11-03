@@ -63,6 +63,7 @@ def test_evaluator_reports_verifier_disabled(monkeypatch):
 
     assert decision.state is evidence_gate.EvidenceState.SUFFICIENT
     assert decision.telemetry_status == "verifier_disabled"
+    assert decision.verification_status == "unverified"
 
 
 def test_evaluator_accepts_ambiguous_state_from_verifier(monkeypatch):

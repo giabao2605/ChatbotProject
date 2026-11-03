@@ -191,6 +191,19 @@ def assert_clean_checkout(root=ROOT):
         raise ValueError('Source checkout is not clean')
 
 
+def assert_source_readable(root):
+    import subprocess
+    listing = subprocess.check_output(
+        ['git', 'ls-files', '--cached', '--others', '-z', '--', 'backend/src', 'scripts/windows_service'],
+        cwd=root, text=True)
+    sources = sorted({name for name in listing.split('\0') if name.endswith('.py')})
+    if not sources:
+        raise FileNotFoundError('Deployed Python sources absent')
+    for name in sources:
+        with (root / name).open('rb') as handle:
+            handle.read(1)
+
+
 def identity_preflight(role):
     import hashlib
     import json
@@ -213,6 +226,8 @@ def identity_preflight(role):
             raise PermissionError('Wrong Windows identity')
         result['identity_sid'] = win32security.ConvertSidToStringSid(actual_sid)
         result['checks'].append('windows_identity')
+        assert_source_readable(ROOT)
+        result['checks'].append('python_source_read')
         import bcrypt, pyarrow, onnxruntime, numpy  # noqa: F401
         settings = settings_for_role(role)
         from mech_chatbot.governance.feature_activation import current_git_commit

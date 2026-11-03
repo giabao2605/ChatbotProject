@@ -22,3 +22,9 @@ def test_legacy_admin_keeps_non_platform_compatibility(capability):
 def test_platform_admin_does_not_inherit_document_workflow_roles():
     for capability in ("reviewer", "uploader", "viewer", "knowledge_consumer"):
         assert role_allows(["platform_admin"], capability) is False
+
+
+def test_document_history_reader_is_explicit_and_not_implied_by_admin():
+    assert role_allows(["document_history_reader"], "document_history_reader") is True
+    assert role_allows(["admin"], "document_history_reader") is False
+    assert role_allows(["reviewer"], "document_history_reader") is False

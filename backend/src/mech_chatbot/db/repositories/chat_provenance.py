@@ -165,14 +165,18 @@ def save_history_result(conn, chat_id, metadata, citations):
                          {'chat':chat_id,'payload':payload})
 
 
-def history_result_basis_current(conn, chat_id):
+def history_result_basis_current(conn, chat_id, *, allow_history=False):
     date = 'CURRENT_DATE' if getattr(getattr(conn,'dialect',None),'name',None)=='sqlite' else 'CAST(GETDATE() AS DATE)'
     invalid = conn.execute(text(f'''SELECT COUNT(*) FROM (
         SELECT DocID, SourceVersion AS VersionNo FROM {table(conn,'AnswerEvidence')} WHERE ChatID=:chat
         UNION ALL SELECT DocID, VersionNo FROM {table(conn,'AnswerSource')} WHERE ChatID=:chat
         ) basis LEFT JOIN {table(conn,'TaiLieu')} t ON t.DocID=basis.DocID
         WHERE t.DocID IS NULL OR basis.VersionNo IS NULL
-          OR basis.VersionNo<>t.VersionNo OR COALESCE(t.IsCurrent,0)<>1
-          OR LOWER(COALESCE(t.EffectiveStatus,'effective')) IN ('expired','superseded','draft')
-          OR t.EffectiveDate>{date} OR t.ExpiryDate<{date}'''), {'chat':chat_id}).scalar()
+          OR (:allow_history = 0 AND (basis.VersionNo<>t.VersionNo OR COALESCE(t.IsCurrent,0)<>1
+              OR LOWER(COALESCE(t.EffectiveStatus,'effective')) IN ('expired','superseded','draft')
+              OR t.EffectiveDate>{date} OR t.ExpiryDate<{date}))
+          OR (:allow_history = 1 AND (LOWER(COALESCE(t.PublicationState,''))<>'published'
+              OR LOWER(COALESCE(t.ReviewStatus,''))<>'approved'
+              OR LOWER(COALESCE(t.LifecycleStatus,'')) NOT IN ('published','archived','superseded','retired')))'''),
+        {'chat':chat_id, 'allow_history':1 if allow_history else 0}).scalar()
     return type(invalid) is int and invalid==0

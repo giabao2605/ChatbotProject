@@ -10,7 +10,10 @@ from mech_chatbot.config.logging import logger
 from ._shared import _cap_len
 from .chat_provenance import SCHEMA, provenance_record, load_structured_history, table
 from mech_chatbot.application.chat_citations import citation_source_ids
+from mech_chatbot.application.chat_citations import source_reference_record
+from mech_chatbot.domain.evidence_identity import citation_key, revision_key
 from mech_chatbot.application.protected_files import SHARE_ALL_DEPARTMENT
+from mech_chatbot.domain.serving_state import is_history_servable
 from .chat_provenance import save_history_result, history_result_column_available, history_result_basis_current
 from ..evidence_snapshot import evidence_read_connection, evidence_snapshot_active, EvidenceSnapshotLost
 
@@ -110,13 +113,19 @@ def save_answer_sources(chat_id, retrieved_docs, *, db_engine=None):
 
     try:
         with selected_engine.begin() as conn:
+            seen = set()
             for rank_no, d in enumerate(retrieved_docs, start=1):
                 if not isinstance(d, dict):
                     continue
                 is_cur = d.get("is_current")
                 provenance = provenance_record(d) if 'locator' in d else None
-                extra_column = ', SourceLocatorJson' if provenance else ''
-                extra_value = ', :locator_json' if provenance else ''
+                identity = provenance['source_id'] if provenance else citation_key(d)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                reference = provenance or source_reference_record(d)
+                extra_column = ', SourceLocatorJson' if reference else ''
+                extra_value = ', :locator_json' if reference else ''
                 conn.execute(
                     text(f"""
                         INSERT INTO AnswerSource
@@ -134,7 +143,7 @@ def save_answer_sources(chat_id, retrieved_docs, *, db_engine=None):
                         "score": _to_float(d.get("score")),
                         "rank_no": rank_no,
                         "is_cur": (None if is_cur is None else (1 if is_cur else 0)),
-                        **({'locator_json':json.dumps(provenance,ensure_ascii=False)} if provenance else {}),
+                        **({'locator_json':json.dumps(reference,ensure_ascii=False)} if reference else {}),
                     },
                 )
         return True
@@ -143,8 +152,33 @@ def save_answer_sources(chat_id, retrieved_docs, *, db_engine=None):
         return False
 
 
+ANSWER_HISTORY_SCHEMA = "verified-policy-v1"
+
+
+def _answer_scope(actor):
+    from mech_chatbot.domain.evidence_identity import identity_digest
+    return identity_digest([actor.get("user_id"), actor.get("username"), actor.get("department"),
+        actor.get("max_security_level"), *(sorted(actor.get(key) or ())
+        for key in ("roles", "allowed_departments", "allowed_sites"))])
+
+
+def _history_pins_current(conn, chat_id, actor, count):
+    from datetime import date
+    from .feedback_access import source_allowed
+    rows = conn.execute(text(f"SELECT SourceLocatorJson FROM {table(conn, 'AnswerEvidence')} WHERE ChatID=:chat"),
+                        {"chat": chat_id}).scalars().all()
+    if not actor or len(rows) != count:
+        return False
+    for raw in rows:
+        pin = json.loads(raw)
+        if (pin.get("answer_contract") != ANSWER_HISTORY_SCHEMA or pin.get("actor_scope") != _answer_scope(actor)
+                or pin.get("as_of") not in (None, date.today().isoformat()) or not source_allowed(conn, pin, actor)):
+            return False
+    return True
+
+
 def save_answer_evidence(chat_id, evidence_docs, requires_authorization=None, *, db_engine=None,
-                         advanced_rag=None, citation_cards=(), actor=None):
+                         advanced_rag=None, citation_cards=(), actor=None, time_sensitive=False):
     """Persist the complete access basis separately from display citations.
 
     ``AnswerSource`` intentionally contains only the citations attributed in
@@ -165,10 +199,20 @@ def save_answer_evidence(chat_id, evidence_docs, requires_authorization=None, *,
     normalized = []
     seen = set()
     source_versions = {}
+    normalized_keys = []
+    page_revisions = {}
     input_items = list(evidence_docs or [])
+    try:
+        references = {citation_key(item): source_reference_record(item) for item in input_items
+                      if isinstance(item, dict) and 'locator' not in item
+                      and item.get('doc_id') is not None and item.get('version_no') is not None}
+    except (ValueError, TypeError):
+        return False
+    has_references = any(references.values())
     complete = True
     structured = any(isinstance(item,dict) and 'locator' in item for item in input_items)
     pinned = actor is not None and not structured
+    schema = SCHEMA if structured else ANSWER_HISTORY_SCHEMA if pinned and input_items else "v1"
     result_history = advanced_rag is not None and (any(key in advanced_rag for key in ('query','text_query'))
         or isinstance(advanced_rag.get('math'),dict) and advanced_rag['math'].get('schema')=='grounded-calculation-scope-total-v1')
     for rank_no, item in enumerate(input_items, start=1):
@@ -189,15 +233,20 @@ def save_answer_evidence(chat_id, evidence_docs, requires_authorization=None, *,
             complete = False
             continue
         page_no = provenance['locator']['page'] if provenance else _to_int(item.get("trang") or item.get("trang_so") or item.get("page_no"))
-        key = provenance['source_id'] if provenance else (doc_id, page_no)
+        key = provenance['source_id'] if provenance else citation_key(item)
         version = provenance['version_no'] if provenance else item.get('version_no')
         source_version = _to_int(version) if type(version) in (int,str) else None
         source_version = source_version if source_version is not None and source_version>0 else None
+        page_key = (doc_id, page_no)
+        page_revisions.setdefault(page_key, set()).add(revision_key(item))
+        if not provenance and len(page_revisions[page_key]) > 1:
+            complete = False
         if key in seen:
             if (result_history or pinned) and source_version!=source_versions.get(key):
                 complete = False
             continue
         seen.add(key)
+        normalized_keys.append(key)
         source_versions[key] = source_version
         source_ref = provenance['source_id'] if provenance else str(item.get("source_id") or "").strip()[:80] or None
         if (result_history or pinned) and source_version is None:
@@ -211,7 +260,8 @@ def save_answer_evidence(chat_id, evidence_docs, requires_authorization=None, *,
                 "source_ref": source_ref,
                 "security_level": _cap_len(item.get("security_level"), 30),
                 "rank_no": rank_no,
-                **({'locator_json':json.dumps(provenance,ensure_ascii=False) if provenance else None} if structured or pinned else {}),
+                **({'locator_json':json.dumps(provenance or references.get(key),ensure_ascii=False)
+                    if provenance or references.get(key) else None} if structured or pinned or has_references else {}),
                 **({'source_version':source_version} if result_history or pinned else {}),
             }
         )
@@ -227,12 +277,17 @@ def save_answer_evidence(chat_id, evidence_docs, requires_authorization=None, *,
             if pinned and normalized:
                 from .feedback_access import capture_sources
                 sources = capture_sources(conn, [item for item in input_items if isinstance(item,dict) and item.get('doc_id') is not None], actor)
-                pins = {(source['doc_id'],source.get('page_no')):source for source in sources}
-                for row in normalized:
-                    source = pins[(row['doc_id'],row['page_no'])]
-                    row['locator_json'] = json.dumps({'schema':'answer-source-pin-v1',**source},sort_keys=True)
-            extra_column = ', SourceLocatorJson' if structured or pinned else ''
-            extra_value = ', :locator_json' if structured or pinned else ''
+                source_items = [item for item in input_items if isinstance(item, dict) and item.get('doc_id') is not None]
+                pins = {citation_key(item): source for item, source in zip(source_items, sources, strict=True)}
+                for row, identity in zip(normalized, normalized_keys, strict=True):
+                    source = pins[identity]
+                    from datetime import date
+                    row['locator_json'] = json.dumps({'schema':'answer-source-pin-v1',**source,
+                        'answer_contract':ANSWER_HISTORY_SCHEMA, 'actor_scope':_answer_scope(actor),
+                        'as_of':date.today().isoformat() if time_sensitive else None,
+                        'evidence_identity':identity, 'reference':references.get(identity)},sort_keys=True)
+            extra_column = ', SourceLocatorJson' if structured or pinned or has_references else ''
+            extra_value = ', :locator_json' if structured or pinned or has_references else ''
             if result_history or pinned:
                 extra_column += ', SourceVersion'
                 extra_value += ', :source_version'
@@ -258,7 +313,7 @@ def save_answer_evidence(chat_id, evidence_docs, requires_authorization=None, *,
                                   'RequiresAuthorization=excluded.RequiresAuthorization,IsComplete=excluded.IsComplete,'
                                   'EvidenceCount=excluded.EvidenceCount,SchemaVersion=excluded.SchemaVersion,IsStructuredComplete=excluded.IsStructuredComplete'),
                              {'chat':int(chat_id),'requires':int(requires),'complete':0 if structured else int(complete),
-                              'count':len(normalized),'schema':SCHEMA if structured else 'v1','structured_complete':int(complete) if structured else 0})
+                              'count':len(normalized),'schema':schema,'structured_complete':int(complete) if structured else 0})
                 save_history_result(conn, int(chat_id), advanced_rag, citation_cards)
                 return bool(complete)
             conn.execute(
@@ -272,13 +327,13 @@ def save_answer_evidence(chat_id, evidence_docs, requires_authorization=None, *,
                         IsComplete = :is_complete,
                         EvidenceCount = :evidence_count,
                         {'IsStructuredComplete = :structured_complete,' if structured else ''}
-                        SchemaVersion = '{SCHEMA if structured else 'v1'}',
+                        SchemaVersion = '{schema}',
                         UpdatedAt = GETDATE()
                     WHEN NOT MATCHED THEN INSERT
                         (ChatID, RequiresAuthorization, IsComplete, EvidenceCount, SchemaVersion{', IsStructuredComplete' if structured else ''})
                     VALUES
                         (:chat_id, :requires_authorization, :is_complete,
-                         :evidence_count, '{SCHEMA if structured else 'v1'}'{', :structured_complete' if structured else ''});
+                         :evidence_count, '{schema}'{', :structured_complete' if structured else ''});
                     """
                 ),
                 {
@@ -351,6 +406,8 @@ def _history_source_redactions(
     is_global_read_admin=False,
     strict_site_filter=True,
     structured_sources=None,
+    allow_history=False,
+    actor=None,
 ):
     """Return chat IDs whose complete evidence basis is no longer readable."""
     if not chat_ids:
@@ -421,6 +478,7 @@ def _history_source_redactions(
             """
             SELECT e.ChatID, e.EvidenceID, t.DocID, t.SecurityLevel, t.Site,
                    t.Servable, t.PublicationState, t.LifecycleStatus, t.ReviewStatus,
+                   t.IsCurrent, t.EffectiveStatus, t.EffectiveDate, t.ExpiryDate,
                    CASE WHEN """
             + department_match
             + f""" THEN 1 ELSE 0 END AS DepartmentAllowed
@@ -434,30 +492,43 @@ def _history_source_redactions(
     ).fetchall()
 
     observed_counts = {}
-    for (
-        chat_id,
-        _evidence_id,
-        doc_id,
-        security_level,
-        site,
-        servable,
-        publication_state,
-        lifecycle_status,
-        review_status,
-        department_allowed,
-    ) in rows:
+    for row in rows:
+        if len(row) >= 14:
+            (
+                chat_id, _evidence_id, doc_id, security_level, site,
+                servable, publication_state, lifecycle_status, review_status,
+                is_current, effective_status, effective_date, expiry_date,
+                department_allowed,
+            ) = row[:14]
+        else:
+            # Compatibility with isolated readers that predate the additive
+            # lifecycle columns; the real SQL schema always supplies them.
+            (chat_id, _evidence_id, doc_id, security_level, site, servable,
+             publication_state, lifecycle_status, review_status,
+             department_allowed) = row[:10]
+            is_current, effective_status, effective_date, expiry_date = True, "effective", None, None
         chat_id = int(chat_id)
         observed_counts[chat_id] = observed_counts.get(chat_id, 0) + 1
         if doc_id is None:
             redacted.add(chat_id)
             continue
-        if not bool(servable) or str(publication_state or "").strip().lower() != "published":
+        source_metadata = {
+            "servable": servable, "publication_state": publication_state,
+            "lifecycle_status": lifecycle_status, "review_status": review_status,
+            "is_current": is_current, "effective_status": effective_status,
+            "effective_date": effective_date, "expiry_date": expiry_date,
+        }
+        current_ok = (
+            bool(servable)
+            and str(publication_state or "").strip().lower() == "published"
+            and str(lifecycle_status or "").strip().lower() == "published"
+            and str(review_status or "").strip().lower() == "approved"
+            and bool(is_current)
+        )
+        if not current_ok and not (allow_history and is_history_servable(source_metadata)):
             redacted.add(chat_id)
             continue
-        if str(lifecycle_status or "").strip().lower() != "published" or str(review_status or "").strip().lower() != "approved":
-            redacted.add(chat_id)
-            continue
-        if is_global_read_admin:
+        if is_global_read_admin and bool(is_current):
             continue
         level = levels.get(str(security_level or "confidential").strip().lower(), 2)
         normalized_site = str(site or "").strip()
@@ -471,8 +542,11 @@ def _history_source_redactions(
     for chat_id, manifest in manifests.items():
         if manifest["requires"] and observed_counts.get(chat_id, 0) != manifest["count"]:
             redacted.add(chat_id)
+        if manifest['schema'] == ANSWER_HISTORY_SCHEMA and chat_id not in redacted:
+            if not _history_pins_current(conn, chat_id, actor, manifest["count"]):
+                redacted.add(chat_id)
         if manifest['schema'] == SCHEMA and chat_id not in redacted:
-            profile = {'roles':['admin'] if is_global_read_admin else [],'allowed_departments':departments,
+            profile = {'roles':(['admin'] if is_global_read_admin else []) + (['document_history_reader'] if allow_history else []),'allowed_departments':departments,
                        'allowed_sites':tuple(sites),'max_security_level':user_clearance}
             try:
                 cards = load_structured_history(conn,chat_id,profile)
@@ -498,6 +572,8 @@ def get_chat_history(
     strict_site_filter=True,
     *,
     db_engine=None,
+    allow_history=False,
+    actor=None,
 ):
     """Return only the caller's own chat session with evidence re-authorization."""
     selected_engine = resolve_engine(db_engine)
@@ -532,6 +608,7 @@ def get_chat_history(
                         is_global_read_admin=bool(is_admin),
                         strict_site_filter=strict_site_filter,
                         structured_sources=structured_sources,
+                        allow_history=allow_history, actor=actor,
                     )
                 except (EvidenceSnapshotLost, TimeoutError):
                     raise
@@ -569,7 +646,7 @@ def get_chat_history(
                     try:
                         result_payload = conn.execute(text(f'SELECT AdvancedRagJson FROM {table(conn,"ChatEvidenceManifest")} WHERE ChatID=:chat'),
                                                       {'chat':row[0]}).scalar()
-                        if result_payload is not None and not history_result_basis_current(conn, row[0]):
+                        if result_payload is not None and not history_result_basis_current(conn, row[0], allow_history=allow_history):
                             _redact_ids.add(row[0])
                             _assistant_content = 'Nội dung đã được ẩn vì không còn xác minh được nguồn.'
                             _assistant_imgs = []

@@ -52,7 +52,7 @@ def access_transaction(actor, *, db_engine=None, schema=True, review=True, check
 
 def source_allowed(conn, source, actor):
     try:
-        record = _source(conn, source['doc_id'], source['version_no'], actor)
+        record = _source(conn, source['doc_id'], source['version_no'], actor, historical=source.get('historical') is True)
         if source.get('snapshot_id'):
             if (not isinstance(source.get('provenance'),dict)
                     or not source_provenance_current(conn,source['provenance'],actor)):
@@ -100,7 +100,7 @@ def capture_sources(conn, docs, actor):
         if type(doc.get('doc_id')) is not int or type(doc.get('version_no')) is not int:
             raise PermissionError('Record unavailable')
         source = {'doc_id': doc.get('doc_id'), 'version_no': doc.get('version_no')}
-        if doc.get('source_hash') and doc.get('snapshot_id'):
+        if 'locator' in doc and doc.get('source_hash') and doc.get('snapshot_id'):
             source.update(source_hash=doc['source_hash'], snapshot_id=doc['snapshot_id'])
             if 'locator' in doc:
                 source['provenance'] = provenance_record(doc)
@@ -133,7 +133,9 @@ def pin_generation_sources(conn, docs, actor):
                 or type(page_no) is not int or item.get('calculation_provenance') or item.get('community_id')
                 or item.get('loai_du_lieu') in {'community_summary','grounded_calculation'}):
             raise PermissionError('Evidence cannot be certified')
-        record = _source(conn,item['doc_id'],item['version_no'],actor)
+        historical = bool(item.get('is_current') in (False, 0) or item.get('effective_status') in ('expired','superseded')
+                          or item.get('lifecycle_status') in ('archived','superseded','retired'))
+        record = _source(conn,item['doc_id'],item['version_no'],actor,historical=historical)
         page = conn.execute(text(f'SELECT TextExtract,LocalOCRText,VisionSummary FROM {table(conn,"DocumentPages")} '
                                 'WHERE DocID=:doc AND PageNo=:page'), {'doc':item['doc_id'],'page':page_no}).fetchone()
         original = str(item.get('text') or item.get('noi_dung_goc') or '')
@@ -145,7 +147,7 @@ def pin_generation_sources(conn, docs, actor):
         excerpt = ' '.join(original.split())
         if page is None or not excerpt or not any(excerpt in ' '.join(str(value or '').split()) for value in page):
             raise PermissionError('Evidence cannot be certified')
-        pin = {'schema':'answer-source-pin-v1','doc_id':item['doc_id'],'version_no':item['version_no'],
+        pin = {**({'historical':True} if historical else {}),'schema':'answer-source-pin-v1','doc_id':item['doc_id'],'version_no':item['version_no'],
                'page_no':page_no,'source_hash':page_hash(page),'context_hash':context_hash(conn,record,page_no)}
         result.append({**item,'evidence_pin':pin})
     return result
@@ -154,7 +156,7 @@ def pin_generation_sources(conn, docs, actor):
 def feedback_basis(conn, chat_id, actor, department, site, primary_doc_id=None):
     manifest = conn.execute(text(f'SELECT RequiresAuthorization,IsComplete,EvidenceCount,SchemaVersion '
                                  f'FROM {table(conn,"ChatEvidenceManifest")} WHERE ChatID=:chat'), {'chat': chat_id}).fetchone()
-    if not manifest or not manifest[0] or manifest[2] <= 0 or manifest[3] not in {'v1','source-locator-v2'}:
+    if not manifest or not manifest[0] or manifest[2] <= 0 or manifest[3] not in {'v1','source-locator-v2','verified-policy-v1'}:
         raise PermissionError('Record unavailable')
     structured = manifest[3] == 'source-locator-v2'
     if not manifest[1] and not structured:

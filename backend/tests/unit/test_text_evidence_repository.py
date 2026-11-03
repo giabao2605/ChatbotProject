@@ -47,6 +47,35 @@ def test_material_correction_requires_explicit_review_and_preserves_raw_source(t
         assert rejected['review_status'] == 'rejected' and rejected['raw_value'] == 'Inox 304'
 
 
+def test_business_context_is_source_bound_and_only_confirmed_after_review(text_store):
+    candidate = replace(
+        material(),
+        fact_id='leave-policy-1',
+        kind='business_fact',
+        subject='ngày nghỉ phép',
+        attributes=(('monthly_paid_days', '1'), ('carry_forward', 'allowed')),
+        applicability=('người lao động',),
+        activity_status='active',
+        valid_from='2026-01-01',
+        valid_until='2026-12-31',
+        confirmed_at='2026-01-02T00:00:00+00:00',
+        conflicts=(),
+    )
+    save_extracted_text_facts((candidate,), snapshot_id='s1', db_engine=text_store)
+    pending = list_document_text_facts(1, PROFILE, db_engine=text_store)['items'][0]
+    assert pending['review_status'] == 'pending'
+    assert pending['confirmed_at'] is None
+    assert pending['subject'] == 'ngày nghỉ phép'
+    assert pending['applicability'] == ['người lao động']
+
+    approved = review_text_fact(
+        candidate.fact_id, PROFILE, action='approve', note='Đã đối chiếu nguồn gốc',
+        db_engine=text_store,
+    )
+    assert approved['review_status'] == 'approved'
+    assert approved['confirmed_at']
+
+
 @pytest.mark.parametrize('change', [{'fact_id': ''}, {'source_hash': 'not-a-hash'}, {'extraction_method': ''}])
 def test_unbound_text_cannot_be_saved(text_store, change):
     with pytest.raises(ValueError):

@@ -60,8 +60,11 @@ def _public_fact(conn, row, profile):
 def _fact(payload):
     value = json.loads(payload)
     locator = value['locator']
-    return TextFact(**{**value, 'conflicts': tuple(value['conflicts']),
-                      'candidates': tuple(value['candidates']),
+    attributes = tuple(tuple(item) for item in (value.get('attributes') or ()))
+    return TextFact(**{**value, 'conflicts': tuple(value.get('conflicts') or ()),
+                      'candidates': tuple(value.get('candidates') or ()),
+                      'attributes': attributes,
+                      'applicability': tuple(value.get('applicability') or ()),
                       'locator': SourceLocator(**{**locator, 'bbox': tuple(locator['bbox']) if locator.get('bbox') else None})})
 
 
@@ -74,7 +77,9 @@ def _bound_fact(row):
 
 
 def save_extracted_text_facts(facts, *, snapshot_id, db_engine=None):
-    facts = tuple(replace(fact, review_status='pending', snapshot_id=snapshot_id, linked_step_fact_id=None, linked_bom_fact_id=None, linked_bom_fingerprint=None) for fact in facts)
+    facts = tuple(replace(fact, review_status='pending', snapshot_id=snapshot_id,
+                          linked_step_fact_id=None, linked_bom_fact_id=None,
+                          linked_bom_fingerprint=None, confirmed_at=None) for fact in facts)
     if not facts or len(facts) > 100000 or len({f.fact_id for f in facts}) != len(facts):
         raise ValueError('Unique technical fields required')
     if any(not f.fact_id or len(f.fact_id) > 450 or not f.extraction_method
@@ -176,7 +181,8 @@ def review_text_fact(fact_id, profile, *, action, value_text=None, sequence_numb
         reviewed = replace(original, value=value, sequence_number=number, linked_step_fact_id=link,
                            linked_bom_fact_id=bom, linked_bom_fingerprint=fingerprint,
                            review_status='approved' if action == 'approve' else 'rejected',
-                           conflicts=() if action == 'approve' else original.conflicts)
+                           conflicts=() if action == 'approve' else original.conflicts,
+                           confirmed_at=(datetime.now(timezone.utc).isoformat() if action == 'approve' else None))
         conn.execute(text(f"UPDATE {_table(conn, 'StructuredTextFact')} SET ReviewedPayloadJson=:payload,ReviewStatus=:status,ReviewedBy=:uid,ReviewNote=:note,UpdatedAt=:now WHERE FactID=:id"),
                      {'payload': _json(reviewed), 'status': reviewed.review_status, 'uid': profile['user_id'],
                       'note': note, 'now': datetime.now(timezone.utc), 'id': fact_id})

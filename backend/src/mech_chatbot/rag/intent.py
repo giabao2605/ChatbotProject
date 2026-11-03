@@ -430,6 +430,16 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
         intent_data["metadata_document_type_preference"] = business_intent["document_types"]
     vp = intent_data["version_policy"]
     d_vers = intent_data["detected_versions"]
+    if (user_roles
+            and vp in {"specific_version", "compare_versions", "include_archived", "version_history"}):
+        from mech_chatbot.auth.authorization import role_allows
+        if not role_allows(user_roles, "document_history_reader"):
+            # Historical retrieval is a separate capability.  Keep the query
+            # fail-closed on the current corpus instead of letting an admin or
+            # reviewer role imply access to old source bytes.
+            intent_data["history_access_denied"] = True
+            intent_data["version_policy"] = "current_only"
+            vp = "current_only"
     
     if vp in ["current_only", "all_current_variants"]:
         must_conditions.append(models.FieldCondition(key="metadata.lifecycle_status", match=models.MatchValue(value="published")))
@@ -481,6 +491,11 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
     rbac_filter = create_rbac_filter(user_department, user_roles, allowed_departments=allowed_departments, max_security_level=max_security_level, allowed_sites=allowed_sites)
     if rbac_filter:
         must_conditions.append(rbac_filter)
+    if intent_data.get("history_access_denied"):
+        # Do not silently answer a historical request from the current version.
+        must_conditions.append(models.FieldCondition(
+            key="metadata.version_no", match=models.MatchValue(value=-2147483648)
+        ))
 
     if not new_part_ids:
         # Fallback filter
@@ -551,6 +566,42 @@ def _previous_user_request_scope(chat_history):
             return None
         return previous
     return None
+
+
+_REWRITE_PROTECTED_TOKEN = re.compile(
+    r"(?<!\w)(?:(?:v|version|rev(?:ision)?)\s*\d+|"
+    r"[+-]?\d+(?:[\.,]\d+)?(?:\s*(?:mm|cm|m|kg|g|h|giờ|gio|phút|phut|ngày|ngay|tháng|thang|năm|nam|%)\b)?|"
+    r"\d{1,4}[/-]\d{1,2}(?:[/-]\d{1,4})?|"
+    r"(?:không|khong|chưa|chua|không được|khong duoc|không có|khong co|ngoại trừ|ngoai tru|trừ|tru|"
+    r"no|not|without)"
+    r")(?!\w)",
+    re.IGNORECASE,
+)
+_REWRITE_PROTECTED_FILE = re.compile(r"(?<!\w)[\w.-]+\.(?:pdf|docx?|xlsx?|csv|md)\b", re.IGNORECASE)
+
+
+def _fold_text(value):
+    normalized = unicodedata.normalize("NFKD", str(value or "").casefold())
+    return "".join(char for char in normalized if not unicodedata.combining(char)).replace("đ", "d")
+
+
+def _rewrite_preserves_request_constraints(original, rewritten):
+    """Reject a rewrite that drops a code, quantity, date or negation."""
+    original_text = str(original or "")
+    rewritten_text = str(rewritten or "")
+    if not rewritten_text.strip():
+        return False
+    original_folded = _fold_text(original_text)
+    rewritten_folded = _fold_text(rewritten_text)
+    for token in _REWRITE_PROTECTED_TOKEN.findall(original_folded):
+        if token.casefold() not in rewritten_folded:
+            return False
+    for filename in _REWRITE_PROTECTED_FILE.findall(original_text):
+        if _fold_text(filename) not in rewritten_folded:
+            return False
+    original_codes = {str(code).casefold() for code in extract_explicit_codes(original_text)}
+    rewritten_codes = {str(code).casefold() for code in extract_explicit_codes(rewritten_text)}
+    return rewritten_codes.issubset(original_codes)
 
 
 def analyze_context(user_question, chat_history=None, current_part_ids=None, active_doc_refs=None, trace_id=None, invoke_provider=None, runtime=None, pending_candidates=None):
@@ -680,6 +731,9 @@ Quy tac:
         standalone = parsed.get("standalone_question") or user_question
         if not isinstance(standalone, str) or not standalone.strip():
             standalone = user_question
+        if not _rewrite_preserves_request_constraints(user_question, standalone):
+            logger.warning("analyze_context rewrite dropped a protected request constraint; using original question")
+            return {**fallback, 'context_action': action, 'llm_resolved': False}
         if needs_reference and (has_context_reference(standalone) or has_missing_referent(standalone)) and not extract_explicit_codes(standalone):
             return {**fallback, 'clarification_required': True}
         return {"context_action": action, "standalone_question": standalone.strip(), "llm_resolved": True}

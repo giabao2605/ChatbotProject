@@ -102,6 +102,8 @@ def select_grounded_calculation_documents(documents):
 
 def select_grounded_answer_citation_documents(documents, branches=()):
     """Keep calculation evidence plus evidence from answerable branches."""
+    from mech_chatbot.domain.evidence_identity import evidence_key
+
     calculation_documents = select_grounded_calculation_documents(documents)
     allowed_branch_sources = set()
     for branch in branches or ():
@@ -116,12 +118,13 @@ def select_grounded_answer_citation_documents(documents, branches=()):
             except (TypeError, ValueError):
                 continue
     selected = list(calculation_documents)
-    seen = {_document_source_key(document) for document in selected}
+    seen = {evidence_key(document) for document in selected}
     for document in documents or ():
         source_key = _document_source_key(document)
-        if source_key in allowed_branch_sources and source_key not in seen:
+        identity = evidence_key(document)
+        if source_key in allowed_branch_sources and identity not in seen:
             selected.append(document)
-            seen.add(source_key)
+            seen.add(identity)
     return selected
 
 

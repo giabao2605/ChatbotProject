@@ -174,6 +174,19 @@ def test_grounded_math_citations_preserve_other_answered_branch_evidence():
     ) == [calculation, branch_document]
 
 
+def test_grounded_branch_citations_keep_distinct_excerpts_on_same_page():
+    first = SimpleNamespace(page_content="Row A: 2 kg", metadata={
+        "doc_id": 44, "trang_so": 2, "version_no": 1, "row_index": 0,
+    })
+    second = SimpleNamespace(page_content="Row B: 3 kg", metadata={
+        **first.metadata, "row_index": 1,
+    })
+    branches = [{"outcome": "full_answer", "citations": [{"doc_id": 44, "trang": 2}]}]
+    assert select_grounded_answer_citation_documents(
+        [first, second, first], branches,
+    ) == [first, second]
+
+
 def test_bom_total_uses_only_explicitly_named_operands_when_present():
     facts = (
         fact("2", "kg", "BOM-1", label="PART-A-100"),

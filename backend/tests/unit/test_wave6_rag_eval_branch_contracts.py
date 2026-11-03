@@ -193,6 +193,13 @@ def test_answer_checks_cover_parsing_units_and_citations():
     assert answer_checks.source_id_for_evidence_quote("evidence", docs) == "D3P2"
     assert answer_checks.extract_source_ids("[src: D3P2]") == {"D3P2"}
 
+    assert answer_checks.has_unsupported_claim_sources(
+        "Áp suất là 5 bar [SRC:D3P2]", docs
+    ) == (True, ["D3P2"])
+    assert not answer_checks.has_unsupported_claim_sources(
+        "evidence [SRC:D3P2]", docs
+    )[0]
+
 
 def test_answer_checks_accept_quantity_and_unit_split_across_markdown_columns():
     context = """

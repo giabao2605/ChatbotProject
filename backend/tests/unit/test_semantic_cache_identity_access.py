@@ -16,7 +16,7 @@ from .test_feedback_scoped_flow import scoped_db
 pytestmark = pytest.mark.unit
 
 
-def test_cache_key_distinguishes_language_model_and_display_is_not_a_grant():
+def test_cache_key_distinguishes_language_model_and_department_applicability():
     args = ("Technical", ["CHUNG"], "internal", ["HQ"], ["viewer"])
     baseline = semantic_cache.scope_signature(*args, response_language="vi",
         pipeline_environment={"GPT_MODEL_NAME": "model-a"})
@@ -24,8 +24,42 @@ def test_cache_key_distinguishes_language_model_and_display_is_not_a_grant():
         pipeline_environment={"GPT_MODEL_NAME": "model-a"})
     assert baseline != semantic_cache.scope_signature(*args, response_language="vi",
         pipeline_environment={"GPT_MODEL_NAME": "model-b"})
-    assert baseline == semantic_cache.scope_signature("Other display", *args[1:],
+    assert baseline != semantic_cache.scope_signature("Other display", *args[1:],
         response_language="vi", pipeline_environment={"GPT_MODEL_NAME": "model-a"})
+
+
+@pytest.mark.parametrize("semantic", [False, True])
+def test_changed_verifier_contract_cannot_reuse_previous_cached_answer(monkeypatch, semantic):
+    args = ("Technical", ["CHUNG"], "internal", ["HQ"], ["viewer"])
+    current = semantic_cache.scope_signature(*args)
+    with monkeypatch.context() as previous:
+        previous.setattr(semantic_cache, "_VERIFIER_SHA256", "previous-verifier-renderer", raising=False)
+        old = semantic_cache.scope_signature(*args)
+    assert current != old
+    row = {"answer": "Previous incomplete answer", "embedding": "[1.0]"}
+    monkeypatch.setattr(repository, "sc_get_exact", lambda scope, *_: row if scope == old else None)
+    monkeypatch.setattr(repository, "sc_get_candidates", lambda scope, *_: [row] if scope == old else [])
+    monkeypatch.setattr(repository, "sc_record_lookup", Mock())
+    validated = Mock(side_effect=AssertionError("Old namespace must not reach authorization validation"))
+    monkeypatch.setattr(semantic_cache, "_validated_cache_payload", validated)
+    hit = (semantic_cache.lookup("Procedure?", [1.0], current) if semantic
+           else semantic_cache.lookup_exact("Procedure?", current))
+    assert hit is None
+    validated.assert_not_called()
+
+
+def test_math_scope_contract_does_not_reuse_previous_answer_namespace(monkeypatch):
+    args = ("Technical", ["CHUNG"], "internal", ["HQ"], ["viewer"])
+    current = semantic_cache.scope_signature(*args)
+    monkeypatch.setattr(semantic_cache, "_ANSWER_CONTRACT", "grounded-answer-v10-applicability")
+    assert current != semantic_cache.scope_signature(*args)
+
+
+def test_single_intent_contract_does_not_reuse_previous_math_scope_namespace(monkeypatch):
+    args = ("Technical", ["CHUNG"], "internal", ["HQ"], ["viewer"])
+    current = semantic_cache.scope_signature(*args)
+    monkeypatch.setattr(semantic_cache, "_ANSWER_CONTRACT", "grounded-answer-v11-bom-scope")
+    assert current != semantic_cache.scope_signature(*args)
 
 
 @pytest.mark.parametrize("semantic", [False, True])
@@ -84,3 +118,12 @@ def test_cache_rechecks_current_permissions_and_version(monkeypatch, semantic, f
 def test_current_refusals_are_not_cacheable(answer):
     from mech_chatbot.rag.semantic_cache import _looks_like_refusal
     assert _looks_like_refusal(answer)
+
+
+@pytest.mark.parametrize("question", [
+    "Cho xem lịch sử phiên bản cũ",
+    "Liệt kê đầy đủ tất cả quy định liên quan",
+])
+def test_scope_sensitive_questions_bypass_semantic_replay(question):
+    assert semantic_cache._replay_is_scope_sensitive(question)
+    assert semantic_cache.lookup_exact(question, "scope") is None

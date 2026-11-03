@@ -158,8 +158,25 @@ class RagRequest:
     text_query: bool = False
     candidate_selection_context: CandidateSelectionContext | None = None
     scope_total: str | None = None
+    search_mode: str = "quick"
+    continuation_cursor: str | None = None
 
     def __post_init__(self):
+        from mech_chatbot.rag.search_mode import resolve_search_mode
+
+        typed_action = any((self.scope_comparison, self.graph_query, self.bom_rollup,
+                            self.query_plan, self.text_query, self.candidate_selection_context, self.scope_total))
+        mode = resolve_search_mode(
+            self.search_mode,
+            "" if typed_action and self.search_mode == "quick" else self.question,
+            current_part_ids=self.current_part_ids,
+        )
+        from mech_chatbot.rag.search_mode import validate_continuation
+        validate_continuation(mode, self.continuation_cursor)
+        object.__setattr__(self, "search_mode", mode)
+        if mode == "comprehensive" and any((self.image_path, self.scope_comparison, self.graph_query,
+                self.bom_rollup, self.query_plan, self.text_query, self.candidate_selection_context, self.scope_total)):
+            raise ValueError("Comprehensive search requires a standalone text request")
         if self.scope_total is not None and (
                 not isinstance(self.scope_total, str) or not self.scope_total.strip() or len(self.scope_total) > 255
                 or self.text_query or any(value is not None for value in (self.scope_comparison, self.graph_query,
@@ -399,6 +416,7 @@ class _ExecutionState:
     query_v2_authorizer: Any | None = field(default=None, repr=False)
     retrieval_adapter: Any | None = field(default=None, repr=False)
     provider_adapter: Any | None = field(default=None, repr=False)
+    comprehensive_cursor_secret: str = field(default="", repr=False)
     refusal_reason: str | None = None
     generation_outcome: Any | None = field(default=None, repr=False)
     phase: str = "created"
@@ -753,6 +771,12 @@ def _successful_rag_events(
     generation_metrics = final_diagnostics.get("generation_metrics")
     if isinstance(generation_metrics, dict):
         generation_metrics["provider_retries"] = state.budget.provider_retries
+        status = generation_metrics.get("verification_status")
+        if status in {"verified", "partial", "insufficient"}:
+            final_diagnostics["verification_status"] = status
+            if status != "verified":
+                final_diagnostics["answer_outcome"] = (
+                    "partial_answer" if status == "partial" else "insufficient_evidence")
     state.capture_budget(final_diagnostics)
     state.checkpoint("completion")
     final_answer = "".join(answer_parts)
@@ -847,6 +871,12 @@ def _failed_rag_event(
     generation_metrics = failure_diagnostics.get("generation_metrics")
     if isinstance(generation_metrics, dict):
         generation_metrics["provider_retries"] = state.budget.provider_retries
+        status = generation_metrics.get("verification_status")
+        if status in {"verified", "partial", "insufficient"}:
+            failure_diagnostics["verification_status"] = status
+            if status != "verified":
+                failure_diagnostics["answer_outcome"] = (
+                    "partial_answer" if status == "partial" else "insufficient_evidence")
     return RagFailed(
         code=type(exc).__name__,
         message=str(exc),
@@ -886,7 +916,9 @@ class DefaultRagExecutor:
         budget_limits: RequestBudgetLimits | None = None,
         math_v2_authorizer: Callable | None = None,
         graph_v2_authorizer: Callable | None = None,
+        comprehensive_cursor_secret: str = "",
     ) -> None:
+        self._comprehensive_cursor_secret = comprehensive_cursor_secret
         self._execute_pipeline = execute_pipeline
         self._retrieval_adapter = retrieval_adapter
         self._provider_adapter = provider_adapter
@@ -926,7 +958,7 @@ class DefaultRagExecutor:
             stack.callback(_REQUEST_ACTOR.reset, actor_token)
             context_token = _EXECUTION_CONTEXT.set(invocation.mode)
             stack.callback(_EXECUTION_CONTEXT.reset, context_token)
-            if invocation.mode in {"evaluation", "pilot_replay"} or request.text_query:
+            if invocation.mode in {"evaluation", "pilot_replay"} or request.text_query or request.search_mode == "comprehensive":
                 stack.enter_context(replay_cache_disabled(True))
             if invocation.mode == "pilot_replay":
                 stack.enter_context(redact_sensitive_trace_fields(True))
@@ -959,6 +991,7 @@ class DefaultRagExecutor:
             provider_adapter=self._provider_adapter,
             budget_limits=self._budget_limits,
         )
+        state.comprehensive_cursor_secret = self._comprehensive_cursor_secret
         budget_token = _REQUEST_BUDGET.set(state.budget)
         checkpoint_token = _REQUEST_CHECKPOINT.set(state.checkpoint)
         try:

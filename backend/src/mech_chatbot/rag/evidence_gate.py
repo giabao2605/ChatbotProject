@@ -49,6 +49,17 @@ class EvidenceDecision:
     def answerable(self) -> bool:
         return self.state is EvidenceState.SUFFICIENT
 
+    @property
+    def verification_status(self) -> str:
+        """Expose whether the optional semantic verifier actually ran."""
+        if self.telemetry_status == "verifier_pass":
+            return "verified"
+        if self.telemetry_status == "verifier_unavailable":
+            return "unavailable"
+        if self.telemetry_status == "verifier_disabled":
+            return "unverified"
+        return "deterministic"
+
 
 @dataclass(frozen=True)
 class NumberViolation:

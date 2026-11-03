@@ -181,6 +181,9 @@ def _lookup_semantic_cache(
                         None,
                     ),
                     response_language=prepared.response_language,
+                    user_id=state.request.access.user_id,
+                    username=state.request.access.username,
+                    execution_context=state.invocation.mode,
                 )
             hit = semantic_cache.lookup(
                 prepared.user_question,

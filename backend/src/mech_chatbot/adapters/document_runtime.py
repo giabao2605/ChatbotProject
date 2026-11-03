@@ -250,13 +250,19 @@ class SqlAppSupportQueries:
             keys.append(f":{key}")
             params[key] = chat_id
         with evidence_read_connection(engine) as conn:
+            if conn.dialect.name == 'sqlite':
+                has_locator = any(row[1] == 'SourceLocatorJson' for row in
+                                  conn.execute(text('PRAGMA table_info(AnswerSource)')).fetchall())
+            else:
+                has_locator = conn.execute(text("SELECT COL_LENGTH('dbo.AnswerSource','SourceLocatorJson')")).scalar() is not None
+            locator_column = 'a.SourceLocatorJson' if has_locator else 'NULL'
             rows = conn.execute(
                 text(
-                    """
+                    f"""
                     SELECT a.ChatID, a.DocID, a.FileName, a.VersionNo, a.ChunkRef, a.Score,
                            CASE WHEN NULLIF(LTRIM(RTRIM(p.VisionSummary)), '') IS NOT NULL
                                       AND p.ImagePath IS NOT NULL
-                                THEN 1 ELSE 0 END AS HasVision
+                                THEN 1 ELSE 0 END AS HasVision, {locator_column}
                     FROM dbo.AnswerSource a
                     LEFT JOIN dbo.DocumentPages p
                       ON p.DocID = a.DocID

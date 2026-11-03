@@ -1,0 +1,517 @@
+{
+  "schema": "gd1-holdout-v1",
+  "execution_status": "not_executed_or_used_for_tuning",
+  "classification": "new_synthetic_acceptance_contract; real_business_acceptance_pending",
+  "as_of": "2026-10-31",
+  "documents": [
+    {
+      "id": "travel",
+      "origin": "authored_diagnostic_fixture_not_company_policy",
+      "text": "Nhân viên đi công tác trong nước được tạm ứng tối đa 700000 đồng mỗi chuyến. Phải nộp chứng từ trong 5 ngày sau khi về.",
+      "metadata": {
+        "doc_id": 201,
+        "version_no": 1,
+        "trang_so": 1,
+        "file_goc": "travel-rule.md",
+        "domain": "hr",
+        "security_level": "internal",
+        "external_processing_policy": "all_external",
+        "servable": true,
+        "publication_state": "published",
+        "lifecycle_status": "published",
+        "review_status": "approved",
+        "effective_status": "effective",
+        "is_current": true,
+        "site": "HCM",
+        "phong_ban_quyen": [
+          "HR"
+        ],
+        "owner_department": "HR"
+      }
+    },
+    {
+      "id": "travel_copy",
+      "origin": "authored_diagnostic_fixture_not_company_policy",
+      "text": "Nhân viên đi công tác trong nước được tạm ứng tối đa 700000 đồng mỗi chuyến.",
+      "metadata": {
+        "doc_id": 202,
+        "version_no": 1,
+        "trang_so": 1,
+        "file_goc": "travel-handbook.md",
+        "domain": "hr",
+        "security_level": "internal",
+        "external_processing_policy": "all_external",
+        "servable": true,
+        "publication_state": "published",
+        "lifecycle_status": "published",
+        "review_status": "approved",
+        "effective_status": "effective",
+        "is_current": true,
+        "site": "HCM",
+        "phong_ban_quyen": [
+          "HR"
+        ],
+        "owner_department": "HR"
+      }
+    },
+    {
+      "id": "travel_conflict",
+      "origin": "authored_diagnostic_fixture_not_company_policy",
+      "text": "Nhân viên đi công tác trong nước được tạm ứng tối đa 900000 đồng mỗi chuyến.",
+      "metadata": {
+        "doc_id": 203,
+        "version_no": 1,
+        "trang_so": 1,
+        "file_goc": "travel-notice.md",
+        "domain": "hr",
+        "security_level": "internal",
+        "external_processing_policy": "all_external",
+        "servable": true,
+        "publication_state": "published",
+        "lifecycle_status": "published",
+        "review_status": "approved",
+        "effective_status": "effective",
+        "is_current": true,
+        "site": "HCM",
+        "phong_ban_quyen": [
+          "HR"
+        ],
+        "owner_department": "HR"
+      }
+    },
+    {
+      "id": "foreign",
+      "origin": "authored_diagnostic_fixture_not_company_policy",
+      "text": "Nhân viên đi công tác nước ngoài được tạm ứng 200 USD mỗi ngày.",
+      "metadata": {
+        "doc_id": 204,
+        "version_no": 1,
+        "trang_so": 1,
+        "file_goc": "overseas.md",
+        "domain": "hr",
+        "security_level": "internal",
+        "external_processing_policy": "all_external",
+        "servable": true,
+        "publication_state": "published",
+        "lifecycle_status": "published",
+        "review_status": "approved",
+        "effective_status": "effective",
+        "is_current": true,
+        "site": "HCM",
+        "phong_ban_quyen": [
+          "HR"
+        ],
+        "owner_department": "HR"
+      }
+    },
+    {
+      "id": "training",
+      "origin": "authored_diagnostic_fixture_not_company_policy",
+      "text": "Chương trình đào tạo vận hành gồm 6 buổi. Chưa ghi ngày bắt đầu hay trạng thái đang thực hiện.",
+      "metadata": {
+        "doc_id": 205,
+        "version_no": 1,
+        "trang_so": 1,
+        "file_goc": "training.md",
+        "domain": "hr",
+        "security_level": "internal",
+        "external_processing_policy": "all_external",
+        "servable": true,
+        "publication_state": "published",
+        "lifecycle_status": "published",
+        "review_status": "approved",
+        "effective_status": "effective",
+        "is_current": true,
+        "site": "HCM",
+        "phong_ban_quyen": [
+          "HR"
+        ],
+        "owner_department": "HR"
+      }
+    },
+    {
+      "id": "travel_old",
+      "origin": "authored_diagnostic_fixture_not_company_policy",
+      "text": "Nhân viên đi công tác trong nước được tạm ứng 400000 đồng mỗi chuyến.",
+      "metadata": {
+        "doc_id": 206,
+        "version_no": 1,
+        "trang_so": 1,
+        "file_goc": "travel-old.md",
+        "domain": "hr",
+        "security_level": "internal",
+        "external_processing_policy": "all_external",
+        "servable": true,
+        "publication_state": "published",
+        "lifecycle_status": "archived",
+        "review_status": "approved",
+        "effective_status": "expired",
+        "is_current": false,
+        "site": "HCM",
+        "phong_ban_quyen": [
+          "HR"
+        ],
+        "owner_department": "HR"
+      }
+    },
+    {
+      "id": "quality_table",
+      "origin": "authored_diagnostic_fixture_not_company_policy",
+      "text": "| Hạng | Áp suất | Điều kiện |\n|---|---|---|\n| A | 4 bar | Nguội |\n| B | 6 bar | Nguội |\nKhông áp dụng khi nóng.",
+      "metadata": {
+        "doc_id": 207,
+        "version_no": 1,
+        "trang_so": 1,
+        "file_goc": "pressure.md",
+        "domain": "hr",
+        "security_level": "internal",
+        "external_processing_policy": "all_external",
+        "servable": true,
+        "publication_state": "published",
+        "lifecycle_status": "published",
+        "review_status": "approved",
+        "effective_status": "effective",
+        "is_current": true,
+        "site": "HCM",
+        "phong_ban_quyen": [
+          "HR"
+        ],
+        "owner_department": "HR"
+      }
+    },
+    {
+      "id": "alias_new",
+      "origin": "authored_diagnostic_fixture_not_company_policy",
+      "text": "Trong đội bảo trì, chim bạc là tên gọi của máy bơm phụ. Kiểm tra mỗi 14 ngày.",
+      "metadata": {
+        "doc_id": 208,
+        "version_no": 1,
+        "trang_so": 1,
+        "file_goc": "maintenance-glossary.md",
+        "domain": "hr",
+        "security_level": "internal",
+        "external_processing_policy": "all_external",
+        "servable": true,
+        "publication_state": "published",
+        "lifecycle_status": "published",
+        "review_status": "approved",
+        "effective_status": "effective",
+        "is_current": true,
+        "site": "HCM",
+        "phong_ban_quyen": [
+          "HR"
+        ],
+        "owner_department": "HR"
+      }
+    }
+  ],
+  "cases": [
+    {
+      "id": "H01",
+      "question": "Nhân viên công tác trong nước được tạm ứng tối đa bao nhiêu?",
+      "sources": [
+        "travel"
+      ],
+      "expected_contains": [
+        "700000"
+      ],
+      "forbidden_claims": [],
+      "expected_source_ids": [
+        201
+      ],
+      "evidence_quotes": [
+        {
+          "source_id": "travel",
+          "quote": "Nhân viên đi công tác trong nước được tạm ứng tối đa 700000 đồng mỗi chuyến. Phải nộp chứng từ trong 5 ngày sau khi về."
+        }
+      ],
+      "actor": "HR/viewer/internal/HCM",
+      "applicability": "as explicitly stated by each source"
+    },
+    {
+      "id": "H02",
+      "question": "Theo travel-rule.md, nhân viên công tác trong nước được tạm ứng tối đa bao nhiêu?",
+      "sources": [
+        "travel"
+      ],
+      "expected_contains": [
+        "700000"
+      ],
+      "forbidden_claims": [],
+      "expected_source_ids": [
+        201
+      ],
+      "evidence_quotes": [
+        {
+          "source_id": "travel",
+          "quote": "Nhân viên đi công tác trong nước được tạm ứng tối đa 700000 đồng mỗi chuyến. Phải nộp chứng từ trong 5 ngày sau khi về."
+        }
+      ],
+      "actor": "HR/viewer/internal/HCM",
+      "applicability": "as explicitly stated by each source"
+    },
+    {
+      "id": "H03",
+      "question": "Đi làm việc ở tỉnh khác thì ứng trước được mấy tiền?",
+      "sources": [
+        "travel"
+      ],
+      "expected_contains": [
+        "700000"
+      ],
+      "forbidden_claims": [],
+      "expected_source_ids": [
+        201
+      ],
+      "evidence_quotes": [
+        {
+          "source_id": "travel",
+          "quote": "Nhân viên đi công tác trong nước được tạm ứng tối đa 700000 đồng mỗi chuyến. Phải nộp chứng từ trong 5 ngày sau khi về."
+        }
+      ],
+      "actor": "HR/viewer/internal/HCM",
+      "applicability": "as explicitly stated by each source"
+    },
+    {
+      "id": "H04",
+      "question": "Các tài liệu nào nói đến mức tạm ứng chuyến đi trong nước?",
+      "sources": [
+        "travel",
+        "travel_copy"
+      ],
+      "expected_contains": [
+        "700000"
+      ],
+      "forbidden_claims": [],
+      "expected_source_ids": [
+        201,
+        202
+      ],
+      "evidence_quotes": [
+        {
+          "source_id": "travel",
+          "quote": "Nhân viên đi công tác trong nước được tạm ứng tối đa 700000 đồng mỗi chuyến. Phải nộp chứng từ trong 5 ngày sau khi về."
+        },
+        {
+          "source_id": "travel_copy",
+          "quote": "Nhân viên đi công tác trong nước được tạm ứng tối đa 700000 đồng mỗi chuyến."
+        }
+      ],
+      "actor": "HR/viewer/internal/HCM",
+      "applicability": "as explicitly stated by each source"
+    },
+    {
+      "id": "H05",
+      "question": "Mức tạm ứng chuyến đi trong nước thống nhất chưa?",
+      "sources": [
+        "travel",
+        "travel_conflict"
+      ],
+      "expected_contains": [
+        "700000",
+        "900000"
+      ],
+      "forbidden_claims": [
+        "tất cả thống nhất"
+      ],
+      "expected_source_ids": [
+        201,
+        203
+      ],
+      "evidence_quotes": [
+        {
+          "source_id": "travel",
+          "quote": "Nhân viên đi công tác trong nước được tạm ứng tối đa 700000 đồng mỗi chuyến. Phải nộp chứng từ trong 5 ngày sau khi về."
+        },
+        {
+          "source_id": "travel_conflict",
+          "quote": "Nhân viên đi công tác trong nước được tạm ứng tối đa 900000 đồng mỗi chuyến."
+        }
+      ],
+      "actor": "HR/viewer/internal/HCM",
+      "applicability": "as explicitly stated by each source"
+    },
+    {
+      "id": "H06",
+      "question": "Tạm ứng chuyến đi trong nước bao nhiêu?",
+      "sources": [
+        "travel",
+        "foreign"
+      ],
+      "expected_contains": [
+        "700000"
+      ],
+      "forbidden_claims": [
+        "Gán mức 200 USD mỗi ngày của công tác nước ngoài cho chuyến đi trong nước."
+      ],
+      "expected_source_ids": [
+        201
+      ],
+      "evidence_quotes": [
+        {
+          "source_id": "travel",
+          "quote": "Nhân viên đi công tác trong nước được tạm ứng tối đa 700000 đồng mỗi chuyến. Phải nộp chứng từ trong 5 ngày sau khi về."
+        },
+        {
+          "source_id": "foreign",
+          "quote": "Nhân viên đi công tác nước ngoài được tạm ứng 200 USD mỗi ngày."
+        }
+      ],
+      "actor": "HR/viewer/internal/HCM",
+      "applicability": "as explicitly stated by each source",
+      "optional_contrast_source_ids": [
+        204
+      ]
+    },
+    {
+      "id": "H07",
+      "question": "Chương trình đào tạo nào đang thực hiện?",
+      "sources": [
+        "training"
+      ],
+      "expected_contains": [
+        "6 buổi",
+        "chưa"
+      ],
+      "forbidden_claims": [
+        "đang thực hiện 6 buổi"
+      ],
+      "expected_source_ids": [
+        205
+      ],
+      "evidence_quotes": [
+        {
+          "source_id": "training",
+          "quote": "Chương trình đào tạo vận hành gồm 6 buổi. Chưa ghi ngày bắt đầu hay trạng thái đang thực hiện."
+        }
+      ],
+      "actor": "HR/viewer/internal/HCM",
+      "applicability": "as explicitly stated by each source"
+    },
+    {
+      "id": "H08",
+      "question": "Quy định tạm ứng trước đây như thế nào?",
+      "sources": [
+        "travel_old"
+      ],
+      "expected_contains": [
+        "400000"
+      ],
+      "forbidden_claims": [],
+      "expected_source_ids": [
+        206
+      ],
+      "evidence_quotes": [
+        {
+          "source_id": "travel_old",
+          "quote": "Nhân viên đi công tác trong nước được tạm ứng 400000 đồng mỗi chuyến."
+        }
+      ],
+      "actor": "HR/viewer/document_history_reader/internal/HCM; document grant retained",
+      "applicability": "as explicitly stated by each source"
+    },
+    {
+      "id": "H09",
+      "question": "Hạng A nguội có áp suất bao nhiêu?",
+      "sources": [
+        "quality_table"
+      ],
+      "expected_contains": [
+        "4 bar"
+      ],
+      "forbidden_claims": [
+        "Gán 6 bar của hàng B cho hàng A hoặc áp dụng 4 bar khi nóng."
+      ],
+      "expected_source_ids": [
+        207
+      ],
+      "evidence_quotes": [
+        {
+          "source_id": "quality_table",
+          "quote": "| Hạng | Áp suất | Điều kiện |\n|---|---|---|\n| A | 4 bar | Nguội |\n| B | 6 bar | Nguội |\nKhông áp dụng khi nóng."
+        }
+      ],
+      "actor": "HR/viewer/internal/HCM",
+      "applicability": "as explicitly stated by each source"
+    },
+    {
+      "id": "H10",
+      "question": "Chim bạc cần kiểm tra bao lâu một lần?",
+      "sources": [
+        "alias_new"
+      ],
+      "expected_contains": [
+        "14 ngày"
+      ],
+      "forbidden_claims": [],
+      "expected_source_ids": [
+        208
+      ],
+      "evidence_quotes": [
+        {
+          "source_id": "alias_new",
+          "quote": "Trong đội bảo trì, chim bạc là tên gọi của máy bơm phụ. Kiểm tra mỗi 14 ngày."
+        }
+      ],
+      "actor": "HR/viewer/internal/HCM",
+      "applicability": "as explicitly stated by each source"
+    },
+    {
+      "id": "H11",
+      "question": "Hạn quyết toán và mức phạt nộp muộn là bao nhiêu?",
+      "sources": [
+        "travel"
+      ],
+      "expected_contains": [
+        "5 ngày",
+        "chưa"
+      ],
+      "forbidden_claims": [
+        "phạt 50000"
+      ],
+      "expected_source_ids": [
+        201
+      ],
+      "evidence_quotes": [
+        {
+          "source_id": "travel",
+          "quote": "Nhân viên đi công tác trong nước được tạm ứng tối đa 700000 đồng mỗi chuyến. Phải nộp chứng từ trong 5 ngày sau khi về."
+        }
+      ],
+      "actor": "HR/viewer/internal/HCM",
+      "applicability": "as explicitly stated by each source"
+    },
+    {
+      "id": "H12",
+      "question": "Cho xem toàn bộ nguồn về tạm ứng được phép đọc.",
+      "sources": [
+        "travel",
+        "travel_copy"
+      ],
+      "expected_contains": [
+        "700000"
+      ],
+      "forbidden_claims": [
+        "chỉ có đúng"
+      ],
+      "expected_source_ids": [
+        201,
+        202
+      ],
+      "evidence_quotes": [
+        {
+          "source_id": "travel",
+          "quote": "Nhân viên đi công tác trong nước được tạm ứng tối đa 700000 đồng mỗi chuyến. Phải nộp chứng từ trong 5 ngày sau khi về."
+        },
+        {
+          "source_id": "travel_copy",
+          "quote": "Nhân viên đi công tác trong nước được tạm ứng tối đa 700000 đồng mỗi chuyến."
+        }
+      ],
+      "actor": "HR/viewer/internal/HCM",
+      "applicability": "as explicitly stated by each source"
+    }
+  ],
+  "case_scope": "Each sources list defines a separate authorized snapshot. Do not load the union of this pack for an individual case.",
+  "grading": "Independent reviewer checks evidence entailment, attribution, conditions and uncertainty. expected_contains are anchors, not sufficient verdicts. forbidden_claims describe false assertions, not banned substrings; correct negation and contrast are allowed."
+}

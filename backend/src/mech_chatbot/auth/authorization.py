@@ -22,6 +22,10 @@ ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
     "uploader": frozenset({"uploader", "admin"}),
     "viewer": frozenset({"viewer", "knowledge_consumer", "admin"}),
     "knowledge_consumer": frozenset({"knowledge_consumer", "viewer", "admin"}),
+    # Historical document access is an explicit grant.  It intentionally does
+    # not include ``admin`` so a global document reader cannot silently read
+    # superseded or expired source revisions.
+    "document_history_reader": frozenset({"document_history_reader"}),
     # The legacy admin role is deliberately kept distinct from platform_admin.
     # New platform administrators receive only the explicitly requested
     # platform_admin capability, never reviewer/uploader capabilities by

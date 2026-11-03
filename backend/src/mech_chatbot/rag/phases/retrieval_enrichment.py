@@ -36,7 +36,7 @@ from mech_chatbot.rag.execution import (
     RequestDeadlineExceeded,
     current_execution_context,
 )
-from mech_chatbot.rag.intent import serialize_qdrant_filter
+from mech_chatbot.rag.intent import is_bom_lookup, serialize_qdrant_filter
 from mech_chatbot.rag.phases.contracts import PhaseTerminal
 from mech_chatbot.rag.phases.diagnostics import (
     make_debug_info,
@@ -439,6 +439,11 @@ def _handle_exact_code_miss(
     active_filter: Any,
     has_active_filter: bool,
 ) -> _CodeMissResult:
+    history_allowed = (
+        context.decision.intent_data.get("version_policy")
+        in {"specific_version", "compare_versions", "include_archived", "version_history"}
+        and "document_history_reader" in context.user_roles
+    )
     part_ids = list(context.decision.new_part_ids)
     if not part_ids:
         return _CodeMissResult(
@@ -472,7 +477,10 @@ def _handle_exact_code_miss(
             )
         try:
             # A code absent from metadata can still be present verbatim in an allowed document.
-            published_filter = current_published_filter(context.decision.rbac_filter)
+            published_filter = (
+                context.decision.strict_filter
+                if history_allowed else current_published_filter(context.decision.rbac_filter)
+            )
             retriever = state.retrieval_adapter.vectorstore.as_retriever(
                 search_type="similarity",
                 search_kwargs={"k": 30, "filter": published_filter},
@@ -520,7 +528,10 @@ def _handle_exact_code_miss(
         "Khong co doc cho ma KE THUA %s. Huy ke thua, tim kiem chung.", part_ids
     )
     try:
-        general_filter = current_published_filter(context.decision.rbac_filter)
+        general_filter = (
+            context.decision.strict_filter
+            if history_allowed else current_published_filter(context.decision.rbac_filter)
+        )
         general_retriever = state.retrieval_adapter.vectorstore.as_retriever(
             search_type="similarity", search_kwargs={"k": 30, "filter": general_filter}
         )
@@ -544,7 +555,9 @@ def _disambiguate_documents(
     primary: PrimaryRetrievalOutcome,
     retrieval_mode: str,
 ) -> tuple[tuple[Any, ...], PhaseTerminal | None]:
-    if getattr(state.retrieval_adapter, "grounded_math_enabled", False):
+    if (getattr(state.retrieval_adapter, "grounded_math_enabled", False)
+            and (context.decision.is_bom_query or is_bom_lookup(
+                context.user_question, query_type=context.decision.intent_data.get("query_type", "")))):
         from mech_chatbot.rag.grounded_math import (
             build_calculation_plan,
             select_grounded_bom_document_ids,
@@ -560,7 +573,8 @@ def _disambiguate_documents(
                     if str((getattr(document, "metadata", {}) or {}).get("doc_id"))
                     == str(selected_ids[0])
                 )
-                documents = selected_documents or documents
+                if selected_documents and _context_is_mechanical(selected_documents, part_ids):
+                    documents = selected_documents
     terminal, resolved_documents = _disambiguate(
         retrieved_docs=list(documents),
         user_question=context.user_question,

@@ -14,7 +14,8 @@ from types import MappingProxyType
 from typing import Any, Literal, Mapping, Protocol
 
 from mech_chatbot.config.constants import SHARE_ALL_DEPARTMENT
-from mech_chatbot.domain.serving_state import is_currently_servable
+from mech_chatbot.auth.authorization import role_allows
+from mech_chatbot.domain.serving_state import is_currently_servable, is_history_servable
 
 
 LEVEL_ORDER = {"public": 0, "internal": 1, "confidential": 2}
@@ -188,6 +189,7 @@ def evaluate_document_access(
     *,
     strict_site_filter: bool,
     allow_review_preview: bool = False,
+    allow_history: bool = False,
 ) -> AccessDecision:
     if record is None:
         return AccessDecision(False, "document_not_found")
@@ -213,11 +215,25 @@ def evaluate_document_access(
         },
         require_current=True,
     ):
-        if not allow_review_preview:
+        if allow_history and role_allows(actor.roles, "document_history_reader") and is_history_servable(
+            {
+                "servable": record.servable,
+                "publication_state": record.publication_state,
+                "lifecycle_status": record.lifecycle_status,
+                "review_status": record.review_status,
+                "is_current": record.is_current,
+                "effective_status": record.effective_status,
+                "effective_date": record.effective_date,
+                "expiry_date": record.expiry_date,
+            }
+        ):
+            review_preview_decision = AccessDecision(True, "historical_reader", security_level)
+        elif not allow_review_preview:
             return AccessDecision(False, "document_not_servable", security_level)
-        review_preview_decision = evaluate_review_preview_access(actor, record)
-        if not review_preview_decision.allowed:
-            return review_preview_decision
+        else:
+            review_preview_decision = evaluate_review_preview_access(actor, record)
+            if not review_preview_decision.allowed:
+                return review_preview_decision
 
     if "admin" in actor.roles:
         return AccessDecision(
@@ -349,6 +365,7 @@ class ProtectedFileResolver:
             record,
             strict_site_filter=self._strict_site_filter,
             allow_review_preview=reference.kind in {"document_review_original", "review_page"},
+            allow_history=reference.kind in {"document_original", "document_page"},
         )
         if reference.expected_version is not None and (
             reference.expected_version < 1 or record is None or not decision.allowed

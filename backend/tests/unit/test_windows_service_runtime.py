@@ -63,7 +63,41 @@ def test_clean_checkout_rejects_submodule_changes_hidden_by_git_config(tmp_path)
         runtime.assert_clean_checkout(parent)
 
 
-@pytest.mark.parametrize('failed_gate', ['clean', 'signature', 'activation'])
+@pytest.mark.parametrize('source_status', ['tracked', 'untracked', 'ignored'])
+def test_source_read_check_covers_new_backend_and_launcher_files(tmp_path, monkeypatch, source_status):
+    subprocess.run(['git', 'init', '-q', str(tmp_path)], check=True)
+    sources = ['backend/src/mech_chatbot/domain/evidence_identity.py',
+               'scripts/windows_service/service_host.py']
+    for source in sources:
+        path = tmp_path / source
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('value = 1\n')
+    subprocess.run(['git', '-C', str(tmp_path), 'add', sources[1]], check=True)
+    if source_status == 'tracked':
+        subprocess.run(['git', '-C', str(tmp_path), 'add', sources[0]], check=True)
+    elif source_status == 'ignored':
+        (tmp_path / '.gitignore').write_text(sources[0] + '\n')
+        assert subprocess.run(['git', '-C', str(tmp_path), 'check-ignore', '-q', sources[0]]).returncode == 0
+    runtime.assert_source_readable(tmp_path)
+    original_open = Path.open
+
+    def unreadable(path, *args, **kwargs):
+        if path == tmp_path / sources[0]:
+            raise PermissionError('New source unreadable to service')
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'open', unreadable)
+    with pytest.raises(PermissionError, match='New source unreadable'):
+        runtime.assert_source_readable(tmp_path)
+
+
+def test_source_read_check_rejects_missing_source_listing(tmp_path, monkeypatch):
+    monkeypatch.setattr(subprocess, 'check_output', Mock(return_value=''))
+    with pytest.raises(FileNotFoundError, match='Python sources absent'):
+        runtime.assert_source_readable(tmp_path)
+
+
+@pytest.mark.parametrize('failed_gate', ['source', 'clean', 'signature', 'activation'])
 def test_identity_preflight_records_rejection_before_sql(tmp_path, monkeypatch, failed_gate):
     import hashlib
     from mech_chatbot.governance import feature_activation
@@ -92,6 +126,13 @@ def test_identity_preflight_records_rejection_before_sql(tmp_path, monkeypatch, 
     monkeypatch.setattr(runtime, 'settings_for_role', lambda role: settings)
     monkeypatch.setattr(feature_activation, 'current_git_commit', lambda root: 'b' * 40)
 
+    def source(root):
+        stages.append('source')
+        if failed_gate == 'source':
+            raise PermissionError('New source unreadable to service')
+
+    monkeypatch.setattr(runtime, 'assert_source_readable', source, raising=False)
+
     def clean(root):
         stages.append('clean')
         if failed_gate == 'clean':
@@ -114,9 +155,11 @@ def test_identity_preflight_records_rejection_before_sql(tmp_path, monkeypatch, 
     monkeypatch.setitem(sys.modules, 'mech_chatbot.db.engine', SimpleNamespace(create_db_engine=sql))
     assert runtime.identity_preflight('rag') is False
     result = json.loads((state / 'rag/identity-preflight.json').read_text())
-    assert result['ok'] is False and result['error_type'] == 'ValueError'
-    assert result['nonce'] == payload['nonce']
-    expected = ['acl', 'clean', 'signature', 'activation']
+    assert result['ok'] is False
+    assert result['error_type'] == ('PermissionError' if failed_gate == 'source' else 'ValueError')
+    if failed_gate != 'source':
+        assert result['nonce'] == payload['nonce']
+    expected = ['acl', 'source', 'clean', 'signature', 'activation']
     assert stages == expected[:expected.index(failed_gate) + 1]
     sql.assert_not_called()
     token.Close.assert_called_once()

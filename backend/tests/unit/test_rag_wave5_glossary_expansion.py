@@ -33,7 +33,7 @@ def test_glossary_expansion_adds_only_terms_missing_from_the_question(monkeypatc
     first = glossary_expand.glossary_expansion_terms("Máy CNC", "WAVE5")
     second = glossary_expand.glossary_expansion_terms("Máy CNC", "WAVE5")
 
-    assert first == "computer numerical control gia công máy điều khiển số"
+    assert first == "computer numerical control gia công"
     assert second == first
     assert calls == [["generic", "wave5-mechanical"]]
 

@@ -4,14 +4,16 @@ import * as api from "@/api/client";
 import { useChatStore } from "@/stores/chat";
 import { useAuthStore } from '@/stores/auth';
 import { formatSourceText, renderMarkdown } from "@/utils/markdown";
-import StructuredSourceFacts from '@/components/StructuredSourceFacts.vue';
+import AnswerSources from '@/components/AnswerSources.vue';
 import AdvancedRagActions from '@/components/AdvancedRagActions.vue';
 import AdvancedRagResult from '@/components/AdvancedRagResult.vue';
-import type { ChatMessage, Citation, QueryActionState, SessionItem } from "@/types";
+import { applyScanProgress, mergeScanResult } from '@/utils/chatScan';
+import type { ChatMessage, SearchMode, SearchProgress, QueryActionState, SessionItem } from "@/types";
 
 type UiMessage = ChatMessage & {
   progress?: string[];
   progressState?: "running" | "done" | "error";
+  resumePayload?: Record<string, unknown>;
 };
 
 const activeSessionKey = "chat-active-session";
@@ -21,6 +23,9 @@ const authStore = useAuthStore();
 const sessions = ref<SessionItem[]>([]);
 const messages = ref<UiMessage[]>([]);
 const input = ref("");
+const searchMode = ref<SearchMode>('quick');
+const composerEl = ref<HTMLElement | null>(null);
+let activeController: AbortController | undefined;
 const actionState = ref<QueryActionState>({active:false,valid:true});
 const busy = ref(false);
 const thinking = ref(false);
@@ -35,7 +40,6 @@ const warning = ref("");
 const error = ref("");
 const selectedFile = ref<File | null>(null);
 const selectedPreview = ref("");
-const failedPreviews = ref<string[]>([]);
 const uploadToken = ref("");
 const scrollEl = ref<HTMLElement | null>(null);
 let contentSerial = 0;
@@ -47,21 +51,12 @@ const identity = computed(()=>JSON.stringify([authStore.user?.user_id,authStore.
 const sessionId = computed(() => chatStore.sessionId);
 const latestAssistant = computed(() => [...messages.value].reverse().find((message) => message.role === "assistant"));
 
-function isMarkdownSource(citation:Citation) {
-  return /\.(?:md|markdown)$/i.test(citation.file_name || '');
-}
-
-function sourceLocation(citation:Citation) {
-  const locator = citation.locator;
-  if (!locator) return `trang ${citation.page_no}`;
-  return [locator.page ? `Trang ${locator.page}` : '', locator.sheet ? `Sheet ${locator.sheet}` : '',
-    locator.cell ? `Ô ${locator.cell}` : '', locator.row_key ? `Dòng ${locator.row_key}` : ''].filter(Boolean).join(' · ');
-}
-
 function invalidateSourceMessage(target:UiMessage) {
   warning.value = 'Nguồn đã thay đổi hoặc bạn không còn quyền xem. Hãy hỏi lại để lấy căn cứ hiện hành.';
   messages.value = messages.value.map(message => message === target ? {
     ...message,content:'Nội dung đã được ẩn vì không còn xác minh được nguồn.',citations:[],ref_text:'',advanced_rag:undefined,
+    source_groups:[],verification_status:undefined,answer_outcome:undefined,resumePayload:undefined,
+    search_progress:message.search_progress ? {search_mode:'comprehensive',scan_status:'denied'} : undefined,
   } : message);
 }
 
@@ -91,9 +86,10 @@ async function newChat() {
 }
 
 function resetView() {
+  activeController?.abort();activeController=undefined;
   contentSerial++;
   historyLoading.value=false;historyFailed.value=false;waitingSession.value=null;busy.value=false;thinking.value=false;
-  messages.value=[];warning.value='';error.value='';failedPreviews.value=[];
+  messages.value=[];warning.value='';error.value='';
   clearFile();
 }
 
@@ -174,11 +170,14 @@ async function onFileChange(event: Event) {
   }
 }
 
-async function send() {
-  const question = input.value.trim();
+async function send(resume?:UiMessage) {
+  const question = resume ? String(resume.resumePayload?.question || '') : input.value.trim();
   if (!question || busy.value || historyLoading.value || historyFailed.value || uploadLoading.value || !actionState.value.valid) return;
+  if (resume && (!canResume(resume) || (input.value.trim() && input.value.trim() !== question))) return;
   const request=++contentSerial, actor=identity.value;
+  const controller=new AbortController();activeController=controller;
   const current=()=>request===contentSerial && actor===identity.value && sessionId.value===currentSession;
+  const receiving=()=>current() && !controller.signal.aborted;
   const actionPayload=actionState.value.active ? (actionState.value.text_query ? {text_query:true} :
     actionState.value.scope_total ? {scope_total:{...actionState.value.scope_total}} :
     actionState.value.scope_comparison ? {scope_comparison:{...actionState.value.scope_comparison}} :
@@ -191,7 +190,7 @@ async function send() {
   input.value = "";
 
   const currentSession = sessionId.value;
-  if (messages.value.at(-1)?.progressState === "error" && messages.value.at(-2)?.role === "user") {
+  if (!resume && messages.value.at(-1)?.progressState === "error" && messages.value.at(-1)?.search_progress?.search_mode !== 'comprehensive' && messages.value.at(-2)?.role === "user") {
     messages.value.splice(-2);
   }
   const history = messages.value.map((message) => ({
@@ -204,58 +203,74 @@ async function send() {
     image_url: selectedPreview.value || null,
     image_name: selectedFile.value?.name || null,
   };
-  messages.value=[...messages.value,userMessage, {
+  const targetIndex=resume ? messages.value.indexOf(resume) : messages.value.length+1;
+  if (!resume) messages.value=[...messages.value.map(message=>({...message,resumePayload:undefined})),userMessage, {
     role: "assistant",
     content: "",
     progress: ["Đã nhận câu hỏi"],
     progressState: "running",
   }];
-  const imageToken = uploadToken.value || null;
+  const imageToken = resume ? resume.resumePayload?.image_token : uploadToken.value || null;
   clearFile();
   await scrollToBottom();
 
   const memory = chatStore.currentMemory;
   if (!current()) return;
+  const payload=resume ? {...resume.resumePayload,search_mode:'comprehensive',
+    continuation_cursor:resume.search_progress?.continuation_cursor} : {
+    session_id:currentSession,question,image_token:imageToken,chat_history:history,
+    current_part_ids:memory.currentPartIds,conversation_context:memory.conversationContext,
+    search_mode:actionState.value.active ? 'quick' : searchMode.value,...actionPayload};
+  messages.value=messages.value.map((message,index)=>index===targetIndex ? {
+    ...message,resumePayload:payload,progressState:'running',progress:['Đã nhận câu hỏi'],
+    search_progress:message.search_progress ?? {search_mode:payload.search_mode as SearchMode},
+  } : message);
+  let turnText='';
+  const update=(fn:(message:UiMessage)=>UiMessage)=>{
+    messages.value=messages.value.map((message,index)=>index===targetIndex ? fn(message) : message);
+  };
+  const progressReceived=(progress:SearchProgress)=>{
+    if (!receiving()) return;
+    update(message=>applyScanProgress(message,progress));
+  };
   chatStore.pendingSessionIds=[...chatStore.pendingSessionIds,currentSession];
   try {
     await api.sendChatMessage(
+      payload,
       {
-        session_id: currentSession,
-        question,
-        image_token: imageToken,
-        chat_history: history,
-        current_part_ids: memory.currentPartIds,
-        conversation_context: memory.conversationContext,
-        ...actionPayload,
-      },
-      {
+        onProgress:progressReceived,
         onThinking() {
-          if (!current()) return;
+          if (!receiving()) return;
           thinking.value = true;
           setAssistantProgress("Đang phân tích ý định và tra cứu tài liệu");
           scrollToBottom();
         },
         onDelta(text) {
-          if (!current()) return;
+          if (!receiving()) return;
+          turnText+=text;
           thinking.value = false;
           setAssistantProgress("Đang soạn câu trả lời từ tài liệu");
-          const last = messages.value[messages.value.length - 1];
-          if (last?.role === "assistant") last.content += text;
+          update(message=>message.search_progress?.search_mode==='comprehensive' ? message : {...message,content:turnText});
           scrollToBottom();
         },
         onWarning(message) {
-          if (!current()) return;
+          if (!receiving()) return;
           warning.value = message;
         },
-        onError(message) {
-          if (!current()) return;
+        onError(message,data) {
+          if (!receiving()) return;
           error.value = message;
           setAssistantProgress("Có lỗi khi xử lý câu hỏi", "error");
-          const last = messages.value[messages.value.length - 1];
-          if (last?.role === "assistant") last.content = `Lỗi: ${message}`;
-          if (!imageToken) input.value = question;
+          if (data?.search_progress) progressReceived(data.search_progress);
+          if (data?.status===401 || data?.status===403) progressReceived({search_mode:'comprehensive',scan_status:'denied'});
+          update(last=>({...last,content:last.search_progress?.search_mode==='comprehensive' ? last.content : `Lỗi: ${message}`,search_progress:last.search_progress ? {...last.search_progress,
+            scan_status:['stale','denied','paused'].includes(last.search_progress.scan_status ?? '') ? last.search_progress.scan_status : 'error'} : undefined}));
+          if (!imageToken && messages.value[targetIndex]?.search_progress?.search_mode!=='comprehensive') input.value = question;
         },
         onDone(data) {
+          if (!receiving()) return;
+          update(message=>({...mergeScanResult(message,data,turnText),progressState:'done',
+            progress:['Đã kết thúc lượt trả lời']}));
           if (chatStore.memoryIdentity === actor) {
             if (data.chat_id == null) chatStore.clearMemory(currentSession);
             else chatStore.updateMemory(currentSession, {
@@ -266,30 +281,70 @@ async function send() {
           }
           if (!current()) return;
           thinking.value = false;
-          setAssistantProgress("Hoàn tất", "done");
-          messages.value = messages.value.map((message,index) =>
-            index === messages.value.length-1 && message.role === 'assistant' ? {
-              ...message,chat_id:data.chat_id ?? null,ref_text:data.ref_text || '',
-              citations:data.citations ?? [],advanced_rag:data.advanced_rag,
-            } : message);
           if (data.chat_id != null) sessionStorage.setItem(activeSessionKey, currentSession);
           refreshSessions();
         },
       },
+      controller.signal,
     );
   } catch (err) {
     if (!current()) return;
+    if (controller.signal.aborted) return;
     error.value = err instanceof Error ? err.message : "Gửi câu hỏi thất bại";
     setAssistantProgress("Có lỗi khi gửi câu hỏi", "error");
-    const last = messages.value[messages.value.length - 1];
-    if (last?.role === "assistant") last.content = `Lỗi: ${error.value}`;
-    if (!imageToken) input.value = question;
+    const status=(err as {status?:number})?.status;
+    if (status===401 || status===403) progressReceived({search_mode:'comprehensive',scan_status:'denied'});
+    update(last=>({...last,content:last.search_progress?.search_mode==='comprehensive' ? last.content : `Lỗi: ${error.value}`,
+      search_progress:last.search_progress ? {...last.search_progress,scan_status:status===401 || status===403 ? 'denied' : 'error'} : undefined}));
+    if (!imageToken && messages.value[targetIndex]?.search_progress?.search_mode!=='comprehensive') input.value = question;
   } finally {
     if (chatStore.memoryIdentity === actor) {
       chatStore.pendingSessionIds=chatStore.pendingSessionIds.filter(id=>id!==currentSession);
     }
-    if (current()) {busy.value = false;thinking.value = false;}
+    if (current()) {busy.value = false;thinking.value = false;activeController=undefined;}
   }
+}
+
+function canResume(message:UiMessage) {
+  const p=message.search_progress;
+  return !!message.resumePayload && !!p?.continuation_cursor && !['stale','denied'].includes(p.scan_status ?? '')
+    && (p.results_pending || !p.snapshot_complete) && !(p.scan_status==='error' && p.pending_sources===0 && !p.results_pending);
+}
+
+async function stop() {
+  activeController?.abort();
+  messages.value=messages.value.map(message=>message.progressState==='running' ? {
+    ...message,progressState:'done',progress:['Đã dừng lượt trả lời'],
+    search_progress:message.search_progress ? {...message.search_progress,scan_status:'paused',turn_complete:false} : undefined,
+  } : message);
+  thinking.value=false;
+  await nextTick();composerEl.value?.querySelector('textarea')?.focus();
+}
+
+async function restart(message:UiMessage) {
+  if (busy.value || !message.resumePayload) return;
+  input.value=String(message.resumePayload.question || '');searchMode.value='comprehensive';
+  await nextTick();composerEl.value?.querySelector('textarea')?.focus();
+}
+
+function scanLabel(p:SearchProgress) {
+  if (p.scan_status==='stale') return 'Nguồn đã thay đổi. Hãy bắt đầu lại lần rà.';
+  if (p.scan_status==='denied') return 'Quyền đọc nguồn đã thay đổi. Kết quả cũ đã được ẩn.';
+  if (p.search_mode==='quick') return 'Tra cứu nhanh trong các nguồn tìm được; chưa xác nhận đã rà toàn bộ.';
+  if (p.results_pending) return p.snapshot_complete ? 'Đã rà xong phạm vi nguồn; còn kết quả đã lưu chưa nhận.' : 'Còn kết quả đã lưu chưa nhận.';
+  if (p.snapshot_complete) return 'Đã rà xong toàn bộ phạm vi nguồn được phép của lần rà này.';
+  if (p.scan_status==='paused') return 'Đã tạm dừng; lần rà chưa hoàn tất.';
+  if (p.scan_status==='error') return 'Có lỗi xử lý; lần rà chưa hoàn tất.';
+  return 'Lần rà chưa hoàn tất.';
+}
+
+function answerLabel(message:UiMessage) {
+  if (message.progressState==='error') return 'Lỗi kỹ thuật khi xử lý câu hỏi.';
+  const outcomes:Record<string,string>={full_answer:'Đã trả lời các ý có căn cứ.',partial_answer:'Chỉ trả lời được một phần.',
+    clarification_required:'Cần làm rõ câu hỏi.',insufficient_evidence:'Chưa đủ bằng chứng trong phạm vi đã tra cứu.',refused:'Không thể trả lời yêu cầu này.'};
+  const verification:Record<string,string>={verified:'Đã kiểm chứng các ý trả lời với nguồn.',partial:'Một phần câu trả lời đã được kiểm chứng.',
+    insufficient:'Chưa đủ bằng chứng để xác nhận.',unverified:'Chưa xác nhận kiểm chứng nội dung.'};
+  return [outcomes[message.answer_outcome ?? ''],verification[message.verification_status ?? ''] || 'Chưa xác nhận kiểm chứng nội dung.'].filter(Boolean).join(' ');
 }
 
 async function rate(message: ChatMessage, rating: number) {
@@ -375,7 +430,7 @@ onBeforeUnmount(()=>{catalogSerial++;resetView();});
                   :alt="message.image_name || 'Ảnh upload'"
                   class="upload-preview"
                 />
-                <div v-if="message.role === 'assistant' && !message.content" class="thinking-row">
+                <div v-if="message.role === 'assistant' && !message.content && message.progressState === 'running'" class="thinking-row">
                   <div class="typing-dots" aria-label="Đang trả lời">
                     <span></span>
                     <span></span>
@@ -413,45 +468,20 @@ onBeforeUnmount(()=>{catalogSerial++;resetView();});
                 <AdvancedRagResult v-if="message.advanced_rag" :result="message.advanced_rag"
                   @unavailable="invalidateSourceMessage(message)" />
 
-                <div v-if="message.citations?.length" class="citation-grid">
-                  <article
-                    v-for="citation in message.citations"
-                    :key="citation.source_id || `${citation.doc_id}-${citation.page_no}`"
-                    class="citation-card"
-                    :class="{ 'structured-citation':citation.citation_schema === 'source-locator-v2' }"
-                  >
-                    <a
-                      v-if="!isMarkdownSource(citation) && citation.page_url && !failedPreviews.includes(citation.page_url)"
-                      :href="citation.page_url"
-                      target="_blank"
-                      class="citation-preview-link"
-                      :aria-label="`Mở ảnh nguồn ${citation.file_name || citation.doc_id}, trang ${citation.page_no}`"
-                    >
-                      <img :src="citation.page_url" :alt="`Doc ${citation.doc_id} trang ${citation.page_no}`"
-                        @error="failedPreviews = [...failedPreviews, citation.page_url]" />
-                    </a>
-                    <div class="citation-card-body">
-                      <p v-if="isMarkdownSource(citation)">Tài liệu văn bản không có ảnh trang. Mở bản gốc để đối chiếu.</p>
-                      <p v-else-if="citation.page_url && failedPreviews.includes(citation.page_url)">Không tải được ảnh xem trước. Bạn có thể mở bản gốc để đối chiếu.</p>
-                      <p v-else-if="!citation.page_url">Không có ảnh xem trước. Bạn có thể mở bản gốc để đối chiếu.</p>
-                      <span>
-                        {{ citation.file_name || `Doc ${citation.doc_id}` }} · {{ sourceLocation(citation) }}
-                        <template v-if="citation.version_no !== undefined && citation.version_no !== null">
-                          · version {{ citation.version_no }}
-                        </template>
-                      </span>
-                      <a
-                        :href="citation.original_url"
-                        class="citation-download"
-                        target="_blank"
-                        rel="noopener"
-                      >
-                        Tải bản gốc
-                      </a>
-                    </div>
-                    <StructuredSourceFacts v-if="citation.citation_schema === 'source-locator-v2'" :citation="citation" @unavailable="invalidateSourceMessage(message)" />
-                  </article>
-                </div>
+                <p v-if="message.role === 'assistant' && message.progressState !== 'running'">{{ answerLabel(message) }}</p>
+                <AnswerSources :message="message" @unavailable="invalidateSourceMessage(message)" />
+                <section v-if="message.search_progress" class="scan-status" aria-label="Tiến độ rà nguồn">
+                  <p role="status" aria-live="polite">{{ scanLabel(message.search_progress) }}</p>
+                  <p v-if="message.search_progress.search_mode === 'comprehensive' && message.search_progress.total_sources !== undefined">
+                    Rà toàn bộ phạm vi được phép: đã kiểm {{ message.search_progress.checked_sources ?? 0 }}/{{ message.search_progress.total_sources }} nguồn;
+                    còn {{ message.search_progress.pending_sources ?? 0 }}, lỗi {{ message.search_progress.error_sources ?? 0 }}.
+                  </p>
+                  <Button v-if="canResume(message)" :label="message.search_progress.results_pending ? 'Xem tiếp kết quả đã lưu' : 'Tiếp tục rà'"
+                    :disabled="busy || !!input.trim() && input.trim() !== message.resumePayload?.question" @click="send(message)" />
+                  <Button v-if="message.resumePayload && message.search_progress.search_mode === 'comprehensive' && ['stale','denied','error'].includes(message.search_progress.scan_status || '')"
+                    label="Bắt đầu lại lần rà" :disabled="busy" @click="restart(message)" />
+                  <p v-if="message.search_progress.scan_status === 'paused' && !message.search_progress.continuation_cursor">Chưa nhận được điểm tiếp tục. Gửi lại câu hỏi để bắt đầu lần rà mới.</p>
+                </section>
 
                 <div v-if="message.role === 'assistant' && message.chat_id" class="feedback-row">
                   <span>Đánh giá câu trả lời</span>
@@ -476,7 +506,14 @@ onBeforeUnmount(()=>{catalogSerial++;resetView();});
           <Message v-if="error" severity="error">{{ error }}</Message>
           <Button v-if="historyFailed" label="Thử lại hội thoại" @click="openSession(sessionId)" />
 
-          <footer class="composer">
+          <footer ref="composerEl" class="composer">
+            <label for="search-mode">Cách tra cứu</label>
+            <select id="search-mode" v-model="searchMode" :disabled="busy || actionState.active">
+              <option value="quick">Tra cứu nhanh</option>
+              <option value="comprehensive">Rà toàn bộ phạm vi được phép</option>
+            </select>
+            <p v-if="actionState.active">Tác vụ chuyên biệt dùng chế độ tra cứu nhanh.</p>
+            <Button v-if="busy" label="Dừng trả lời" @click="stop" />
             <AdvancedRagActions :key="sessionId" :disabled="busy || historyLoading || historyFailed" @change="actionState=$event" />
             <div v-if="selectedPreview" class="selected-file">
               <img :src="selectedPreview" alt="Ảnh đã chọn" />
@@ -492,10 +529,11 @@ onBeforeUnmount(()=>{catalogSerial++;resetView();});
                 v-model="input"
                 auto-resize
                 rows="1"
+                aria-label="Câu hỏi"
                 placeholder="Hỏi bất cứ điều gì"
-                @keydown.enter.exact.prevent="send"
+                @keydown.enter.exact.prevent="send()"
               />
-              <Button :label="busy ? 'Đang gửi' : 'Gửi'" :disabled="busy || historyLoading || historyFailed || uploadLoading || !input.trim() || !actionState.valid" @click="send" />
+              <Button :label="busy ? 'Đang gửi' : 'Gửi'" :disabled="busy || historyLoading || historyFailed || uploadLoading || !input.trim() || !actionState.valid" @click="send()" />
             </div>
           </footer>
         </div>

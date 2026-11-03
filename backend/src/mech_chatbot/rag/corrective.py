@@ -146,15 +146,8 @@ def load_metadata_corrected_documents(
 
 
 def _document_key(document):
-    metadata = getattr(document, "metadata", {}) or {}
-    doc_id = metadata.get("doc_id")
-    page = metadata.get("trang_so") or metadata.get("page_no")
-    if doc_id is not None and page is not None:
-        chunk = metadata.get("chunk_index")
-        if chunk is not None:
-            return ("chunk", str(doc_id), str(page), str(chunk))
-        return ("source", str(doc_id), str(page))
-    return ("content", str(getattr(document, "page_content", ""))[:500])
+    from mech_chatbot.domain.evidence_identity import evidence_key
+    return evidence_key(document)
 
 
 def merge_corrected_documents(original, corrected):
@@ -179,6 +172,7 @@ def run_corrected_retrieval(
     rbac_filter,
     is_bom_query,
     trace_id,
+    allow_history=False,
 ):
     """Invoke the normal retrieval boundary without rebuilding any filter."""
     return retrieve(
@@ -189,4 +183,5 @@ def run_corrected_retrieval(
         query_to_search=corrected_query,
         rbac_filter=rbac_filter,
         trace_id=trace_id,
+        allow_history=allow_history,
     )

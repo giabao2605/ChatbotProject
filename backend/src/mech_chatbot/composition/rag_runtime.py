@@ -114,6 +114,9 @@ class RagRetrievalRuntime:
     community_summaries_enabled: bool = False
     claim_repair_enabled: bool = False
     evidence_verifier_enabled: bool = False
+    # Post-generation claim adjudication is enabled only by the composed RAG runtime.
+    # Lightweight callers can omit the field and retain the legacy pipeline contract.
+    claim_verification_enabled: bool = True
     grounded_math_enabled: bool = False
     auto_source_cards: bool = True
     stream_max_attempts: int = 3
@@ -440,6 +443,7 @@ def _retrieval_feature_settings(settings, process):
         "community_summaries_enabled": settings.RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED,
         "claim_repair_enabled": settings.RAG_CLAIM_REPAIR_ENABLED,
         "evidence_verifier_enabled": process.evidence_verifier_enabled,
+        "claim_verification_enabled": True,
         "grounded_math_enabled": settings.RAG_GROUNDED_MATH_ENABLED and not math_v2_bundle_selected(
             {'RAG_ACTIVATION_BUNDLE_PATH':settings.RAG_ACTIVATION_BUNDLE_PATH}, root=Path(__file__).resolve().parents[4]),
         "auto_source_cards": process.auto_source_cards,
@@ -718,6 +722,7 @@ def build_rag_runtime(
             ),
         ),
         executor=DefaultRagExecutor(
+            comprehensive_cursor_secret=getattr(existing_settings, "APP_SESSION_SECRET", ""),
             math_v2_authorizer=math_authorizer,
             graph_v2_authorizer=graph_authorizer,
             execute_pipeline=resolved_execute,

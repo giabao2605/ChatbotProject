@@ -178,15 +178,15 @@ describe("ChatView public behavior", () => {
     const pdfOriginal='/api/files/documents/2/original?citation_version=3&source_hash=def';
     vi.mocked(api.listSessions).mockResolvedValue([{session_id:'citations',cau_hoi:'Sources'}]);
     vi.mocked(api.loadHistory).mockResolvedValueOnce([{role:'assistant',content:'Answer',citations:[
-      {doc_id:1,page_no:1,file_name:'POLICY.MARKDOWN',has_vision:true,page_url:'/markdown-image',original_url:mdOriginal},
-      {doc_id:2,page_no:4,file_name:'manual.pdf',has_vision:true,page_url:'/pdf-image',original_url:pdfOriginal},
+      {doc_id:1,page_no:1,file_name:'POLICY.MARKDOWN',has_vision:true,page_url:'/api/files/documents/1/pages/1',original_url:mdOriginal},
+      {doc_id:2,page_no:4,file_name:'manual.pdf',has_vision:true,page_url:'/api/files/documents/2/pages/4',original_url:pdfOriginal},
     ]}]);
     const {wrapper}=mountWithPinia(ChatView);await flushPromises();
     await button(wrapper,'Lịch sử').trigger('click');await wrapper.get('.history-title').trigger('click');await flushPromises();
-    expect(wrapper.find('img[src="/markdown-image"]').exists()).toBe(false);
+    expect(wrapper.find('img[src="/api/files/documents/1/pages/1"]').exists()).toBe(false);
     expect(wrapper.text()).toContain('Tài liệu văn bản không có ảnh trang. Mở bản gốc để đối chiếu.');
-    const pdf=wrapper.get('img[src="/pdf-image"]');await pdf.trigger('error');
-    expect(wrapper.find('img[src="/pdf-image"]').exists()).toBe(false);
+    const pdf=wrapper.get('img[src="/api/files/documents/2/pages/4"]');await pdf.trigger('error');
+    expect(wrapper.find('img[src="/api/files/documents/2/pages/4"]').exists()).toBe(false);
     expect(wrapper.text()).toContain('Không tải được ảnh xem trước. Bạn có thể mở bản gốc để đối chiếu.');
     expect(wrapper.findAll('.citation-download').map(link=>link.attributes('href'))).toEqual([mdOriginal,pdfOriginal]);
     wrapper.unmount();
@@ -216,8 +216,8 @@ describe("ChatView public behavior", () => {
     vi.mocked(api.sendChatMessage).mockResolvedValueOnce(undefined);
     await button(restored,'Gửi').trigger('click');await flushPromises();
     expect(api.sendChatMessage).toHaveBeenLastCalledWith(expect.objectContaining({
-      session_id:'a',chat_history:history.map(({role,content})=>({role,content})),current_part_ids:['IT-1'],conversation_context:{topic:'IT'},
-    }),expect.anything());
+      session_id:'a',chat_history:history.map(({role,content})=>({role,content})),current_part_ids:['IT-1'],conversation_context:{topic:'IT'},search_mode:'quick',
+    }),expect.anything(),expect.any(AbortSignal));
     restored.unmount();
   });
 
@@ -282,7 +282,7 @@ describe("ChatView public behavior", () => {
     finish();await flushPromises();
     expect(api.loadHistory).toHaveBeenLastCalledWith(id);
     expect(restored.text()).toContain('Saved answer');expect(restored.text()).not.toContain('Detached answer');
-    expect(useChatStore(pinia).currentMemory.currentPartIds).toEqual(['NEW']);
+    expect(useChatStore(pinia).currentMemory).toEqual({currentPartIds:[],conversationContext:null});
     restored.unmount();
   });
 
@@ -420,7 +420,7 @@ describe("ChatView public behavior", () => {
     await flushPromises();
     expect(api.sendChatMessage).toHaveBeenCalledWith(expect.objectContaining({query_plan:{branches:[{
       branch_id:'b1',question:'Cụm chứa gì?',depends_on:[],graph_query:{root_key:'document:1',
-        product_scope:'assembly-A',site:'HCM',direction:'contains'}}]}}),expect.anything());
+        product_scope:'assembly-A',site:'HCM',direction:'contains'}}]},search_mode:'quick'}),expect.anything(),expect.any(AbortSignal));
     expect(wrapper.get('.branch-results').text()).toContain('Một phần');
     expect(wrapper.get('.branch-results').text()).toContain('Chưa đủ dữ liệu');
     expect(wrapper.get('.branch-results').text()).toContain('Cây nguồn: Đầy đủ');
@@ -591,6 +591,13 @@ describe("ChatView public behavior", () => {
   });
 
   it("opens an available OCR source image without claiming vision content", async () => {
+    const sourceTab={opener:null,location:{href:''},close:vi.fn()};
+    vi.spyOn(window,'open').mockReturnValue(sourceTab as unknown as Window);
+    vi.stubGlobal('fetch',vi.fn().mockResolvedValue({ok:true,blob:async()=>new Blob(['image'])}));
+    vi.stubGlobal('URL',class extends URL {
+      static createObjectURL=vi.fn().mockReturnValue('blob:ocr-source');
+      static revokeObjectURL=vi.fn();
+    });
     sessionStorage.setItem("chat-active-session", "session-ocr");
     vi.mocked(api.listSessions).mockResolvedValue([{ session_id: "session-ocr", cau_hoi: "OCR source question" }]);
     vi.mocked(api.loadHistory).mockResolvedValue([{
@@ -612,6 +619,9 @@ describe("ChatView public behavior", () => {
     expect(preview.attributes("target")).toBe("_blank");
     expect(preview.find("img").attributes("src")).toBe(preview.attributes("href"));
     await preview.trigger("click");
+    await flushPromises();
+    expect(fetch).toHaveBeenCalledWith('/api/files/documents/42/pages/7',expect.objectContaining({credentials:'include',cache:'no-store'}));
+    expect(sourceTab.location.href).toBe('blob:ocr-source');
     expect(wrapper.find(".citation-download").attributes("href"))
       .toBe("/api/files/documents/42/original");
     wrapper.unmount();
@@ -694,7 +704,10 @@ describe("ChatView public behavior", () => {
   it("uploads an image, sends a streamed answer, records memory, and accepts feedback", async () => {
     const createObjectURL = vi.fn().mockReturnValue("blob:pump");
     const revokeObjectURL = vi.fn();
-    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
+    vi.stubGlobal("URL", class extends URL {
+      static createObjectURL=createObjectURL;
+      static revokeObjectURL=revokeObjectURL;
+    });
     vi.mocked(api.uploadChatImage).mockResolvedValue({
       image_id: "image-7",
       image_token: "upload-token",
@@ -715,8 +728,8 @@ describe("ChatView public behavior", () => {
             file_name: "manual.pdf",
             version_no: 2,
             has_vision: true,
-            page_url: "/api/page/10/3",
-            original_url: "/api/document/10",
+            page_url: "/api/files/documents/10/pages/3?citation_version=2",
+            original_url: "/api/files/documents/10/original?citation_version=2",
           },
         ],
         new_part_ids: ["P-101"],
@@ -752,16 +765,18 @@ describe("ChatView public behavior", () => {
         chat_history: [],
         current_part_ids: [],
         conversation_context: null,
+        search_mode: 'quick',
       },
       expect.any(Object),
+      expect.any(AbortSignal),
     );
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:pump");
     expect(wrapper.text()).toContain("Câu trả lời hoàn chỉnh");
     expect(wrapper.text()).toContain("Nguồn tham khảo hạn chế");
     expect(wrapper.text()).toContain("Manual P-101");
-    expect(wrapper.text()).toContain("manual.pdf · trang 3");
-    expect(wrapper.text()).toContain("version 2");
-    expect(wrapper.find('a[href="/api/document/10"]').exists()).toBe(true);
+    expect(wrapper.text()).toContain("manual.pdf · Phiên bản 2");
+    expect(wrapper.text()).toContain("Vị trí: Trang 3");
+    expect(wrapper.find('a[href="/api/files/documents/10/original?citation_version=2"]').exists()).toBe(true);
     expect(chat.currentMemory).toEqual({
       chatId: 42,
       currentPartIds: ["P-101"],
@@ -858,15 +873,19 @@ describe("ChatView public behavior", () => {
     await button(wrapper, "Gửi").trigger("click");
     await flushPromises();
     expect(api.sendChatMessage).toHaveBeenLastCalledWith(
-      expect.objectContaining({ question: "P-101?", chat_history: [] }),
+      expect.objectContaining({ question: "P-101?", chat_history: [],search_mode:'quick' }),
       expect.any(Object),
+      expect.any(AbortSignal),
     );
   });
 
   it("ignores an empty file selection and can clear a selected upload", async () => {
     const createObjectURL = vi.fn().mockReturnValue("blob:selected");
     const revokeObjectURL = vi.fn();
-    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
+    vi.stubGlobal("URL", class extends URL {
+      static createObjectURL=createObjectURL;
+      static revokeObjectURL=revokeObjectURL;
+    });
     vi.mocked(api.uploadChatImage).mockResolvedValue({
       image_id: "image-8",
       image_token: "token-8",

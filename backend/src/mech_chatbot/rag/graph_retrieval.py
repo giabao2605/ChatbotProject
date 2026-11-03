@@ -165,12 +165,10 @@ def hydrate_graph_edges(edges, client, collection_name, *, trace_id=None):
 
 
 def _document_version_key(document):
+    from mech_chatbot.domain.evidence_identity import revision_key, source_locator
+
     metadata = document.metadata or {}
-    return (
-        str(metadata.get("doc_id")),
-        str(metadata.get("trang_so")),
-        str(metadata.get("version_no")),
-    )
+    return revision_key(metadata), str(source_locator(metadata).page)
 
 
 def attach_served_graph_context(served_documents, graph_documents):

@@ -8,6 +8,9 @@ from typing import Any, Mapping, Sequence
 from mech_chatbot.config.logging import logger
 from mech_chatbot.llm.llm_client import _is_gpt_rate_limit
 from langchain_core.messages import HumanMessage
+from mech_chatbot.rag.claim_verification import verify_answer_claims
+from mech_chatbot.domain.evidence_identity import evidence_key
+
 import time
 import re
 from mech_chatbot.config.logging import log_trace
@@ -218,12 +221,7 @@ def _attempt_claim_repair(
 
 
 def _rrf_document_key(doc):
-    metadata = getattr(doc, "metadata", {}) or {}
-    doc_id = metadata.get("doc_id")
-    section = metadata.get("parent_section") or metadata.get("parent_page") or metadata.get("trang_so")
-    chunk = metadata.get("chunk_index")
-    content = str(metadata.get("noi_dung_goc") or getattr(doc, "page_content", "") or "")[:240]
-    return (doc_id, section, chunk, content)
+    return evidence_key(doc)
 
 
 def _rrf_fuse(rankings, result_cap, k=60):
@@ -1151,6 +1149,9 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
     _claim_repair_enabled = claim_repair_enabled(
         bool(getattr(retrieval_runtime, "claim_repair_enabled", False))
     )
+    _claim_verification_enabled = bool(
+        getattr(retrieval_runtime, "claim_verification_enabled", False)
+    )
     if dependency_sources:
         # Locator provenance is not supported by the legacy repair validator.
         if _claim_repair_enabled:
@@ -1172,6 +1173,38 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
             and time.monotonic() >= plan.control.deadline_monotonic
         ):
             raise TimeoutError("RAG request deadline exceeded during generation")
+
+    def _verify_draft(draft):
+        _raise_if_cancelled()
+        def adjudicate(prompt):
+            invoke = getattr(provider_adapter, "invoke_once", None) or provider_adapter.invoke
+            response = invoke(
+                [HumanMessage(content=prompt)], surface="evidence_verification", trace_id=trace_id,
+                doc_ids=_external_doc_ids, security_levels=_external_security, policies=_external_policies,
+                retry_counter=budget, timeout_seconds=remaining_request_timeout(
+                    getattr(provider_adapter.settings, "timeout_seconds", 120.0),
+                    stage="claim verification", deadline_monotonic=plan.control.deadline_monotonic),
+            )
+            return getattr(response, "content", response)
+        checked = verify_answer_claims(draft, remaining_docs if grounded_prefix else retrieved_docs,
+            question=effective_question or user_question, invoke=adjudicate, lang=response_language,
+            require_complete_coverage=plan.evidence.retrieval_mode == 'comprehensive')
+        _raise_if_cancelled()
+        _recheck_dependencies()
+        metrics["verification_status"] = checked.status
+        metrics["verification_claim_count"] = len(checked.claims)
+        metrics["verification_source_group_count"] = len(checked.source_groups)
+        from dataclasses import asdict
+        metrics['source_groups'] = [{**asdict(group), 'claims': [asdict(claim) for claim in checked.claims
+                                    if group.source_id in claim.sources]} for group in checked.source_groups]
+        metrics["verification_source_ids"] = sorted({
+            source_id
+            for claim in checked.claims
+            for source_id in claim.sources
+        })
+        if checked.status == "insufficient":
+            outcome.refusal_reason = "unsupported_claims"
+        return checked.answer
 
     def _with_grounded_prefix(value):
         if not grounded_prefix:
@@ -1267,6 +1300,14 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                 doc_ids = [d.metadata.get("doc_id") for d in retrieved_docs]
                 retrieval_scores = [d.metadata.get("relevance_score") for d in retrieved_docs]
                 
+                # Adjudicate independent rows separately, so one bad number/citation
+                # cannot suppress supported rows. Computed dependencies retain their own guard.
+                if (_claim_verification_enabled and retrieved_docs and not dependency_sources
+                        and len(answer.strip().splitlines()) > 1
+                        and any(getattr(doc, "page_content", "") or doc.metadata.get("noi_dung_goc")
+                                for doc in retrieved_docs)):
+                    yield _with_grounded_prefix(_verify_draft(answer))
+                    return
                 self_contradiction = has_self_contradictory_missing_data_claim(
                     answer
                 )
@@ -1349,7 +1390,10 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                     if metrics["estimated_cost"] is not None:
                         metrics["estimated_cost"] += repair_result.estimated_cost
                     if repair_result.accepted:
-                        answer = _with_grounded_prefix(repair_result.answer)
+                        answer = _with_grounded_prefix(
+                            _verify_draft(repair_result.answer)
+                            if _claim_verification_enabled else repair_result.answer
+                        )
                         yield answer
                         log_trace("llm_generation", trace_id, model=get_llm_model_name(provider_adapter), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(answer), repaired=True, input_tokens=input_tokens, output_tokens=len(answer)//4, estimated_cost=estimated_cost)
                         log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=False, docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)
@@ -1425,7 +1469,10 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
                     )
                     return
                 else:
-                    answer = _with_grounded_prefix(answer)
+                    answer = _with_grounded_prefix(
+                        _verify_draft(answer)
+                        if _claim_verification_enabled and retrieved_docs else answer
+                    )
                     yield answer
                     log_trace("llm_generation", trace_id, model=get_llm_model_name(provider_adapter), latency_ms=int((time.time() - t_llm)*1000), answer_chars=len(answer), input_tokens=input_tokens, output_tokens=output_tokens, estimated_cost=estimated_cost)
                     log_trace("rag_end", trace_id, final_latency_ms=int((time.time() - t_start)*1000), refusal=False, docs_count=len(retrieved_docs), doc_ids=doc_ids, retrieved_file_goc=[d.metadata.get("file_goc") for d in retrieved_docs], version_no=[d.metadata.get("version_no") for d in retrieved_docs], variant_code=[d.metadata.get("variant_code") for d in retrieved_docs], is_current=[d.metadata.get("is_current") for d in retrieved_docs], lifecycle_status=[d.metadata.get("lifecycle_status") for d in retrieved_docs], review_status=[d.metadata.get("review_status") for d in retrieved_docs], version_policy=intent_data.get("version_policy") if "intent_data" in locals() else None, filter_used=serialize_qdrant_filter(active_filter) if "active_filter" in locals() else None, top_k=base_k if "base_k" in locals() else None, retrieval_mode=retrieval_mode, retrieval_scores=retrieval_scores, user_department=user_department, user_roles=user_roles)
@@ -1588,6 +1635,7 @@ class _BatchRetrievalPlan:
     dense_top_k: int | None
     sparse_top_k: int | None
     started_at: float
+    allow_history: bool = False
 
 
 def _batch_retrieval_plan(request):
@@ -1615,6 +1663,7 @@ def _batch_retrieval_plan(request):
         dense_top_k=request.get("dense_top_k"),
         sparse_top_k=request.get("sparse_top_k"),
         started_at=time.time(),
+        allow_history=bool(request.get("allow_history")),
     )
 
 
@@ -1625,7 +1674,7 @@ def _initial_hybrid_request(plan):
         payload_filter=(
             plan.strict_filter
             if is_strict
-            else current_published_filter(plan.rbac_filter)
+            else (plan.strict_filter if plan.allow_history else current_published_filter(plan.rbac_filter))
         ),
         dense_top_k=plan.dense_top_k or plan.base_k,
         sparse_top_k=plan.sparse_top_k or plan.base_k,
@@ -1651,7 +1700,7 @@ def _merge_batched_documents(strict_docs, broad_docs):
     seen = set()
     merged = []
     for document in tuple(strict_docs) + tuple(broad_docs):
-        key = str(getattr(document, "page_content", "") or "")[:200]
+        key = evidence_key(document)
         if key in seen:
             continue
         seen.add(key)
@@ -1666,7 +1715,7 @@ def _finish_batched_retrieval(plan, initial, broad=None):
     if not plan.new_part_ids:
         documents = initial_docs
         mode = f"general:{initial_mode}"
-        active_filter = current_published_filter(plan.rbac_filter)
+        active_filter = plan.strict_filter if plan.allow_history else current_published_filter(plan.rbac_filter)
     elif broad is None:
         documents = initial_docs
         mode = f"strict_exact:{initial_mode}"
@@ -1681,7 +1730,7 @@ def _finish_batched_retrieval(plan, initial, broad=None):
         mode = f"broad_fallback:{broad_mode}"
         active_filter = plan.broad_filter
     return (
-        filter_currently_servable(documents),
+        filter_currently_servable(documents, allow_history=plan.allow_history),
         plan.base_k,
         mode,
         plan.started_at,
@@ -1747,7 +1796,8 @@ def _retrieve_many(
 def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
               query_to_search, rbac_filter, trace_id=None, vectorstore,
               client, collection_name, dense_top_k=None, sparse_top_k=None,
-              qdrant_timeout_seconds=_QDRANT_SEARCH_TIMEOUT_SECONDS, checkpoint=None):
+              qdrant_timeout_seconds=_QDRANT_SEARCH_TIMEOUT_SECONDS, checkpoint=None,
+              allow_history=False):
     """BUOC: truy xuat tai lieu (strict_exact / broad_fallback / general).
     Tra ve (retrieved_docs, base_k, retrieval_mode, t_retrieval, active_filter_or_sentinel).
     active_filter tra _RETRIEVE_UNSET neu chua set (duong hiem) de caller bind co dieu kien,
@@ -1806,7 +1856,7 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
                             result.update(canonical_part_id(value) for value in values if isinstance(value, str))
                     return result
 
-                retrieved_docs = filter_currently_servable(strict_docs)
+                retrieved_docs = filter_currently_servable(strict_docs, allow_history=allow_history)
                 covered = set().union(*(identifiers(doc) for doc in retrieved_docs))
                 for code in new_part_ids:
                     if canonical_part_id(code) in covered:
@@ -1829,13 +1879,11 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
                             qdrant_timeout_seconds=qdrant_timeout_seconds,
                         )
                         identities = {
-                            (d.metadata.get("doc_id"), d.metadata.get("version_no"),
-                             d.metadata.get("trang_so"), d.page_content)
+                            evidence_key(d)
                             for d in retrieved_docs
                         }
-                        for doc in filter_currently_servable(extra):
-                            identity = (doc.metadata.get("doc_id"), doc.metadata.get("version_no"),
-                                        doc.metadata.get("trang_so"), doc.page_content)
+                        for doc in filter_currently_servable(extra, allow_history=allow_history):
+                            identity = evidence_key(doc)
                             if identity not in identities:
                                 retrieved_docs = [*retrieved_docs, doc]
                                 identities.add(identity)
@@ -1880,7 +1928,7 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
                     merged_docs = []
                     seen = set()
                     for doc in existing_docs + broad_docs:
-                        key = doc.page_content[:200]
+                        key = evidence_key(doc)
                         if key not in seen:
                             seen.add(key)
                             merged_docs.append(doc)
@@ -1906,7 +1954,7 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
         retrieval_mode = "general"
         logger.info(f"Khong co ma cu tinh, dang tim kiem dense+BM25+RRF tren toan bo Database k={base_k}...")
                 
-        general_filter = current_published_filter(rbac_filter)
+        general_filter = strict_filter if allow_history else current_published_filter(rbac_filter)
         retrieved_docs, general_mode = _explicit_hybrid_rrf(
             query_to_search,
             general_filter,
@@ -1928,7 +1976,7 @@ def _retrieve(*, new_part_ids, strict_filter, broad_filter, is_bom_query,
     # that crossed its expiry date cannot reach reranking or generation while
     # lifecycle reconciliation is still catching up.
     from mech_chatbot.domain.serving_state import filter_currently_servable
-    retrieved_docs = run_retrieval_step(lambda: filter_currently_servable(retrieved_docs),
+    retrieved_docs = run_retrieval_step(lambda: filter_currently_servable(retrieved_docs, allow_history=allow_history),
                                       trace_id=trace_id,step='serving_filter',phase=retrieval_mode,
                                       checkpoint=checkpoint)
     return retrieved_docs, base_k, retrieval_mode, t_retrieval, (active_filter if "active_filter" in locals() else _RETRIEVE_UNSET)
@@ -2270,9 +2318,15 @@ def _disambiguate(*, retrieved_docs, user_question, new_part_ids, intent_data,
         # and part variants.  In administrative corpora it can mistake three
         # supporting pages of one policy for three selectable "models", which
         # prevents the evidence gate from answering or refusing correctly.
-        _need_disambig = _context_is_mechanical(retrieved_docs, new_part_ids) and (
-            (len(unique_variants) > 1) or (
-                not new_part_ids and _strong_constraints and len(distinct_families) > 1
+        query_scope = str((intent_data or {}).get("query_scope") or "").strip().casefold()
+        # A broad policy/comparison request needs every relevant source first;
+        # only a single-candidate request may enter the model selector.
+        _need_disambig = (
+            query_scope not in {"general_policy", "compare_candidates"}
+            and _context_is_mechanical(retrieved_docs, new_part_ids)
+            and (
+                (len(unique_variants) > 1)
+                or (not new_part_ids and _strong_constraints and len(distinct_families) > 1)
             )
         )
 

@@ -23,7 +23,7 @@ from mech_chatbot.rag.corrective import (
 )
 from mech_chatbot.rag.evidence_gate import evaluate_answerability
 from mech_chatbot.rag.execution import RequestBudgetExceeded
-from mech_chatbot.rag.intent import is_bom_lookup
+from mech_chatbot.rag.intent import is_bom_lookup, _rewrite_preserves_request_constraints
 from mech_chatbot.rag.phases.diagnostics import make_source_snapshot
 from mech_chatbot.rag.phases.routing import RouteDecision
 from mech_chatbot.rag.pipeline_steps import (
@@ -33,6 +33,7 @@ from mech_chatbot.rag.pipeline_steps import (
 from mech_chatbot.rag.rbac import PART_ID_KEYS_BROAD, compose_retrieval_filters
 from mech_chatbot.rag.rerank import tokenize_cached
 from mech_chatbot.rag.retrieval import probe_restricted_access
+from mech_chatbot.auth.authorization import role_allows
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +142,14 @@ def _access_context(context: _RetrievalContext) -> Mapping[str, Any]:
         "max_security_level": request.max_security_level,
         "version_policy": context.decision.intent_data.get("version_policy"),
     })
+
+
+def _allow_history(context: _RetrievalContext) -> bool:
+    return bool(
+        context.decision.intent_data.get("version_policy")
+        in {"specific_version", "compare_versions", "include_archived", "version_history"}
+        and role_allows(context.user_roles, "document_history_reader")
+    )
 
 
 def _compile_plan(context: _RetrievalContext, state: Any, access_context: Any) -> _PlannerResult:
@@ -322,15 +331,26 @@ def _correct_branch(
             trace_id=context.trace_id,
             retry_counter=state.budget,
         ).content
+        rewritten = str(rewritten or "").strip()
+        if not _rewrite_preserves_request_constraints(subquery, rewritten):
+            logger.warning("Corrective rewrite dropped a protected query constraint; keeping original evidence")
+            return _BranchCorrection(
+                result,
+                True,
+                len(rewrite_prompt) // 4,
+                len(rewritten) // 4,
+                (len(rewrite_prompt) * 2.5 + len(rewritten) * 15.0) / 1_000_000,
+            )
         corrected_result = run_corrected_retrieval(
             state.retrieve,
-            corrected_query=tokenize_cached(str(rewritten or subquery)),
+            corrected_query=tokenize_cached(rewritten or subquery),
             new_part_ids=branch_part_ids,
             strict_filter=strict_filter,
             broad_filter=broad_filter,
             is_bom_query=is_bom_lookup(subquery),
             rbac_filter=context.decision.rbac_filter,
             trace_id=context.trace_id,
+            allow_history=_allow_history(context),
         )
         return _branch_correction_success(
             context, result, corrected_result, branch_decision,
@@ -700,6 +720,7 @@ def _run_complex_plan(
             "query_to_search": tokenize_cached(subquery),
             "rbac_filter": context.decision.rbac_filter,
             "trace_id": context.trace_id,
+            "allow_history": _allow_history(context),
         }
         for subquery, part_ids, strict_filter, broad_filter in prepared
     )
@@ -826,6 +847,7 @@ def _retrieve_direct(context: _RetrievalContext, state: Any) -> _RetrievalBatch:
         query_to_search=decision.query_to_search,
         rbac_filter=decision.rbac_filter,
         trace_id=context.trace_id,
+        allow_history=_allow_history(context),
     )
     return _RetrievalBatch(
         tuple(_documents_in_question(documents, context.effective_question)),
@@ -849,7 +871,9 @@ def _run_decomposition(context: _RetrievalContext, state: Any) -> _Decomposition
             used_fallback=plan.used_fallback,
             usage=_decomposition_usage(state, plan, planner_result, ()),
         )
-    if plan.is_complex:
+    undivided_query = (not state.explicit_text_intents
+                       and plan.subqueries == plan.intents == (plan.original_query,))
+    if plan.is_complex and not undivided_query:
         return _run_complex_plan(context, state, access_context, planner_result)
     return _DecompositionResult(
         batch=_retrieve_direct(context, state),
@@ -892,6 +916,7 @@ def _apply_hyde(
             query_to_search=tokenize_cached(response),
             rbac_filter=context.decision.rbac_filter,
             trace_id=context.trace_id,
+            allow_history=_allow_history(context),
         )
         state.checkpoint("hyde_retrieval")
         log_trace(

@@ -18,7 +18,7 @@ const evidenceStatuses:Record<string,string>={full_answer:'Đủ căn cứ truy 
       <p>{{ step.formula }}: {{ step.display_value ?? step.value }} {{ step.unit }}</p>
       <p>Trước làm tròn: {{ step.value }} {{ step.unit }}</p>
     </div>
-    <div v-for="source in result.math.sources" :key="source.source_id">
+    <div v-for="source in result.math.sources" :key="source.evidence_identity || source.source_id">
       <a :href="source.original_url" target="_blank" rel="noopener">{{ source.file_name || `Tài liệu ${source.doc_id}` }}</a>
       <StructuredSourceFacts v-if="source.scope_id" :citation="source" @unavailable="emit('unavailable')" />
     </div>
@@ -30,7 +30,7 @@ const evidenceStatuses:Record<string,string>={full_answer:'Đủ căn cứ truy 
       <h3>Ý {{ index+1 }}: {{ branch.subquery }}</h3>
       <p>{{ evidenceStatuses[branch.outcome] || 'Chưa xác định' }}</p>
       <p v-if="!branch.cited_sources.length">Chưa có nguồn được dẫn trong câu trả lời cho ý này.</p>
-      <div v-for="source in branch.cited_sources" :key="source.source_id || source.original_url">
+      <div v-for="source in branch.cited_sources" :key="source.evidence_identity || source.source_id || source.original_url">
         <a :href="source.original_url" target="_blank" rel="noopener">{{ source.file_name || `Tài liệu ${source.doc_id}` }}</a>
       </div>
     </article>
@@ -50,7 +50,7 @@ const evidenceStatuses:Record<string,string>={full_answer:'Đủ căn cứ truy 
         <p v-if="branch.math.schema==='grounded-calculation-scope-total-v1'" v-for="step in branch.math.steps" :key="`raw-${step.step_id}`">Trước làm tròn: {{ step.value }} {{ step.unit }}</p>
       </div>
       <details v-if="branch.sources.length"><summary>Nguồn của ý {{ index+1 }}</summary>
-        <div v-for="source in branch.sources" :key="source.source_id || source.original_url">
+        <div v-for="source in branch.sources" :key="source.evidence_identity || source.source_id || source.original_url">
           <a :href="source.original_url" target="_blank" rel="noopener">{{ source.file_name || `Tài liệu ${source.doc_id}` }}</a>
           <StructuredSourceFacts v-if="source.scope_id" :citation="source" @unavailable="emit('unavailable')" />
         </div>

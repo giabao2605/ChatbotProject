@@ -209,7 +209,13 @@ def _run_through_executor(monkeypatch, module, **generation_kwargs):
                 setattr(rag_package, attribute, previous)
 
 
-def _prepare(module, monkeypatch, chain, **retrieval_overrides):
+def _prepare(module, monkeypatch, chain, *, real_verification=False, **retrieval_overrides):
+    # These transport tests isolate pre-existing guards. Verifier integration tests use the real seam.
+    if not real_verification:
+        monkeypatch.setattr(module, "verify_answer_claims", lambda draft, *a, **k:
+                            SimpleNamespace(answer=draft, status="verified"))
+    else:
+        retrieval_overrides["claim_verification_enabled"] = True
     monkeypatch.setattr(module, "_build_prompt_template", lambda *_args, **_kwargs: chain)
     monkeypatch.setattr(module, "StrOutputParser", lambda: object())
     monkeypatch.setattr(module, "audited_external_call", _no_network_audit)
@@ -217,6 +223,31 @@ def _prepare(module, monkeypatch, chain, **retrieval_overrides):
     monkeypatch.setattr(module, "has_unsupported_numbers", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(module, "make_insufficient_evidence_message", lambda *_args, **_kwargs: "REFUSAL")
     return _runtime(client=chain, **retrieval_overrides)
+
+
+def test_semantic_verifier_failure_emits_no_draft_through_executor(monkeypatch):
+    from mech_chatbot.rag.execution import RagFailed
+
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    draft = "Employees receive one paid leave day. [SRC:D7P1]"
+    runtime = _prepare(module, monkeypatch, _FakeChain([draft]), real_verification=True)
+    monkeypatch.setattr(module, "has_unsupported_numbers", lambda *a, **k: False)
+    calls = []
+
+    def unavailable(*args, **kwargs):
+        calls.append(kwargs)
+        raise RuntimeError("verification service unavailable")
+
+    runtime.provider_adapter.invoke_once = unavailable
+    documents = [SimpleNamespace(page_content="Employees receive one paid leave day.",
+        metadata={"doc_id": 7, "trang_so": 1, "version_no": 1,
+                  "security_level": "internal", "external_processing_policy": "all_external"})]
+    events = _run_through_executor(monkeypatch, module, runtime=runtime, docs=documents,
+                                  question="What is the leave policy?")
+    assert not any(isinstance(event, RagToken) for event in events)
+    assert isinstance(events[-1], RagFailed)
+    assert len(calls) == 1
+    assert calls[0]["surface"] == "evidence_verification"
 
 
 @pytest.mark.parametrize("realtime", [False, True])

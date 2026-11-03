@@ -11,7 +11,8 @@ VALUES
     ('platform_admin'),
     ('security_admin'),
     ('knowledge_approver'),
-    ('knowledge_consumer');
+    ('knowledge_consumer'),
+    ('document_history_reader');
 
 INSERT INTO dbo.Roles (RoleName)
 SELECT source.RoleName

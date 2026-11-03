@@ -62,6 +62,7 @@ from mech_chatbot.services.chat_service import (
     get_chat_history,
     update_chat_feedback,
 )
+from mech_chatbot.auth.authorization import role_allows
 
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -70,7 +71,10 @@ CHAT_IMAGE_UPLOADS_PER_WINDOW = 10
 CHAT_REQUESTS_PER_WINDOW = 30
 
 
-class ChatMessageRequest(BaseModel):
+from mech_chatbot.api.search_contract import SearchRequest
+
+
+class ChatMessageRequest(SearchRequest):
     session_id: str = Field(..., min_length=1, max_length=100)
     question: str = Field(..., min_length=1, max_length=20000)
     image_token: str | None = None
@@ -152,32 +156,25 @@ def _sources_for_chat_ids(
         tuple(int(chat_id) for chat_id in chat_ids if chat_id)
     )
     out: dict[int, list[dict[str, Any]]] = {}
-    for chat_id, doc_id, file_name, version_no, chunk_ref, score, has_vision in rows:
+    for row in rows:
+        chat_id, doc_id, file_name, version_no, chunk_ref, score, has_vision = row[:7]
         page_no = safe_int(chunk_ref)
         if doc_id is None or page_no is None:
             continue
         version = safe_int(version_no) if type(version_no) in (int, str) else None
         if version is None or version < 1:
             continue
-        revision_query = f'?citation_version={version}'
+        reference = {}
+        if len(row) > 7 and row[7] is not None:
+            from mech_chatbot.application.chat_citations import restore_source_reference
+            reference = restore_source_reference(row[7], doc_id=int(doc_id), version=version, page=page_no)
         verified_vision = bool(has_vision) and vision_available(int(doc_id), page_no)
-        out.setdefault(int(chat_id), []).append(
-            {
-                "doc_id": int(doc_id),
-                "page_no": page_no,
-                "file_name": file_name,
-                "version_no": version_no,
-                "score": score,
-                "source_id": f"D{int(doc_id)}P{page_no}",
-                "has_vision": verified_vision,
-                "page_url": (
-                    f"/api/files/documents/{int(doc_id)}/pages/{page_no}{revision_query}"
-                    if preview_available(int(doc_id), page_no)
-                    else None
-                ),
-                "original_url": f"/api/files/documents/{int(doc_id)}/original{revision_query}",
-            }
+        cards = build_citation_list(
+            [{**reference, 'doc_id': int(doc_id), 'page_no': page_no, 'file_name': file_name,
+              'version_no': version, 'score': score, 'source_id': f'D{int(doc_id)}P{page_no}'}],
+            page_has_vision=lambda *_: verified_vision, page_has_preview=preview_available,
         )
+        out.setdefault(int(chat_id), []).extend(cards)
     return out
 
 
@@ -210,7 +207,10 @@ def _decorate_history_messages(
             if message.get('_advanced_rag_payload') is not None and not message.get('sources_redacted'):
                 from mech_chatbot.application.chat_result_history import restore_history_result
                 try:
-                    rendered['advanced_rag'] = restore_history_result(message['_advanced_rag_payload'], filtered)
+                    restored = restore_history_result(message['_advanced_rag_payload'], filtered)
+                    rendered.update(restored.pop('answer_assessment', {}))
+                    if restored:
+                        rendered['advanced_rag'] = restored
                 except (ValueError, TypeError, KeyError):
                     rendered = {**rendered, 'content':'Nội dung đã được ẩn vì không còn xác minh được nguồn.',
                                 'citations':[], 'ref_text':'', 'sources_redacted':True}
@@ -269,7 +269,8 @@ def _chat_actor(profile: dict[str, Any]) -> ChatActor:
 
 def _chat_event_sse(event: Any) -> str:
     if isinstance(event, ChatThinking):
-        return _sse("thinking", {"message": event.message})
+        return _sse("thinking", {"message": event.message,
+            **({"search_progress": event.search_progress} if event.search_progress is not None else {})})
     if isinstance(event, ChatDelta):
         return _sse("delta", {"text": event.text})
     if isinstance(event, ChatCitation):
@@ -291,6 +292,8 @@ def _chat_event_sse(event: Any) -> str:
             payload.setdefault("status", event.http_status)
         if event.elapsed_ms is not None:
             payload.setdefault("elapsed_ms", event.elapsed_ms)
+        payload.setdefault('code', event.code)
+        payload.setdefault('retryable', event.retryable)
         return _sse("error", payload)
     if isinstance(event, ChatDone):
         return _sse(
@@ -303,6 +306,10 @@ def _chat_event_sse(event: Any) -> str:
                 "conversation_context": event.conversation_context,
                 "elapsed_ms": event.elapsed_ms,
                 **({'advanced_rag':event.advanced_rag} if event.advanced_rag is not None else {}),
+                **({'search_progress':event.search_progress} if event.search_progress is not None else {}),
+                **({'verification_status':event.verification_status} if event.verification_status is not None else {}),
+                **({'answer_outcome':event.answer_outcome} if event.answer_outcome is not None else {}),
+                **({'source_groups':event.source_groups} if event.source_groups else {}),
             },
         )
     raise TypeError(f"Unsupported chat event: {type(event).__name__}")
@@ -373,6 +380,7 @@ def history(
                 user_clearance=profile.get("max_security_level", "public"),
                 allowed_departments=profile.get("allowed_departments") or [],
                 allowed_sites=profile.get("allowed_sites") or [],
+                allow_history=role_allows(profile.get("roles"), "document_history_reader"), actor=profile,
             )
             return {'messages':_decorate_history_messages(messages, request.app.state.runtime)}
     except TimeoutError:
@@ -493,6 +501,8 @@ def chat_message(
         bom_rollup=req.bom_rollup.to_rollup() if req.bom_rollup is not None else None,
         query_plan=req.query_plan.to_plan() if req.query_plan is not None else None,
         text_query=req.text_query,
+        search_mode=req.search_mode,
+        continuation_cursor=req.continuation_cursor,
     )
     runner = request.app.state.runtime.chat_turn_runner
 

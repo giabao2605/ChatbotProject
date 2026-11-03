@@ -77,6 +77,15 @@ reports/*
 !reports/refactor/**
 reports/refactor/**/raw/
 reports/refactor/**/coverage-*.json
+# Sanitized, frozen GD1 diagnostics only; raw captures remain local.
+!reports/rag-information-first-gd1/
+reports/rag-information-first-gd1/*
+!reports/rag-information-first-gd1/README.md
+!reports/rag-information-first-gd1/development.json
+!reports/rag-information-first-gd1/holdout.json
+!reports/rag-information-first-gd1/lock.json
+!reports/rag-information-first-gd1/baseline.json
+!reports/rag-information-first-gd1/gd2-result.json
 *.prof
 *.lprof
 

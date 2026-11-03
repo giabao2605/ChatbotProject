@@ -183,6 +183,16 @@ class TextFact:
     linked_step_fact_id: str | None = None
     linked_bom_fact_id: str | None = None
     linked_bom_fingerprint: str | None = None
+    # Optional business context stays on the source-bound fact payload.  It is
+    # deliberately not a separate truth store and absent values remain
+    # unconfirmed.
+    subject: str = ""
+    attributes: tuple[tuple[str, str], ...] = ()
+    applicability: tuple[str, ...] = ()
+    activity_status: str = "unconfirmed"
+    valid_from: str | None = None
+    valid_until: str | None = None
+    confirmed_at: str | None = None
 
     def __post_init__(self):
         if self.linked_bom_fact_id is not None and (
@@ -195,7 +205,7 @@ class TextFact:
                 or len(self.linked_bom_fingerprint) != 64
                 or any(c not in '0123456789abcdef' for c in self.linked_bom_fingerprint)):
             raise ValueError('A bound BOM fingerprint is required')
-        if self.kind not in {'material', 'symbol', 'assembly_step', 'drawing_note'}:
+        if self.kind not in {'material', 'symbol', 'assembly_step', 'drawing_note', 'business_fact'}:
             raise ValueError('Unsupported technical field kind')
         if self.review_status not in {'pending', 'approved', 'rejected'}:
             raise ValueError('Invalid field review state')
@@ -217,3 +227,19 @@ class TextFact:
                     or len(loc.bbox) != 4 or any(type(v) not in (int, float) or not math.isfinite(v) for v in loc.bbox)
                     or loc.bbox[0] >= loc.bbox[2] or loc.bbox[1] >= loc.bbox[3]):
                 raise ValueError('Drawing notes require a finite source page region')
+        if not isinstance(self.subject, str) or len(self.subject) > 500:
+            raise ValueError('Bounded fact subject required')
+        if (not isinstance(self.attributes, tuple) or len(self.attributes) > 100
+                or any(not isinstance(pair, tuple) or len(pair) != 2
+                       or not all(isinstance(value, str) and value.strip() for value in pair)
+                       or len(pair[0]) > 128 or len(pair[1]) > 2000 for pair in self.attributes)):
+            raise ValueError('Bounded fact attributes required')
+        if (not isinstance(self.applicability, tuple) or len(self.applicability) > 100
+                or any(not isinstance(value, str) or not value.strip() or len(value) > 255
+                       for value in self.applicability)):
+            raise ValueError('Bounded applicability scope required')
+        if self.activity_status not in {'unconfirmed', 'active', 'inactive', 'superseded', 'unknown'}:
+            raise ValueError('Invalid fact activity status')
+        for value in (self.valid_from, self.valid_until, self.confirmed_at):
+            if value is not None and (not isinstance(value, str) or len(value) > 64 or not value.strip()):
+                raise ValueError('Bounded fact timestamp required')

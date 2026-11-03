@@ -432,7 +432,7 @@ CREATE TABLE UserDepartments (
 GO
 
 -- Seed du lieu mau (DEV ONLY)
-INSERT INTO Roles (RoleName) VALUES ('admin'), ('reviewer'), ('uploader'), ('viewer');
+INSERT INTO Roles (RoleName) VALUES ('admin'), ('reviewer'), ('uploader'), ('viewer'), ('document_history_reader');
 
 INSERT INTO Users (Username, PasswordHash, DisplayName, Department)
 VALUES ('admin', '$2b$12$GjF79FWNuuNfl4VWOA28iOk4ubZWWd5OltSsAiZ5TgaWPz5UtAZpu', 'Administrator', 'IT');

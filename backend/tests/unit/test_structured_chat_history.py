@@ -47,6 +47,24 @@ def read_history(store, *, sites=('factory',)):
                                  allowed_departments=('ENG',),allowed_sites=sites,db_engine=store)
 
 
+def test_historical_chat_source_requires_explicit_reader_role(history_store):
+    approved_pair(history_store)
+    with history_store.begin() as conn:
+        conn.execute(text("UPDATE TaiLieu SET Servable=0, IsCurrent=0, LifecycleStatus='archived', PublicationState='published' WHERE DocID=1"))
+        conn.execute(text("INSERT INTO LichSuChat VALUES(11,'s1','Question','Answer [SRC:D1P1]',NULL,NULL,NULL,'approver','2026-10-07')"))
+    card = {'doc_id':1,'version_no':2,'source_id':'D1P1','page_no':1,'file_name':'before.pdf'}
+    assert chat.save_answer_evidence(11, [{**card,'trang':1}], db_engine=history_store,
+                                     citation_cards=[card])
+    assert chat.save_answer_sources(11, [{**card,'trang':1,'file_goc':'before.pdf'}], db_engine=history_store)
+    denied = chat.get_chat_history('s1', username='approver', user_clearance='internal',
+                                   allowed_departments=('ENG',), allowed_sites=('factory',), db_engine=history_store)
+    granted = chat.get_chat_history('s1', username='approver', user_clearance='internal',
+                                    allowed_departments=('ENG',), allowed_sites=('factory',),
+                                    allow_history=True, db_engine=history_store)
+    assert denied[-1]['sources_redacted']
+    assert not granted[-1].get('sources_redacted')
+
+
 @pytest.mark.parametrize('change', ['site', 'revision', 'correction'])
 @pytest.mark.parametrize('live', [False, True])
 def test_scope_total_history_keeps_steps_and_redacts_unavailable_basis(history_store, change, live):

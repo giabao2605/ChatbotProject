@@ -5,7 +5,7 @@ from mech_chatbot.rag.claim_repair import claim_repair_enabled, repair_grounded_
 
 def _doc():
     return Document(
-        page_content="approved",
+        page_content="Chi phí 1500 USD.",
         metadata={"doc_id": 7, "trang_so": 3, "version_no": 1, "file_goc": "bom.pdf"},
     )
 
@@ -176,7 +176,7 @@ def test_claim_repair_rejects_new_source_id_when_source_cards_are_deferred():
     )
 
     assert result.accepted is False
-    assert result.violation_reason == "citation"
+    assert result.violation_reason == "claim_source_support"
 
 
 def test_claim_repair_rejects_wrong_version_for_allowed_source_id():

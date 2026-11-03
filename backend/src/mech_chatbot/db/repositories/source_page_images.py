@@ -5,7 +5,15 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from ..engine import resolve_engine
 from ..evidence_snapshot import evidence_read_connection
-from .structured_evidence import _table
+from .structured_evidence import _source, _table
+
+
+def load_source_snapshot_hash(doc_id, version, snapshot_id, profile, *, db_engine=None):
+    with evidence_read_connection(db_engine) as conn:
+        _source(conn, doc_id, version, profile, historical=True)
+        return conn.execute(text(f'SELECT SourceHash FROM {_table(conn,"StructuredSourceSnapshot")} '
+                                 'WHERE DocID=:doc AND VersionNo=:version AND SnapshotID=:snapshot AND CurrentSnapshot=1'),
+                            {'doc':doc_id, 'version':version, 'snapshot':snapshot_id}).scalar()
 
 
 def save_source_page_images(doc_id,version,snapshot_id,source_hash,page_hashes,*,db_engine=None):

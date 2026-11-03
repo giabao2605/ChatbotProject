@@ -98,11 +98,14 @@ def load_document_access_record(doc_id: int) -> DocumentAccessRecord | None:
 def evaluate_document_access(
     profile: dict[str, Any],
     record: DocumentAccessRecord | None,
+    *,
+    allow_history: bool = False,
 ) -> AccessDecision:
     return _evaluate_document_access(
         _actor_from_profile(profile),
         record,
         strict_site_filter=_strict_site_enabled(),
+        allow_history=allow_history,
     )
 
 

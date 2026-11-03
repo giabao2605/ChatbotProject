@@ -257,6 +257,8 @@ def _revision_file_response(request: Request, reference: ProtectedFileReference,
 @files_router.get("/documents/{doc_id}/pages/{page_no}")
 def citation_page(doc_id: int, page_no: int, request: Request, profile: dict[str, Any] = Depends(current_profile), pin=Depends(file_pin),
                   citation_version: Annotated[int | None, Query(ge=1)] = None):
+    if citation_version is None and pin is not None and pin.scope_id is None and pin.graph_context is None:
+        citation_version = pin.version_no
     if citation_version is not None:
         return _revision_file_response(request, ProtectedFileReference.page(doc_id, page_no, expected_version=citation_version), profile, pin)
     verify_file_pin(doc_id, profile, pin, page_no=page_no)
@@ -303,6 +305,8 @@ def _document_page_response(doc_id: int, page_no: int, request: Request, profile
 @files_router.get("/documents/{doc_id}/original")
 def original_document(doc_id: int, request: Request, profile: dict[str, Any] = Depends(current_profile), pin=Depends(file_pin),
                       citation_version: Annotated[int | None, Query(ge=1)] = None):
+    if citation_version is None and pin is not None and pin.scope_id is None and pin.graph_context is None:
+        citation_version = pin.version_no
     if citation_version is not None:
         return _revision_file_response(request, ProtectedFileReference.original(doc_id, expected_version=citation_version), profile, pin)
     verify_file_pin(doc_id,profile,pin)

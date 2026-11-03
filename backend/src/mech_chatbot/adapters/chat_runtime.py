@@ -109,6 +109,9 @@ def _default_payload(request: RagStreamRequest) -> dict[str, Any]:
         "chat_history": [dict(item) for item in command.history],
         "current_part_ids": list(command.current_part_ids),
         "response_language": actor.response_language,
+        "search_mode": command.search_mode,
+        **({"continuation_cursor": command.continuation_cursor}
+           if command.continuation_cursor is not None else {}),
         "conversation_context": (
             dict(command.conversation_context)
             if isinstance(command.conversation_context, Mapping)
@@ -277,7 +280,12 @@ class RepositoryChatStore:
             or isinstance(record.advanced_rag.get('math'), Mapping)
             and record.advanced_rag['math'].get('schema') == 'grounded-calculation-scope-total-v1'
         ) else None
+        if record.answer_assessment is not None:
+            metadata = {**(metadata or {}), 'answer_assessment': record.answer_assessment}
         options = {'advanced_rag':metadata,'citation_cards':list(record.citations)} if metadata is not None else {}
+        from mech_chatbot.rag.semantic_cache import _replay_is_scope_sensitive
+        if record.command.search_mode == "comprehensive" or _replay_is_scope_sensitive(record.command.question):
+            options['time_sensitive'] = True
         options['actor'] = {key:getattr(record.actor,key) for key in ('user_id','username','roles','department',
             'allowed_departments','allowed_sites','max_security_level')}
         if self._save_answer_evidence(chat_id, list(record.evidence), **options) is False:

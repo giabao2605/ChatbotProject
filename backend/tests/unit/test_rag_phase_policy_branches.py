@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import time
+import hashlib
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -22,6 +24,40 @@ from mech_chatbot.rag.phases.routing import RouteDecision
 
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize(("question", "bom_query", "narrow"), [
+    ("Kế toán yêu cầu lưu quyết định trước thanh toán, còn nhân sự lập biên bản đánh giá rồi chuyển người có thẩm quyền quyết định. Hai hướng dẫn này có mâu thuẫn hoặc thay thế nhau không?", False, False),
+    ("Việc nội dung quy trình đã được duyệt có đủ để khẳng định thời gian thử việc cho từng vị trí và cấp duyệt, hạn mức thanh toán đã được xác nhận và đang áp dụng không?", False, False),
+    ("Quy trình nhân sự thế nào?", False, False),
+    ("Ai xác nhận hồ sơ?", False, False),
+    ("Quy định chia sẻ tài liệu của công ty?", False, False),
+    ("Danh sách nhân sự cần xác nhận?", False, False),
+    ("Tổng số lượng BOM là bao nhiêu?", False, True),
+    ("Lấy PART-A nhân FACTOR-X trong BOM.", False, True),
+    ("Lấy PART-A nhân FACTOR-X.", True, True),
+    ("Liệt kê các dòng BOM.", True, False),
+])
+def test_arithmetic_document_narrowing_requires_a_bom_query(monkeypatch, question, bom_query, narrow):
+    from unittest.mock import Mock
+    from mech_chatbot.rag import grounded_math
+    from mech_chatbot.rag.phases import retrieval_enrichment as module
+    request = replace(_request(), user_question=question, current_part_ids=())
+    decision = _decision(request, effective_question=question, new_part_ids=(), is_bom_query=bom_query)
+    state = _state()
+    state.retrieval_adapter.grounded_math_enabled = True
+    documents = (Document(page_content="Policy A", metadata={"doc_id":1, "domain":"mechanical" if narrow else "generic"}),
+                 Document(page_content="Policy B", metadata={"doc_id":2, "domain":"mechanical"}))
+    selected = Mock(return_value=[1])
+    monkeypatch.setattr(grounded_math, "select_grounded_bom_document_ids", selected)
+    monkeypatch.setattr(module, "_disambiguate", lambda **kwargs: (None, kwargs["retrieved_docs"]))
+    monkeypatch.setattr(module, "_log_retrieval", lambda *args: None)
+    result, terminal = module._disambiguate_documents(
+        module._make_context(decision, state), state, documents, (), _primary(), "hybrid")
+    assert terminal is None
+    assert result == (documents[:1] if narrow else documents)
+    if narrow:
+        selected.assert_called_once()
 
 
 def _request(*, cache_eligible=False, history_summary=None, summary_covered=None):
@@ -123,6 +159,7 @@ def _state():
     )
     return SimpleNamespace(
         budget=budget,
+        request=SimpleNamespace(access=AccessScope()),
         retrieval_adapter=SimpleNamespace(
             semantic_cache_enabled=True,
             semantic_cache_ttl_hours=24.0,
@@ -168,7 +205,7 @@ def test_citation_policy_selects_bom_sources_and_renders_all_metadata(monkeypatc
             "phong_ban_quyen": ["R&D"], "site": "HQ", "version_no": 3,
         },
     )
-    same_page = Document(page_content="duplicate", metadata=dict(bom.metadata))
+    same_page = Document(page_content=bom.page_content, metadata=dict(bom.metadata))
     code_match = Document(
         page_content="code",
         metadata={"doc_id": 2, "parent_page": 4, "file_goc": "drawing.pdf", "ma_vat_tu": ["P-1"]},
@@ -225,6 +262,7 @@ def test_diagnostic_builders_tolerate_invalid_identifiers_and_namespace_failure(
             "lifecycle_status": None, "review_status": None,
             "trang": None, "source_id": None, "score": None,
             "security_level": None,
+            "excerpt_hash": hashlib.sha256(b"valid").hexdigest(),
         }
     ]
 

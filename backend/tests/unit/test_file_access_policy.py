@@ -96,6 +96,20 @@ def test_expired_document_is_denied_even_before_reconciliation_and_for_admin():
     assert decision.reason == "document_not_servable"
 
 
+def test_history_reader_can_read_expired_approved_document_but_admin_cannot():
+    record = _doc(servable=False, expiry_date="2020-01-01")
+    reader = file_access.evaluate_document_access(
+        _profile(roles=["viewer", "document_history_reader"]), record,
+        allow_history=True,
+    )
+    admin = file_access.evaluate_document_access(
+        _profile(roles=["admin"], departments=[]), record,
+        allow_history=True,
+    )
+    assert reader.allowed and reader.reason == "historical_reader"
+    assert not admin.allowed and admin.reason == "document_not_servable"
+
+
 def test_superseded_or_non_current_document_file_is_denied():
     assert not file_access.evaluate_document_access(
         _profile(), _doc(effective_status="superseded")

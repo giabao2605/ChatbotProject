@@ -31,6 +31,7 @@ from mech_chatbot.rag.pipeline_steps import (
 )
 from mech_chatbot.rag.query_decomposition import audit_decomposition_stream
 from mech_chatbot.rag.demo_sources import is_demo_source, mark_demo_stream
+from mech_chatbot.auth.authorization import role_allows
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,13 +211,18 @@ def _generation_debug(
     debug_info["decomposition_usage"] = generation_metrics[
         "decomposition_usage"
     ]
-    from mech_chatbot.domain.serving_state import is_currently_servable
+    from mech_chatbot.domain.serving_state import is_currently_servable, is_history_servable
     from mech_chatbot.rag.rbac import document_matches_access_scope
     from mech_chatbot.rag.phases.retrieval_enrichment_support import (
         is_governed_sql_bom_document,
     )
 
     request = decision.request
+    allow_history = bool(
+        getattr(decision, "intent_data", {}).get("version_policy")
+        in {"specific_version", "compare_versions", "include_archived", "version_history"}
+        and role_allows(request.user_roles, "document_history_reader")
+    )
     access_scope_passed = bool(documents) and all(
         is_governed_sql_bom_document(document)
         or document_matches_access_scope(
@@ -230,10 +236,9 @@ def _generation_debug(
         for document in documents
     )
     serving_state_passed = bool(documents) and all(
-        is_governed_sql_bom_document(document) or is_currently_servable(
-            getattr(document, "metadata", None),
-            require_current=True,
-        )
+        is_governed_sql_bom_document(document)
+        or is_currently_servable(getattr(document, "metadata", None), require_current=True)
+        or (allow_history and is_history_servable(getattr(document, "metadata", None)))
         for document in documents
     )
     debug_info["pilot_request_validation"] = {

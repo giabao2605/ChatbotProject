@@ -156,6 +156,9 @@ def _reconcile_grounded_math(primary, enrichment):
 
 
 def execute_pipeline(state):
+    if state.request.search_mode == "comprehensive":
+        from mech_chatbot.rag.comprehensive_execution import execute_comprehensive
+        return execute_comprehensive(state)
     if state.request.scope_total is not None:
         from mech_chatbot.rag.scope_total import execute_scope_total
         return _run_traced_phase(state, 'evidence', lambda: execute_scope_total(state))

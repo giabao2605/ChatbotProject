@@ -146,6 +146,75 @@ def test_display_department_does_not_restore_revoked_file_grant() -> None:
     assert raised.value.detail == "department_denied"
 
 
+def test_explicit_history_reader_can_open_published_superseded_revision(tmp_path) -> None:
+    source = tmp_path / "old.pdf"
+    resolver = _resolver(
+        Store(record=_record(
+            servable=False, is_current=False, lifecycle_status="superseded",
+            effective_status="superseded",
+        )),
+        Storage(original=source),
+    )
+
+    result = resolver.resolve(
+        ProtectedFileReference.original(42),
+        _actor(roles=frozenset({"viewer", "document_history_reader"})),
+    )
+
+    assert result.path == source
+
+
+def test_admin_does_not_receive_history_permission_implicitly() -> None:
+    resolver = _resolver(
+        Store(record=_record(
+            servable=False, is_current=False, lifecycle_status="archived",
+        )),
+        Storage(original=Path("old.pdf")),
+    )
+
+    with pytest.raises(ProtectedFileError) as raised:
+        resolver.resolve(ProtectedFileReference.original(42), _actor(roles=frozenset({"admin"})))
+
+    assert raised.value.detail == "document_not_servable"
+
+
+def test_history_reader_cannot_open_future_effective_revision() -> None:
+    resolver = _resolver(
+        Store(record=_record(
+            servable=False, is_current=False, lifecycle_status="archived",
+            effective_date="2999-01-01",
+        )),
+        Storage(original=Path("future.pdf")),
+    )
+
+    with pytest.raises(ProtectedFileError) as raised:
+        resolver.resolve(
+            ProtectedFileReference.original(42),
+            _actor(roles=frozenset({"viewer", "document_history_reader"})),
+        )
+
+    assert raised.value.detail == "document_not_servable"
+
+
+@pytest.mark.parametrize("lifecycle", ["draft", "rejected", "revoked", "deleting"])
+def test_history_reader_cannot_open_unpublished_or_revoked_revision(lifecycle) -> None:
+    resolver = _resolver(
+        Store(record=_record(
+            servable=False, is_current=False, lifecycle_status=lifecycle,
+            review_status="rejected" if lifecycle != "draft" else "pending_review",
+        )),
+        Storage(original=Path("old.pdf")),
+    )
+
+    with pytest.raises(ProtectedFileError) as raised:
+        resolver.resolve(
+            ProtectedFileReference.original(42),
+            _actor(roles=frozenset({"viewer", "document_history_reader"})),
+        )
+
+    assert raised.value.detail == "document_not_servable"
+
+
 def test_assigned_reviewer_can_preview_pending_page_and_original(tmp_path) -> None:
     source = tmp_path / "pending.pdf"
     page = tmp_path / "pending-page.png"

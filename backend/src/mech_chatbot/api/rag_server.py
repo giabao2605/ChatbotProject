@@ -240,7 +240,10 @@ router = APIRouter()
 from mech_chatbot.api.evidence_contracts import ScopeTotalRequest, ScopeComparisonRequest, GraphQueryRequest, BomRollupRequest, QueryPlanRequest, require_comparison_context
 
 
-class ChatRequest(BaseModel):
+from mech_chatbot.api.search_contract import SearchRequest
+
+
+class ChatRequest(SearchRequest):
     user_id: Optional[int] = None
     username: Optional[str] = None
     user_question: str = Field(..., min_length=1, max_length=20000)
@@ -815,6 +818,7 @@ async def chat_stream_endpoint(
                             raise event.cause
                         raise ExternalAICallCancelled(event.reason)
                     elif isinstance(event, RagFailed):
+                        debug_info = dict(event.diagnostics)
                         raise event.cause
                 if not completed:
                     raise RuntimeError("RAG executor ended without a completion event")
@@ -840,7 +844,12 @@ async def chat_stream_endpoint(
                         "trace_id": request_trace_id,
                         "trace_stages": trace_stages,
                         'outcome':completion_outcome,
-                        **({'debug_info':debug_info} if req.regression_scope is not None else {}),
+                        'debug_info': debug_info if req.regression_scope is not None
+                           or 'comprehensive' in debug_info else {
+                               **{key: debug_info[key] for key in ('verification_status', 'answer_outcome') if key in debug_info},
+                               'generation_metrics': {'source_groups': (debug_info.get('generation_metrics') or {}).get('source_groups', [])}},
+                        **({'search_progress':debug_info['comprehensive']}
+                           if 'comprehensive' in debug_info else {}),
                     },
                 )
                 logger.info(
@@ -887,6 +896,8 @@ async def chat_stream_endpoint(
                     {
                         "message": "RAG request failed. Please retry.",
                         "elapsed_ms": int((time.time() - started) * 1000),
+                        **({'search_progress':debug_info['comprehensive']}
+                           if 'comprehensive' in debug_info else {}),
                     },
                 )
             finally:
@@ -963,7 +974,8 @@ async def load_chat_history(req: SessionHistoryRequest):
     profile = resolve_user_profile(req)
     return {
         "messages": chat_service.get_chat_history(
-            req.session_id,
+            req.session_id, actor=profile,
+            allow_history="document_history_reader" in (profile.get("roles") or ()),
             username=profile.get("username"),
             is_admin=_is_admin(profile),
             user_clearance=profile.get("max_security_level", "public"),
@@ -1160,6 +1172,8 @@ def _open_rag_events(
         bom_rollup=req.bom_rollup.to_rollup() if req.bom_rollup is not None else None,
         query_plan=req.query_plan.to_plan() if req.query_plan is not None else None,
         text_query=req.text_query,
+        search_mode=req.search_mode,
+        continuation_cursor=req.continuation_cursor,
     )
     routing_contract = None
     if mode == 'production' and request.query_plan is not None and not any(

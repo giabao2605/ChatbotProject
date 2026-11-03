@@ -195,7 +195,8 @@ def test_recent_dashboard_documents_apply_serving_and_actor_scope(monkeypatch):
     assert "d.Servable = 1" in sql
     assert "PhongBanChiaSe" in sql
     assert "d.Site IN" in sql
-    assert params["allowed_dept_0"] == "QA_20260919_R1_B"
+    assert params["allowed_dept_0"] == "CHUNG"
+    assert params["allowed_dept_1"] == "QA_20260919_R1_B"
     assert params["allowed_site_0"] == "QA_20260919_R1_B"
 
 
@@ -410,6 +411,7 @@ def test_list_documents_applies_normalized_rbac_and_filters(monkeypatch):
     assert params == {
         "allowed_dept_0": "A",
         "allowed_dept_1": "B",
+        "allowed_dept_2": "CHUNG",
         "allowed_level_0": "public",
         "allowed_level_1": "internal",
         "allowed_site_0": "HCM",
@@ -442,7 +444,7 @@ def test_list_documents_fail_closed_without_scope_and_rejects_unknown_bucket(mon
     )
 
     sql, params = connection.calls[-1]
-    assert sql.count("1 = 0") >= 2
+    assert sql.count("1 = 0") >= 1
     assert params["soon_days"] == 0
     assert params["bucket"] == "needs_review"
     with pytest.raises(ValueError, match="Unknown document lifecycle bucket"):

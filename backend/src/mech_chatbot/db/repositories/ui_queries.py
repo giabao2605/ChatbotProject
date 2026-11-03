@@ -9,6 +9,7 @@ KHÔNG import streamlit / ui ở tầng này.
 """
 from sqlalchemy import text
 
+from mech_chatbot.config.constants import SHARE_ALL_DEPARTMENT
 from mech_chatbot.db.engine import engine, resolve_engine as _resolve_engine
 from .jobs import JOB_CONTROL_DOCUMENT_GUARD
 
@@ -423,9 +424,10 @@ def _document_access_filters(*, allowed_departments, max_security_level, allowed
 		"d.PublicationState = 'published'",
 		"LOWER(ISNULL(NULLIF(LTRIM(RTRIM(d.EffectiveStatus)), ''), 'effective')) IN ('active','effective','expired','superseded')",
 	]
-	if not global_read_admin and allowed_departments:
+	if not global_read_admin:
 		placeholders = []
-		for index, department in enumerate(sorted({str(value).strip() for value in allowed_departments if str(value).strip()})):
+		departments = {str(value).strip() for value in (allowed_departments or []) if str(value).strip()} | {SHARE_ALL_DEPARTMENT}
+		for index, department in enumerate(sorted(departments)):
 			key = f"allowed_dept_{index}"
 			placeholders.append(f":{key}")
 			params[key] = department
@@ -433,8 +435,6 @@ def _document_access_filters(*, allowed_departments, max_security_level, allowed
 			"EXISTS (SELECT 1 FROM dbo.PhongBanChiaSe pb WHERE pb.DocID = d.DocID "
 			"AND pb.DeptCode IN (" + ", ".join(placeholders) + "))" if placeholders else "1 = 0"
 		)
-	elif not global_read_admin:
-		filters.append("1 = 0")
 
 	if not global_read_admin:
 		security_placeholders = []

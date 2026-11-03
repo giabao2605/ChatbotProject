@@ -87,6 +87,7 @@ def _empty_debug() -> dict[str, Any]:
 
 def _normalize_request(state: Any) -> _PreparationContext:
     from mech_chatbot.rag.intent import has_context_reference
+    from mech_chatbot.rag.semantic_cache import _replay_is_scope_sensitive
     request = state.request
     image_path = str(request.image_path) if request.image_path is not None else None
     chat_history = tuple(request.history)
@@ -110,10 +111,13 @@ def _normalize_request(state: Any) -> _PreparationContext:
         conversation_context=conversation_context,
         trace_id=state.trace_id,
         started_at=time.time(),
-        cache_eligible=not any(
+        cache_eligible=bool(request.access.user_id is not None) and not any(
             (image_path, chat_history, current_part_ids, bool(conversation_context),
-             has_context_reference(request.question))
-        ),
+             has_context_reference(request.question), _replay_is_scope_sensitive(request.question))
+        ) and not any(getattr(request, name, None) for name in (
+            "scope_comparison", "graph_query", "bom_rollup", "query_plan", "text_query",
+            "candidate_selection_context", "scope_total",
+        )),
     )
 
 
@@ -335,6 +339,9 @@ def _lookup_exact_cache(
                         None,
                     ),
                     response_language=context.response_language,
+                    user_id=state.request.access.user_id,
+                    username=state.request.access.username,
+                    execution_context=state.invocation.mode,
                 )
                 hit = semantic_cache.lookup_exact(
                     context.user_question,

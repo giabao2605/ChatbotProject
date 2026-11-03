@@ -15,6 +15,7 @@ export type Citation = {
   doc_id: number;
   page_no: number | null;
   source_id?: string;
+  evidence_identity?: string;
   citation_schema?: 'source-locator-v2';
   scope_id?: string;
   scope_hash?: string;
@@ -41,6 +42,33 @@ export type ChatMessage = {
   ref_text?: string;
   citations?: Citation[];
   advanced_rag?: AdvancedRagMetadata;
+  search_progress?: SearchProgress;
+  verification_status?: string;
+  answer_outcome?: string;
+  source_groups?: SourceGroup[];
+};
+
+export type SearchMode = 'quick' | 'comprehensive';
+export type SearchProgress = {
+  search_mode: SearchMode;
+  scan_id?: string;
+  scan_status?: 'pending' | 'paused' | 'error' | 'stale' | 'denied' | 'complete';
+  total_sources?: number;
+  checked_sources?: number;
+  pending_sources?: number;
+  error_sources?: number;
+  snapshot_complete?: boolean;
+  turn_complete?: boolean;
+  result_revision?: number;
+  results_pending?: boolean;
+  continuation_cursor?: string;
+};
+export type SourceGroup = {
+  source_id: string; doc_id: number | string; version_no?: number | string | null;
+  evidence_identity?: string; related_texts: string[];
+  evidence_identities?: string[];
+  claims?: {text: string; quotes: [string,string][]; relationship: string;
+    subject: string; condition: string; time: string}[];
 };
 
 export type EvidenceDocument = {DocID:number; OriginalFileName:string|null; DocNumber?:string|null; VersionNo?:number|null; Site?:string};

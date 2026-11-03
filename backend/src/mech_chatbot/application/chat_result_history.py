@@ -65,7 +65,7 @@ def _body(value, kind):
     return result
 
 
-def serialize_history_result(metadata, citations):
+def _serialize_history_result(metadata, citations):
     if isinstance(metadata.get('math'), Mapping) and metadata['math'].get('schema') == 'grounded-calculation-scope-total-v1':
         body = _total_body(metadata['math'])
         body['source_ids'] = list(dict.fromkeys(card['source_id'] for card in citations))
@@ -93,7 +93,7 @@ def serialize_history_result(metadata, citations):
     return payload
 
 
-def restore_history_result(payload, citations):
+def _restore_history_result(payload, citations):
     if not isinstance(payload, str) or len(payload)>MAX_PAYLOAD:
         raise ValueError('Invalid history result payload')
     stored = json.loads(payload)
@@ -112,6 +112,54 @@ def restore_history_result(payload, citations):
         if branch.get('math',{}).get('schema')=='grounded-calculation-scope-total-v1':
             _total_sources({**branch['math'],'source_ids':ids},citations)
     return {kind:body}
+
+
+def _assessment(value, citations):
+    if not isinstance(value, Mapping):
+        raise ValueError('Invalid answer assessment')
+    result = _pick(value, ('verification_status', 'answer_outcome'))
+    if result.get('verification_status') not in (None, 'verified', 'partial', 'insufficient', 'unverified'):
+        raise ValueError('Invalid verification status')
+    cards = {(c.get('source_id'), c.get('doc_id'), str(c.get('version_no'))) for c in citations}
+    groups = value.get('source_groups') or []
+    if not isinstance(groups, (list, tuple)) or len(groups) > 5000:
+        raise ValueError('Invalid source groups')
+    result['source_groups'] = []
+    for group in groups:
+        if (not isinstance(group, Mapping) or
+                (group.get('source_id'), group.get('doc_id'), str(group.get('version_no'))) not in cards):
+            raise ValueError('Source group unavailable')
+        identities = group.get('evidence_identities', [])
+        available = {card.get('evidence_identity') for card in citations if
+            (card.get('source_id'), card.get('doc_id'), str(card.get('version_no'))) ==
+            (group.get('source_id'), group.get('doc_id'), str(group.get('version_no')))}
+        if not isinstance(identities, list) or any(not isinstance(key, str) or key not in available for key in identities):
+            raise ValueError('Source group identity unavailable')
+        result['source_groups'].append({key: group[key] for key in
+            ('source_id', 'doc_id', 'version_no', 'related_texts', 'claims', 'evidence_identities') if key in group})
+    return result
+
+
+def serialize_history_result(metadata, citations):
+    payload = _serialize_history_result(metadata, citations)
+    if metadata.get('answer_assessment') is None:
+        return payload
+    stored = json.loads(payload) if payload else {'schema': SCHEMA, 'kind': 'answer'}
+    stored['answer_assessment'] = _assessment(metadata['answer_assessment'], citations)
+    payload = json.dumps(stored, ensure_ascii=False, allow_nan=False)
+    if len(payload) > MAX_PAYLOAD:
+        raise ValueError('History result too large')
+    return payload
+
+
+def restore_history_result(payload, citations):
+    if not isinstance(payload, str) or len(payload) > MAX_PAYLOAD:
+        raise ValueError('Invalid history result payload')
+    stored = json.loads(payload)
+    result = {} if isinstance(stored, dict) and stored.get('schema') == SCHEMA and stored.get('kind') == 'answer' else _restore_history_result(payload, citations)
+    if isinstance(stored, dict) and 'answer_assessment' in stored:
+        result['answer_assessment'] = _assessment(stored['answer_assessment'], citations)
+    return result
 
 
 def _total_body(value):

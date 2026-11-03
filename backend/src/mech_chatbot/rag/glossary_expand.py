@@ -87,6 +87,8 @@ def glossary_expansion_terms(text_in, user_department=None, *, ttl_seconds=60.0)
                 if vn and not _has(vn) and vn not in seen:
                     seen.add(vn)
                     adds.append(str(v))
+                    if len(adds) >= 2:
+                        return " ".join(adds)
         return " ".join(adds)
     except Exception as e:
         logger.warning(f"glossary_expansion_terms loi: {e}")

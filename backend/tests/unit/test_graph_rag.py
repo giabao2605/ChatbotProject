@@ -233,6 +233,20 @@ def test_graph_context_does_not_cross_document_versions():
     assert served_evidence == []
 
 
+def test_graph_context_does_not_cross_snapshots_of_same_version():
+    from langchain_core.documents import Document
+
+    regular = Document(page_content="Current page", metadata={
+        "doc_id": 7, "trang_so": 3, "version_no": 2, "snapshot_id": "current",
+    })
+    relation = Document(page_content="Relation\n\nOld page", metadata={
+        **regular.metadata, "snapshot_id": "old",
+    })
+    merged, evidence = attach_served_graph_context([regular], [relation])
+    assert merged == [regular]
+    assert evidence == []
+
+
 def test_graph_migration_defines_proposals_separately_from_serving_edges():
     migration = Path("database/migrations/V0033__governed_knowledge_graph.sql").read_text(encoding="utf-8")
 

@@ -81,6 +81,24 @@ def evidence_docs(engine,actor,doc_ids=(1,)):
         return pin_generation_sources(conn,[{'doc_id':doc,'version_no':2,'trang':1,'security_level':'internal','text':'approved content'} for doc in doc_ids],actor)
 
 
+def test_plain_excerpt_identity_keeps_page_pin_when_snapshot_metadata_is_present(scoped_db):
+    import json
+    engine, actor = scoped_db
+    original = evidence_docs(engine, actor)[0]
+    docs = [{**original, 'chunk_index': index, 'snapshot_id': 'retrieval-snapshot',
+             'source_hash': 'a' * 64} for index in (0, 1)]
+    assert chat.save_answer_evidence(31, [*docs, docs[0]], db_engine=engine, actor=actor)
+    with engine.connect() as conn:
+        rows = conn.execute(text('SELECT SourceLocatorJson FROM AnswerEvidence WHERE ChatID=31 ORDER BY RankNo')).scalars().all()
+    pins = [json.loads(row) for row in rows]
+    assert len(pins) == 2 and len({pin['evidence_identity'] for pin in pins}) == 2
+    assert all(pin['source_hash'] == original['evidence_pin']['source_hash'] for pin in pins)
+    assert [pin['reference']['chunk_index'] for pin in pins] == [0, 1]
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE DocumentPages SET TextExtract='changed' WHERE DocID=1"))
+    assert chat.save_answer_evidence(31, docs, db_engine=engine, actor=actor) is False
+
+
 def test_new_plain_chat_feedback_promotes_and_revocation_hides_whole_answer(scoped_db):
     engine,actor = scoped_db
     persist_feedback(engine,actor)
@@ -363,7 +381,7 @@ def test_real_plain_pipeline_preserves_ingestion_wrapper_pin_to_feedback(scoped_
         conn.execute(text("INSERT INTO FeedbackReview(FeedbackID,ChatID,Question,BotAnswer,Department,Site,SourceDocID) "
                           "VALUES(7,31,'Pressure?','source answer','ENG','HN',1)"))
     history = chat.get_chat_history('pin-history',username='reviewer',user_clearance='internal',
-        allowed_departments=['ENG'],allowed_sites=['HN'],db_engine=engine)
+        allowed_departments=['ENG'],allowed_sites=['HN'],db_engine=engine,actor=actor)
     assert history[-1]['content'] == source_text+' [SRC:D1P1]'
     assert not history[-1].get('sources_redacted')
     assert len(ui_queries.list_feedbacks(False,actor=actor)) == 1
@@ -519,3 +537,12 @@ def test_generation_pin_respects_existing_deadline_and_cancellation(scoped_db,ca
         pin_generation_evidence([],access,checkpoint=checkpoint,deadline=deadline)
     assert stages[0] == 'evidence_snapshot'
     assert stop_stage in stages
+
+def test_pinned_history_rechecks_applicability_and_source_text(scoped_db):
+    engine, actor = scoped_db
+    assert chat.save_answer_evidence(31, evidence_docs(engine,actor),db_engine=engine,actor=actor)
+    with engine.begin() as conn:
+        assert chat._history_pins_current(conn, 31, actor, 1)
+        assert not chat._history_pins_current(conn, 31, {**actor,"department":"NEW"}, 1)
+        conn.execute(text("UPDATE DocumentPages SET TextExtract='changed' WHERE DocID=1"))
+        assert not chat._history_pins_current(conn, 31, actor, 1)

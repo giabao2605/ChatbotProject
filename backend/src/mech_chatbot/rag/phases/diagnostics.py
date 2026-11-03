@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from mech_chatbot.rag.answer_policy import decide_terminal_policy
+from mech_chatbot.domain.evidence_identity import IDENTITY_METADATA_FIELDS, excerpt_hash
 
 
 def serialize_debug_documents(docs=None) -> list[dict[str, Any]]:
@@ -12,6 +13,9 @@ def serialize_debug_documents(docs=None) -> list[dict[str, Any]]:
     text_limit = None if current_execution_context() == "evaluation" else 800
     return [
         {
+            **{key: doc.metadata[key] for key in IDENTITY_METADATA_FIELDS if key in doc.metadata},
+            'excerpt_hash': excerpt_hash(doc),
+            **({'locator': doc.metadata['locator']} if 'locator' in doc.metadata else {}),
             "file_goc": doc.metadata.get("file_goc"),
             "doc_id": doc.metadata.get("doc_id"),
             "version_no": doc.metadata.get("version_no"),
@@ -104,6 +108,9 @@ def make_source_snapshot(docs=None) -> list[dict[str, Any]]:
             continue
         snapshots.append(
             {
+                **{key: metadata[key] for key in IDENTITY_METADATA_FIELDS if key in metadata},
+                'excerpt_hash': excerpt_hash(doc),
+                **({'locator': metadata['locator']} if 'locator' in metadata else {}),
                 "file_goc": metadata.get("file_goc"),
                 "doc_id": normalized_doc_id,
                 "version_no": metadata.get("version_no"),
@@ -143,6 +150,10 @@ def make_phase_diagnostics(
             state.budget.corrections > 0 or answer_policy.correction_allowed
         ),
         "evidence_stage": evidence_decision.stage,
+        "verification_status": "unverified",
+        "answerability_verification_status": getattr(
+            evidence_decision, "verification_status", "unverified"
+        ),
         "evidence_quotes": list(evidence_quotes),
         "correction_count": state.budget.corrections,
         "planner_count": state.budget.planners,

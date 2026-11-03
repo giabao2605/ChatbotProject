@@ -9,6 +9,8 @@ import re
 from sqlalchemy import text
 
 from mech_chatbot.application.protected_files import DocumentAccessRecord, ProtectedFileActor, evaluate_document_access
+from mech_chatbot.auth.authorization import role_allows
+from mech_chatbot.domain.serving_state import is_history_servable
 from mech_chatbot.domain.structured_evidence import BomQuantityBinding, NumericFact, RoundingRule, ScopeManifest, SourceLocator, scope_payload, source_bindings
 from ..engine import resolve_engine
 from ..evidence_snapshot import evidence_read_connection
@@ -50,9 +52,9 @@ def _manifest(payload, facts):
                             "rounding_rule": RoundingRule(**rule) if rule else None})
 
 
-def _source(conn, doc_id, version, profile, *, review=False):
+def _source(conn, doc_id, version, profile, *, review=False, historical=False):
     row = conn.execute(text(f"SELECT * FROM {_table(conn, 'TaiLieu')} WHERE DocID=:doc"), {"doc": int(doc_id)}).mappings().first()
-    if not row or str(row["VersionNo"]) != str(version) or (not review and not row["IsCurrent"]):
+    if not row or str(row["VersionNo"]) != str(version) or (not review and not historical and not row["IsCurrent"]):
         raise PermissionError("Evidence source unavailable")
     departments = tuple(conn.execute(text(f"SELECT DeptCode FROM {_table(conn, 'PhongBanChiaSe')} WHERE DocID=:doc"), {"doc": int(doc_id)}).scalars())
     record = DocumentAccessRecord(int(doc_id), row["TenFile"], row["FilePath"], row["ThuMuc"], row["SecurityLevel"], row["Site"],
@@ -64,7 +66,14 @@ def _source(conn, doc_id, version, profile, *, review=False):
             raise PermissionError("Evidence source unavailable")
         record = replace(record, servable=True, publication_state="published", lifecycle_status="published", review_status="approved", is_current=True,
                          effective_status="effective" if record.effective_status == "draft" else record.effective_status)
-    if not evaluate_document_access(ProtectedFileActor.from_profile(profile), record, strict_site_filter=True).allowed:
+    allow_history = role_allows(profile.get("roles"), "document_history_reader") and is_history_servable({
+        "servable": row["Servable"], "publication_state": row["PublicationState"],
+        "lifecycle_status": row["LifecycleStatus"], "review_status": row["ReviewStatus"],
+        "is_current": row["IsCurrent"], "effective_status": row["EffectiveStatus"],
+        "effective_date": row["EffectiveDate"], "expiry_date": row["ExpiryDate"],
+    })
+    if not evaluate_document_access(ProtectedFileActor.from_profile(profile), record, strict_site_filter=True,
+                                    allow_history=allow_history).allowed:
         raise PermissionError("Evidence source unavailable")
     return row
 

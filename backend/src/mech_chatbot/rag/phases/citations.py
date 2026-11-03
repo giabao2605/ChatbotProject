@@ -6,6 +6,7 @@ import os
 import re
 from pathlib import Path
 from typing import Any
+from mech_chatbot.domain.evidence_identity import evidence_key
 
 
 def _normalize_question(question: str) -> str:
@@ -56,10 +57,7 @@ def _deduplicate_sources(pool: list[Any], max_sources: int) -> list[Any]:
     seen: set[tuple[Any, Any]] = set()
     for doc in pool:
         metadata = getattr(doc, "metadata", {}) or {}
-        key = (
-            metadata.get("doc_id") or metadata.get("file_goc"),
-            metadata.get("trang_so") or metadata.get("parent_page"),
-        )
+        key = evidence_key(doc)
         if key in seen:
             continue
         seen.add(key)

@@ -11,6 +11,7 @@ from mech_chatbot.rag.answer_checks import (
     has_unsupported_codes,
     has_unsupported_materials,
     has_unsupported_units_symbols,
+    has_unsupported_claim_sources,
     has_valid_source_citation,
 )
 from mech_chatbot.rag.evidence_gate import find_unsupported_numbers
@@ -83,7 +84,7 @@ def _citations_match_documents(answer, documents):
         metadata = getattr(document, "metadata", {}) or {}
         try:
             doc_id = int(metadata.get("doc_id"))
-            page = int(metadata.get("trang_so"))
+            page = int(metadata.get("trang_so") or metadata.get("page_no"))
             version = int(metadata.get("version_no"))
             filename = str(metadata.get("file_goc") or "").strip().casefold()
         except (TypeError, ValueError):
@@ -152,6 +153,8 @@ def _validate(
         answer, documents, require_version=True
     ):
         return "citation"
+    if has_unsupported_claim_sources(answer, documents)[0]:
+        return "claim_source_support"
     if not _citations_match_documents(answer, documents):
         return "citation"
     answer_source_ids = set(re.findall(r"\bD\d+P\d+\b", answer, flags=re.IGNORECASE))

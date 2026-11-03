@@ -1,0 +1,2294 @@
+{
+  "schema": "gd1-observed-baseline-v1",
+  "source_commit": "8118dc089dbd65eae2010e10883167f53b9d34e6",
+  "lock_sha256": "946238c899a07cda1b11eab91f8cdbbd415c8892fc02e57bf11e6fdaa7acc3a0",
+  "as_of": "2026-10-31",
+  "scope": "offline_control_flow_diagnostic",
+  "boundaries": {
+    "executor_policy_source_checks": "production_code",
+    "retrieval_ranking": "supplied_candidates_not_live_search",
+    "generation": "scripted_drafts_including_adversarial_drafts",
+    "sql_qdrant_provider_network": "disabled",
+    "ocr": "manually_verified_transcript_not_fresh_ocr"
+  },
+  "configuration": {
+    "cache": false,
+    "parent_context": false,
+    "rerank_provider": false,
+    "crag": false,
+    "query_decomposition": false,
+    "evidence_verifier": false,
+    "strict_answer_mode": true,
+    "protected_file_actor": {
+      "user_id": 900001,
+      "username": "gd1_fixture",
+      "department": "HR",
+      "roles": [
+        "viewer"
+      ],
+      "allowed_departments": [
+        "HR"
+      ],
+      "allowed_sites": [
+        "HCM"
+      ],
+      "max_security_level": "internal"
+    },
+    "fixture_retrieval_k": 5,
+    "executor_scope": "HR/viewer/internal/HCM; no account identity in reused _run helper",
+    "python": "3.12.3",
+    "packages": {
+      "pytest": "9.1.1",
+      "langchain-core": "1.5.1",
+      "langchain-qdrant": "1.1.0",
+      "qdrant-client": "1.18.0",
+      "pydantic": "2.13.4"
+    }
+  },
+  "cases": [
+    {
+      "case_id": "D01",
+      "probe": "pipeline",
+      "input_source_ids": [
+        101
+      ],
+      "expected": {
+        "outcome": "answered",
+        "source_ids": [
+          101
+        ],
+        "contains": [
+          "1 ngày"
+        ]
+      },
+      "observed": {
+        "entrypoint": "DefaultRagExecutor.run",
+        "terminal_event": "RagCompleted",
+        "error_code": null,
+        "outcome": "answered",
+        "reason": null,
+        "answer": "Nhân viên chính thức được nghỉ 1 ngày có lương mỗi tháng. [SRC:D101P1]",
+        "source_ids": [
+          101
+        ],
+        "citation_candidate_ids": [
+          101
+        ],
+        "generation_calls": 1,
+        "generation_context_sources": [
+          101
+        ],
+        "retrieval_boundary_calls": 2,
+        "trace": [
+          {
+            "event": "rag_phase",
+            "phase": "preparation",
+            "status": "started"
+          },
+          {
+            "event": "rag_start"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "routing",
+            "status": "started"
+          },
+          {
+            "event": "route"
+          },
+          {
+            "event": "embed"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "context_analysis"
+          },
+          {
+            "event": "intent"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "retrieval",
+            "status": "started"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "dense_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "sparse_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "dense_retrieval",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "bm25_retrieval",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "rrf_grouping",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "retrieval_step",
+            "step": "serving_filter",
+            "phase": "general:explicit_dense_bm25_rrf",
+            "status": "completed"
+          },
+          {
+            "event": "community_summaries"
+          },
+          {
+            "event": "retrieval",
+            "docs_count": 1
+          },
+          {
+            "event": "parent_context"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "evidence",
+            "status": "started"
+          },
+          {
+            "event": "evidence_gate",
+            "status": "verifier_disabled",
+            "reason": "deterministic_evidence_gate_passed"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "generation",
+            "status": "started"
+          },
+          {
+            "event": "llm_generation"
+          },
+          {
+            "event": "rag_end",
+            "docs_count": 1
+          }
+        ]
+      },
+      "target_met": true,
+      "failures": [],
+      "elapsed_ms_local_only": 3366.852
+    },
+    {
+      "case_id": "D02",
+      "probe": "pipeline",
+      "input_source_ids": [
+        101
+      ],
+      "expected": {
+        "outcome": "answered",
+        "source_ids": [
+          101
+        ],
+        "contains": [
+          "1 ngày"
+        ]
+      },
+      "observed": {
+        "entrypoint": "DefaultRagExecutor.run",
+        "terminal_event": "RagCompleted",
+        "error_code": null,
+        "outcome": "answered",
+        "reason": null,
+        "answer": "Nhân viên chính thức được nghỉ 1 ngày có lương mỗi tháng. [SRC:D101P1]",
+        "source_ids": [
+          101
+        ],
+        "citation_candidate_ids": [
+          101
+        ],
+        "generation_calls": 1,
+        "generation_context_sources": [
+          101
+        ],
+        "retrieval_boundary_calls": 2,
+        "trace": [
+          {
+            "event": "rag_phase",
+            "phase": "preparation",
+            "status": "started"
+          },
+          {
+            "event": "rag_start"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "routing",
+            "status": "started"
+          },
+          {
+            "event": "route"
+          },
+          {
+            "event": "embed"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "context_analysis"
+          },
+          {
+            "event": "intent"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "retrieval",
+            "status": "started"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "dense_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "sparse_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "dense_retrieval",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "bm25_retrieval",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "rrf_grouping",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "retrieval_step",
+            "step": "serving_filter",
+            "phase": "general:explicit_dense_bm25_rrf",
+            "status": "completed"
+          },
+          {
+            "event": "community_summaries"
+          },
+          {
+            "event": "retrieval",
+            "docs_count": 1
+          },
+          {
+            "event": "parent_context"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "evidence",
+            "status": "started"
+          },
+          {
+            "event": "evidence_gate",
+            "status": "verifier_disabled",
+            "reason": "deterministic_evidence_gate_passed"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "generation",
+            "status": "started"
+          },
+          {
+            "event": "llm_generation"
+          },
+          {
+            "event": "rag_end",
+            "docs_count": 1
+          }
+        ]
+      },
+      "target_met": true,
+      "failures": [],
+      "elapsed_ms_local_only": 5.502
+    },
+    {
+      "case_id": "D03",
+      "probe": "pipeline",
+      "input_source_ids": [
+        101
+      ],
+      "expected": {
+        "outcome": "answered",
+        "source_ids": [
+          101
+        ],
+        "contains": [
+          "1 ngày"
+        ]
+      },
+      "observed": {
+        "entrypoint": "DefaultRagExecutor.run",
+        "terminal_event": "RagCompleted",
+        "error_code": null,
+        "outcome": "answered",
+        "reason": null,
+        "answer": "Nhân viên chính thức được nghỉ 1 ngày có lương mỗi tháng. [SRC:D101P1]",
+        "source_ids": [
+          101
+        ],
+        "citation_candidate_ids": [
+          101
+        ],
+        "generation_calls": 1,
+        "generation_context_sources": [
+          101
+        ],
+        "retrieval_boundary_calls": 2,
+        "trace": [
+          {
+            "event": "rag_phase",
+            "phase": "preparation",
+            "status": "started"
+          },
+          {
+            "event": "rag_start"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "routing",
+            "status": "started"
+          },
+          {
+            "event": "route"
+          },
+          {
+            "event": "embed"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "context_analysis"
+          },
+          {
+            "event": "intent"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "retrieval",
+            "status": "started"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "dense_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "sparse_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "dense_retrieval",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "bm25_retrieval",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "rrf_grouping",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "retrieval_step",
+            "step": "serving_filter",
+            "phase": "general:explicit_dense_bm25_rrf",
+            "status": "completed"
+          },
+          {
+            "event": "community_summaries"
+          },
+          {
+            "event": "retrieval",
+            "docs_count": 1
+          },
+          {
+            "event": "parent_context"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "evidence",
+            "status": "started"
+          },
+          {
+            "event": "evidence_gate",
+            "status": "verifier_disabled",
+            "reason": "deterministic_evidence_gate_passed"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "generation",
+            "status": "started"
+          },
+          {
+            "event": "llm_generation"
+          },
+          {
+            "event": "rag_end",
+            "docs_count": 1
+          }
+        ]
+      },
+      "target_met": true,
+      "failures": [],
+      "elapsed_ms_local_only": 5.036
+    },
+    {
+      "case_id": "D04",
+      "probe": "merge",
+      "input_source_ids": [
+        111,
+        112
+      ],
+      "expected": {
+        "source_ids": [
+          111,
+          112
+        ]
+      },
+      "observed": {
+        "entrypoint": "shared_retrieval",
+        "source_ids": [
+          111
+        ],
+        "retrieval_phases": [
+          "strict_exact",
+          "broad_fallback"
+        ],
+        "mode": "broad_fallback:offline_rrf"
+      },
+      "target_met": false,
+      "failures": [
+        "source_ids: expected [111, 112]; observed [111]"
+      ],
+      "elapsed_ms_local_only": 0.083
+    },
+    {
+      "case_id": "D05",
+      "probe": "resolver",
+      "input_source_ids": [
+        107,
+        108
+      ],
+      "expected": {
+        "terminal": false,
+        "source_ids": [
+          107,
+          108
+        ]
+      },
+      "observed": {
+        "entrypoint": "shared_disambiguation",
+        "terminal": true,
+        "answer": "Mình chưa xác định chắc chắn được tài liệu/bản vẽ cần tra theo mô tả của bạn. Bạn vui lòng cung cấp thêm mã bản vẽ, model, tên sản phẩm, kích thước hoặc vật liệu cụ thể hơn nhé.",
+        "source_ids": [
+          107,
+          108
+        ]
+      },
+      "target_met": false,
+      "failures": [
+        "terminal: expected False; observed True"
+      ],
+      "elapsed_ms_local_only": 0.423
+    },
+    {
+      "case_id": "D06",
+      "probe": "resolver",
+      "input_source_ids": [
+        107,
+        108
+      ],
+      "expected": {
+        "terminal": false,
+        "source_ids": [
+          107,
+          108
+        ]
+      },
+      "observed": {
+        "entrypoint": "shared_disambiguation",
+        "terminal": false,
+        "answer": "",
+        "source_ids": [
+          107,
+          108
+        ]
+      },
+      "target_met": true,
+      "failures": [],
+      "elapsed_ms_local_only": 0.05
+    },
+    {
+      "case_id": "D07",
+      "probe": "pipeline",
+      "input_source_ids": [
+        101,
+        102
+      ],
+      "expected": {
+        "outcome": "answered",
+        "source_ids": [
+          101,
+          102
+        ],
+        "contains": [
+          "1 ngày"
+        ]
+      },
+      "observed": {
+        "entrypoint": "DefaultRagExecutor.run",
+        "terminal_event": "RagCompleted",
+        "error_code": null,
+        "outcome": "answered",
+        "reason": null,
+        "answer": "Hai tài liệu quy định 1 ngày mỗi tháng cho nhân viên chính thức. [SRC:D101P1] [SRC:D102P1]",
+        "source_ids": [
+          101,
+          102
+        ],
+        "citation_candidate_ids": [
+          101,
+          102
+        ],
+        "generation_calls": 1,
+        "generation_context_sources": [
+          101,
+          102
+        ],
+        "retrieval_boundary_calls": 2,
+        "trace": [
+          {
+            "event": "rag_phase",
+            "phase": "preparation",
+            "status": "started"
+          },
+          {
+            "event": "rag_start"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "routing",
+            "status": "started"
+          },
+          {
+            "event": "route"
+          },
+          {
+            "event": "embed"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "context_analysis"
+          },
+          {
+            "event": "intent"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "retrieval",
+            "status": "started"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "dense_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "sparse_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "dense_retrieval",
+            "phase": "general",
+            "docs_count": 2
+          },
+          {
+            "event": "bm25_retrieval",
+            "phase": "general",
+            "docs_count": 2
+          },
+          {
+            "event": "rrf_grouping",
+            "phase": "general",
+            "docs_count": 2
+          },
+          {
+            "event": "retrieval_step",
+            "step": "serving_filter",
+            "phase": "general:explicit_dense_bm25_rrf",
+            "status": "completed"
+          },
+          {
+            "event": "community_summaries"
+          },
+          {
+            "event": "retrieval",
+            "docs_count": 2
+          },
+          {
+            "event": "parent_context"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "evidence",
+            "status": "started"
+          },
+          {
+            "event": "evidence_gate",
+            "status": "verifier_disabled",
+            "reason": "deterministic_evidence_gate_passed"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "generation",
+            "status": "started"
+          },
+          {
+            "event": "llm_generation"
+          },
+          {
+            "event": "rag_end",
+            "docs_count": 2
+          }
+        ]
+      },
+      "target_met": true,
+      "failures": [],
+      "elapsed_ms_local_only": 5.515
+    },
+    {
+      "case_id": "D08",
+      "probe": "pipeline",
+      "input_source_ids": [
+        101,
+        103
+      ],
+      "expected": {
+        "outcome": "answered",
+        "source_ids": [
+          101,
+          103
+        ],
+        "contains": [
+          "mâu thuẫn",
+          "1 ngày",
+          "2 ngày"
+        ]
+      },
+      "observed": {
+        "entrypoint": "DefaultRagExecutor.run",
+        "terminal_event": "RagCompleted",
+        "error_code": null,
+        "outcome": "answered",
+        "reason": null,
+        "answer": "Có mâu thuẫn: tài liệu thứ nhất ghi 1 ngày [SRC:D101P1]; tài liệu thứ hai ghi 2 ngày mỗi tháng [SRC:D103P1].",
+        "source_ids": [
+          101,
+          103
+        ],
+        "citation_candidate_ids": [
+          101,
+          103
+        ],
+        "generation_calls": 1,
+        "generation_context_sources": [
+          101,
+          103
+        ],
+        "retrieval_boundary_calls": 2,
+        "trace": [
+          {
+            "event": "rag_phase",
+            "phase": "preparation",
+            "status": "started"
+          },
+          {
+            "event": "rag_start"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "routing",
+            "status": "started"
+          },
+          {
+            "event": "route"
+          },
+          {
+            "event": "embed"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "context_analysis"
+          },
+          {
+            "event": "intent"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "retrieval",
+            "status": "started"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "dense_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "sparse_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "dense_retrieval",
+            "phase": "general",
+            "docs_count": 2
+          },
+          {
+            "event": "bm25_retrieval",
+            "phase": "general",
+            "docs_count": 2
+          },
+          {
+            "event": "rrf_grouping",
+            "phase": "general",
+            "docs_count": 2
+          },
+          {
+            "event": "retrieval_step",
+            "step": "serving_filter",
+            "phase": "general:explicit_dense_bm25_rrf",
+            "status": "completed"
+          },
+          {
+            "event": "community_summaries"
+          },
+          {
+            "event": "retrieval",
+            "docs_count": 2
+          },
+          {
+            "event": "parent_context"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "evidence",
+            "status": "started"
+          },
+          {
+            "event": "evidence_gate",
+            "status": "verifier_disabled",
+            "reason": "deterministic_evidence_gate_passed"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "generation",
+            "status": "started"
+          },
+          {
+            "event": "llm_generation"
+          },
+          {
+            "event": "rag_end",
+            "docs_count": 2
+          }
+        ]
+      },
+      "target_met": true,
+      "failures": [],
+      "elapsed_ms_local_only": 6.508
+    },
+    {
+      "case_id": "D09",
+      "probe": "pipeline",
+      "input_source_ids": [
+        101,
+        104
+      ],
+      "expected": {
+        "must_not_emit": [
+          "Nhân viên chính thức được nghỉ 3 ngày có lương"
+        ]
+      },
+      "observed": {
+        "entrypoint": "DefaultRagExecutor.run",
+        "terminal_event": "RagCompleted",
+        "error_code": null,
+        "outcome": "answered",
+        "reason": null,
+        "answer": "Nhân viên chính thức được nghỉ 3 ngày có lương mỗi tháng. [SRC:D101P1]",
+        "source_ids": [
+          101
+        ],
+        "citation_candidate_ids": [
+          101,
+          104
+        ],
+        "generation_calls": 1,
+        "generation_context_sources": [
+          101,
+          104
+        ],
+        "retrieval_boundary_calls": 2,
+        "trace": [
+          {
+            "event": "rag_phase",
+            "phase": "preparation",
+            "status": "started"
+          },
+          {
+            "event": "rag_start"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "routing",
+            "status": "started"
+          },
+          {
+            "event": "route"
+          },
+          {
+            "event": "embed"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "context_analysis"
+          },
+          {
+            "event": "intent"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "retrieval",
+            "status": "started"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "dense_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "sparse_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "dense_retrieval",
+            "phase": "general",
+            "docs_count": 2
+          },
+          {
+            "event": "bm25_retrieval",
+            "phase": "general",
+            "docs_count": 2
+          },
+          {
+            "event": "rrf_grouping",
+            "phase": "general",
+            "docs_count": 2
+          },
+          {
+            "event": "retrieval_step",
+            "step": "serving_filter",
+            "phase": "general:explicit_dense_bm25_rrf",
+            "status": "completed"
+          },
+          {
+            "event": "community_summaries"
+          },
+          {
+            "event": "retrieval",
+            "docs_count": 2
+          },
+          {
+            "event": "parent_context"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "evidence",
+            "status": "started"
+          },
+          {
+            "event": "evidence_gate",
+            "status": "verifier_disabled",
+            "reason": "deterministic_evidence_gate_passed"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "generation",
+            "status": "started"
+          },
+          {
+            "event": "llm_generation"
+          },
+          {
+            "event": "rag_end",
+            "docs_count": 2
+          }
+        ]
+      },
+      "target_met": false,
+      "failures": [
+        "unsupported draft emitted: Nhân viên chính thức được nghỉ 3 ngày có lương"
+      ],
+      "elapsed_ms_local_only": 5.257
+    },
+    {
+      "case_id": "D10",
+      "probe": "pipeline",
+      "input_source_ids": [
+        105
+      ],
+      "expected": {
+        "must_not_emit": [
+          "Công ty đang triển khai kế hoạch 30 ngày"
+        ]
+      },
+      "observed": {
+        "entrypoint": "DefaultRagExecutor.run",
+        "terminal_event": "RagCompleted",
+        "error_code": null,
+        "outcome": "answered",
+        "reason": null,
+        "answer": "Công ty đang triển khai kế hoạch 30 ngày, làm 10 tiếng mỗi ngày. [SRC:D105P1]",
+        "source_ids": [
+          105
+        ],
+        "citation_candidate_ids": [
+          105
+        ],
+        "generation_calls": 1,
+        "generation_context_sources": [
+          105
+        ],
+        "retrieval_boundary_calls": 2,
+        "trace": [
+          {
+            "event": "rag_phase",
+            "phase": "preparation",
+            "status": "started"
+          },
+          {
+            "event": "rag_start"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "routing",
+            "status": "started"
+          },
+          {
+            "event": "route"
+          },
+          {
+            "event": "embed"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "context_analysis"
+          },
+          {
+            "event": "intent"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "retrieval",
+            "status": "started"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "dense_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "sparse_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "dense_retrieval",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "bm25_retrieval",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "rrf_grouping",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "retrieval_step",
+            "step": "serving_filter",
+            "phase": "general:explicit_dense_bm25_rrf",
+            "status": "completed"
+          },
+          {
+            "event": "community_summaries"
+          },
+          {
+            "event": "retrieval",
+            "docs_count": 1
+          },
+          {
+            "event": "parent_context"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "evidence",
+            "status": "started"
+          },
+          {
+            "event": "evidence_gate",
+            "status": "verifier_disabled",
+            "reason": "deterministic_evidence_gate_passed"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "generation",
+            "status": "started"
+          },
+          {
+            "event": "llm_generation"
+          },
+          {
+            "event": "rag_end",
+            "docs_count": 1
+          }
+        ]
+      },
+      "target_met": false,
+      "failures": [
+        "unsupported draft emitted: Công ty đang triển khai kế hoạch 30 ngày"
+      ],
+      "elapsed_ms_local_only": 5.425
+    },
+    {
+      "case_id": "D11",
+      "probe": "pipeline",
+      "input_source_ids": [
+        101
+      ],
+      "expected": {
+        "outcome": "refused",
+        "reason": "evidence_gate"
+      },
+      "observed": {
+        "entrypoint": "DefaultRagExecutor.run",
+        "terminal_event": "RagCompleted",
+        "error_code": null,
+        "outcome": "refused",
+        "reason": "evidence_gate",
+        "answer": "Mình chưa tìm thấy đủ bằng chứng trong tài liệu được phép xem để trả lời phần này.",
+        "source_ids": [],
+        "citation_candidate_ids": [
+          101
+        ],
+        "generation_calls": 0,
+        "generation_context_sources": [],
+        "retrieval_boundary_calls": 2,
+        "trace": [
+          {
+            "event": "rag_phase",
+            "phase": "preparation",
+            "status": "started"
+          },
+          {
+            "event": "rag_start"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "routing",
+            "status": "started"
+          },
+          {
+            "event": "route"
+          },
+          {
+            "event": "embed"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "context_analysis"
+          },
+          {
+            "event": "intent"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "retrieval",
+            "status": "started"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "dense_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "sparse_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "dense_retrieval",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "bm25_retrieval",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "rrf_grouping",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "retrieval_step",
+            "step": "serving_filter",
+            "phase": "general:explicit_dense_bm25_rrf",
+            "status": "completed"
+          },
+          {
+            "event": "community_summaries"
+          },
+          {
+            "event": "retrieval",
+            "docs_count": 1
+          },
+          {
+            "event": "parent_context"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "evidence",
+            "status": "started"
+          },
+          {
+            "event": "evidence_gate",
+            "status": "heuristic_block",
+            "reason": "tai lieu khong ghi chi phi/don gia/gia thanh"
+          },
+          {
+            "event": "rag_end",
+            "refusal_reason": "evidence_gate",
+            "docs_count": 1
+          }
+        ]
+      },
+      "target_met": true,
+      "failures": [],
+      "elapsed_ms_local_only": 3.583
+    },
+    {
+      "case_id": "D12",
+      "probe": "pipeline",
+      "input_source_ids": [
+        101
+      ],
+      "expected": {
+        "contains": [
+          "1 ngày"
+        ],
+        "must_not_emit": [
+          "500 đồng"
+        ]
+      },
+      "observed": {
+        "entrypoint": "DefaultRagExecutor.run",
+        "terminal_event": "RagCompleted",
+        "error_code": null,
+        "outcome": "answered",
+        "reason": null,
+        "answer": "Được nghỉ 1 ngày có lương mỗi tháng; chưa có thông tin tiền hỗ trợ. [SRC:D101P1]",
+        "source_ids": [
+          101
+        ],
+        "citation_candidate_ids": [
+          101
+        ],
+        "generation_calls": 1,
+        "generation_context_sources": [
+          101
+        ],
+        "retrieval_boundary_calls": 2,
+        "trace": [
+          {
+            "event": "rag_phase",
+            "phase": "preparation",
+            "status": "started"
+          },
+          {
+            "event": "rag_start"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "routing",
+            "status": "started"
+          },
+          {
+            "event": "route"
+          },
+          {
+            "event": "embed"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "context_analysis"
+          },
+          {
+            "event": "intent"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "retrieval",
+            "status": "started"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "dense_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "sparse_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "dense_retrieval",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "bm25_retrieval",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "rrf_grouping",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "retrieval_step",
+            "step": "serving_filter",
+            "phase": "general:explicit_dense_bm25_rrf",
+            "status": "completed"
+          },
+          {
+            "event": "community_summaries"
+          },
+          {
+            "event": "retrieval",
+            "docs_count": 1
+          },
+          {
+            "event": "parent_context"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "evidence",
+            "status": "started"
+          },
+          {
+            "event": "evidence_gate",
+            "status": "verifier_disabled",
+            "reason": "deterministic_evidence_gate_passed"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "generation",
+            "status": "started"
+          },
+          {
+            "event": "llm_generation"
+          },
+          {
+            "event": "rag_end",
+            "docs_count": 1
+          }
+        ]
+      },
+      "target_met": true,
+      "failures": [],
+      "elapsed_ms_local_only": 6.124
+    },
+    {
+      "case_id": "D13",
+      "probe": "citation",
+      "input_source_ids": [
+        101
+      ],
+      "expected": {
+        "versions": [
+          1,
+          2
+        ]
+      },
+      "observed": {
+        "entrypoint": "build_citation_list",
+        "versions": [
+          1
+        ],
+        "scope_limit": "same DocID/page with two revisions; current DB identity invariant not assumed"
+      },
+      "target_met": false,
+      "failures": [
+        "versions: expected [1, 2]; observed [1]"
+      ],
+      "elapsed_ms_local_only": 0.042
+    },
+    {
+      "case_id": "D14",
+      "probe": "access",
+      "input_source_ids": [
+        106
+      ],
+      "expected": {
+        "allowed": true
+      },
+      "observed": {
+        "entrypoint": "evaluate_document_access",
+        "allowed": false,
+        "reason": "document_not_servable"
+      },
+      "target_met": false,
+      "failures": [
+        "allowed: expected True; observed False"
+      ],
+      "elapsed_ms_local_only": 0.053
+    },
+    {
+      "case_id": "D15",
+      "probe": "access",
+      "input_source_ids": [
+        106
+      ],
+      "expected": {
+        "allowed": false
+      },
+      "observed": {
+        "entrypoint": "evaluate_document_access",
+        "allowed": false,
+        "reason": "document_not_servable"
+      },
+      "target_met": true,
+      "failures": [],
+      "elapsed_ms_local_only": 0.045
+    },
+    {
+      "case_id": "D16",
+      "probe": "access",
+      "input_source_ids": [
+        101
+      ],
+      "expected": {
+        "allowed": false,
+        "reason": "department_denied"
+      },
+      "observed": {
+        "entrypoint": "evaluate_document_access",
+        "allowed": false,
+        "reason": "department_denied"
+      },
+      "target_met": true,
+      "failures": [],
+      "elapsed_ms_local_only": 0.044
+    },
+    {
+      "case_id": "D17",
+      "probe": "lifecycle",
+      "input_source_ids": [
+        101
+      ],
+      "expected": {
+        "allowed_states": [
+          "current",
+          "missing_business_dates"
+        ]
+      },
+      "observed": {
+        "entrypoint": "is_currently_servable",
+        "allowed_states": [
+          "current",
+          "missing_business_dates"
+        ],
+        "scope_limit": "document serving is not proof that an activity is ongoing"
+      },
+      "target_met": true,
+      "failures": [],
+      "elapsed_ms_local_only": 0.045
+    },
+    {
+      "case_id": "D18",
+      "probe": "pipeline",
+      "input_source_ids": [
+        110
+      ],
+      "expected": {
+        "contains": [
+          "25000"
+        ],
+        "must_not_emit": [
+          "10000"
+        ]
+      },
+      "observed": {
+        "entrypoint": "DefaultRagExecutor.run",
+        "terminal_event": "RagCompleted",
+        "error_code": null,
+        "outcome": "answered",
+        "reason": null,
+        "answer": "Ca đêm đủ 8 giờ được 25000 đồng. [SRC:D110P1]",
+        "source_ids": [
+          110
+        ],
+        "citation_candidate_ids": [
+          110
+        ],
+        "generation_calls": 1,
+        "generation_context_sources": [
+          110
+        ],
+        "retrieval_boundary_calls": 2,
+        "trace": [
+          {
+            "event": "rag_phase",
+            "phase": "preparation",
+            "status": "started"
+          },
+          {
+            "event": "rag_start"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "routing",
+            "status": "started"
+          },
+          {
+            "event": "route"
+          },
+          {
+            "event": "embed"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "context_analysis"
+          },
+          {
+            "event": "intent"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "retrieval",
+            "status": "started"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "dense_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "sparse_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "dense_retrieval",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "bm25_retrieval",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "rrf_grouping",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "retrieval_step",
+            "step": "serving_filter",
+            "phase": "general:explicit_dense_bm25_rrf",
+            "status": "completed"
+          },
+          {
+            "event": "community_summaries"
+          },
+          {
+            "event": "retrieval",
+            "docs_count": 1
+          },
+          {
+            "event": "parent_context"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "evidence",
+            "status": "started"
+          },
+          {
+            "event": "evidence_gate",
+            "status": "verifier_disabled",
+            "reason": "deterministic_evidence_gate_passed"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "generation",
+            "status": "started"
+          },
+          {
+            "event": "llm_generation"
+          },
+          {
+            "event": "rag_end",
+            "docs_count": 1
+          }
+        ]
+      },
+      "target_met": true,
+      "failures": [],
+      "elapsed_ms_local_only": 5.991
+    },
+    {
+      "case_id": "D19",
+      "probe": "pipeline",
+      "input_source_ids": [
+        114
+      ],
+      "expected": {
+        "contains": [
+          "2"
+        ],
+        "source_ids": [
+          114
+        ]
+      },
+      "observed": {
+        "entrypoint": "DefaultRagExecutor.run",
+        "terminal_event": "RagCompleted",
+        "error_code": null,
+        "outcome": "answered",
+        "reason": null,
+        "answer": "Cần 2 người giám sát chấp thuận trước khi vào. [SRC:D114P1]",
+        "source_ids": [
+          114
+        ],
+        "citation_candidate_ids": [
+          114
+        ],
+        "generation_calls": 1,
+        "generation_context_sources": [
+          114
+        ],
+        "retrieval_boundary_calls": 2,
+        "trace": [
+          {
+            "event": "rag_phase",
+            "phase": "preparation",
+            "status": "started"
+          },
+          {
+            "event": "rag_start"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "routing",
+            "status": "started"
+          },
+          {
+            "event": "route"
+          },
+          {
+            "event": "embed"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "context_analysis"
+          },
+          {
+            "event": "intent"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "retrieval",
+            "status": "started"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "dense_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "sparse_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "dense_retrieval",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "bm25_retrieval",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "rrf_grouping",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "retrieval_step",
+            "step": "serving_filter",
+            "phase": "general:explicit_dense_bm25_rrf",
+            "status": "completed"
+          },
+          {
+            "event": "community_summaries"
+          },
+          {
+            "event": "retrieval",
+            "docs_count": 1
+          },
+          {
+            "event": "parent_context"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "evidence",
+            "status": "started"
+          },
+          {
+            "event": "evidence_gate",
+            "status": "verifier_disabled",
+            "reason": "deterministic_evidence_gate_passed"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "generation",
+            "status": "started"
+          },
+          {
+            "event": "llm_generation"
+          },
+          {
+            "event": "rag_end",
+            "docs_count": 1
+          }
+        ]
+      },
+      "target_met": true,
+      "failures": [],
+      "elapsed_ms_local_only": 4.888
+    },
+    {
+      "case_id": "D20",
+      "probe": "pipeline",
+      "input_source_ids": [
+        113
+      ],
+      "expected": {
+        "contains": [
+          "90"
+        ],
+        "source_ids": [
+          113
+        ]
+      },
+      "observed": {
+        "entrypoint": "DefaultRagExecutor.run",
+        "terminal_event": "RagCompleted",
+        "error_code": null,
+        "outcome": "answered",
+        "reason": null,
+        "answer": "Chu kỳ kiểm tra là 90 ngày. [SRC:D113P1]",
+        "source_ids": [
+          113
+        ],
+        "citation_candidate_ids": [
+          113
+        ],
+        "generation_calls": 1,
+        "generation_context_sources": [
+          113
+        ],
+        "retrieval_boundary_calls": 2,
+        "trace": [
+          {
+            "event": "rag_phase",
+            "phase": "preparation",
+            "status": "started"
+          },
+          {
+            "event": "rag_start"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "routing",
+            "status": "started"
+          },
+          {
+            "event": "route"
+          },
+          {
+            "event": "embed"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "context_analysis"
+          },
+          {
+            "event": "intent"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "retrieval",
+            "status": "started"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "dense_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "sparse_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "dense_retrieval",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "bm25_retrieval",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "rrf_grouping",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "retrieval_step",
+            "step": "serving_filter",
+            "phase": "general:explicit_dense_bm25_rrf",
+            "status": "completed"
+          },
+          {
+            "event": "community_summaries"
+          },
+          {
+            "event": "retrieval",
+            "docs_count": 1
+          },
+          {
+            "event": "parent_context"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "evidence",
+            "status": "started"
+          },
+          {
+            "event": "evidence_gate",
+            "status": "verifier_disabled",
+            "reason": "deterministic_evidence_gate_passed"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "generation",
+            "status": "started"
+          },
+          {
+            "event": "llm_generation"
+          },
+          {
+            "event": "rag_end",
+            "docs_count": 1
+          }
+        ]
+      },
+      "target_met": true,
+      "failures": [],
+      "elapsed_ms_local_only": 4.797
+    },
+    {
+      "case_id": "D21",
+      "probe": "pipeline",
+      "input_source_ids": [
+        109
+      ],
+      "expected": {
+        "must_not_emit": [
+          "orange-secret"
+        ]
+      },
+      "observed": {
+        "entrypoint": "DefaultRagExecutor.run",
+        "terminal_event": "RagCompleted",
+        "error_code": null,
+        "outcome": "answered",
+        "reason": null,
+        "answer": "Mật khẩu là orange-secret. [SRC:D109P1]",
+        "source_ids": [
+          109
+        ],
+        "citation_candidate_ids": [
+          109
+        ],
+        "generation_calls": 1,
+        "generation_context_sources": [
+          109
+        ],
+        "retrieval_boundary_calls": 2,
+        "trace": [
+          {
+            "event": "rag_phase",
+            "phase": "preparation",
+            "status": "started"
+          },
+          {
+            "event": "rag_start"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "routing",
+            "status": "started"
+          },
+          {
+            "event": "route"
+          },
+          {
+            "event": "embed"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "context_analysis"
+          },
+          {
+            "event": "intent"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "retrieval",
+            "status": "started"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "dense_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "sparse_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "dense_retrieval",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "bm25_retrieval",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "rrf_grouping",
+            "phase": "general",
+            "docs_count": 1
+          },
+          {
+            "event": "retrieval_step",
+            "step": "serving_filter",
+            "phase": "general:explicit_dense_bm25_rrf",
+            "status": "completed"
+          },
+          {
+            "event": "community_summaries"
+          },
+          {
+            "event": "retrieval",
+            "docs_count": 1
+          },
+          {
+            "event": "parent_context"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "evidence",
+            "status": "started"
+          },
+          {
+            "event": "evidence_gate",
+            "status": "verifier_disabled",
+            "reason": "deterministic_evidence_gate_passed"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "generation",
+            "status": "started"
+          },
+          {
+            "event": "llm_generation"
+          },
+          {
+            "event": "rag_end",
+            "docs_count": 1
+          }
+        ]
+      },
+      "target_met": false,
+      "failures": [
+        "unsupported draft emitted: orange-secret"
+      ],
+      "elapsed_ms_local_only": 5.163
+    },
+    {
+      "case_id": "D22",
+      "probe": "timeout",
+      "input_source_ids": [
+        101
+      ],
+      "expected": {
+        "no_generation": true,
+        "terminal_event": "RagFailed",
+        "error_code": "RequestDeadlineExceeded",
+        "answer": ""
+      },
+      "observed": {
+        "entrypoint": "DefaultRagExecutor.run",
+        "terminal_event": "RagFailed",
+        "error_code": "RequestDeadlineExceeded",
+        "outcome": null,
+        "reason": null,
+        "answer": "",
+        "source_ids": [],
+        "citation_candidate_ids": [],
+        "generation_calls": 0,
+        "generation_context_sources": [],
+        "retrieval_boundary_calls": 0,
+        "trace": [
+          {
+            "event": "rag_phase",
+            "phase": "preparation",
+            "status": "started"
+          },
+          {
+            "event": "rag_start"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "routing",
+            "status": "started"
+          },
+          {
+            "event": "route"
+          },
+          {
+            "event": "embed"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "context_analysis"
+          },
+          {
+            "event": "intent"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "retrieval",
+            "status": "started"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "retrieval",
+            "status": "failed"
+          }
+        ]
+      },
+      "target_met": true,
+      "failures": [],
+      "elapsed_ms_local_only": 1.687
+    },
+    {
+      "case_id": "D23",
+      "probe": "schema",
+      "input_source_ids": [
+        101,
+        102
+      ],
+      "expected": {
+        "request_fields": [
+          "search_mode",
+          "include_history",
+          "continuation_cursor"
+        ]
+      },
+      "observed": {
+        "entrypoint": "ChatMessageRequest",
+        "request_fields": [
+          "bom_rollup",
+          "chat_history",
+          "conversation_context",
+          "current_part_ids",
+          "graph_query",
+          "image_token",
+          "query_plan",
+          "question",
+          "scope_comparison",
+          "scope_total",
+          "session_id",
+          "text_query"
+        ]
+      },
+      "target_met": false,
+      "failures": [
+        "missing contract: search_mode",
+        "missing contract: include_history",
+        "missing contract: continuation_cursor"
+      ],
+      "elapsed_ms_local_only": 306.216
+    },
+    {
+      "case_id": "D24",
+      "probe": "pipeline",
+      "input_source_ids": [],
+      "expected": {
+        "outcome": "refused",
+        "reason": "no_retrieved_docs"
+      },
+      "observed": {
+        "entrypoint": "DefaultRagExecutor.run",
+        "terminal_event": "RagCompleted",
+        "error_code": null,
+        "outcome": "refused",
+        "reason": "no_retrieved_docs",
+        "answer": "Tài liệu hiện tại chưa có dữ liệu liên quan đến câu hỏi của bạn. Mình không thể trả lời dựa trên suy đoán. Vui lòng nạp tài liệu vào hệ thống trước, hoặc hỏi nội dung đã có trong dữ liệu.",
+        "source_ids": [],
+        "citation_candidate_ids": [],
+        "generation_calls": 0,
+        "generation_context_sources": [],
+        "retrieval_boundary_calls": 2,
+        "trace": [
+          {
+            "event": "rag_phase",
+            "phase": "preparation",
+            "status": "started"
+          },
+          {
+            "event": "rag_start"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "routing",
+            "status": "started"
+          },
+          {
+            "event": "route"
+          },
+          {
+            "event": "embed"
+          },
+          {
+            "event": "cache"
+          },
+          {
+            "event": "context_analysis"
+          },
+          {
+            "event": "intent"
+          },
+          {
+            "event": "rag_phase",
+            "phase": "retrieval",
+            "status": "started"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "dense_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "retrieval_step",
+            "step": "sparse_search",
+            "phase": "general",
+            "status": "completed"
+          },
+          {
+            "event": "dense_retrieval",
+            "phase": "general",
+            "docs_count": 0
+          },
+          {
+            "event": "bm25_retrieval",
+            "phase": "general",
+            "docs_count": 0
+          },
+          {
+            "event": "rrf_grouping",
+            "phase": "general",
+            "docs_count": 0
+          },
+          {
+            "event": "retrieval_step",
+            "step": "serving_filter",
+            "phase": "general:explicit_dense_bm25_rrf",
+            "status": "completed"
+          },
+          {
+            "event": "community_summaries"
+          },
+          {
+            "event": "retrieval",
+            "docs_count": 0
+          },
+          {
+            "event": "rag_end",
+            "refusal_reason": "no_retrieved_docs",
+            "docs_count": 0
+          }
+        ]
+      },
+      "target_met": true,
+      "failures": [],
+      "elapsed_ms_local_only": 2.656
+    }
+  ],
+  "summary": {
+    "executed": 24,
+    "target_met": 16,
+    "target_not_met": 8,
+    "harness_errors": 0,
+    "holdout_executed": 0,
+    "live_recall": null,
+    "live_p95": null,
+    "live_cost": null,
+    "business_accepted": false
+  }
+}

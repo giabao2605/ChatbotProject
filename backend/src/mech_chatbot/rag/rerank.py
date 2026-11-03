@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Reranking qua Voyage API va cac helper sap xep context."""
 
-import hashlib
+from mech_chatbot.domain.evidence_identity import evidence_key, revision_key
 import time
 import unicodedata
 from dataclasses import dataclass
@@ -397,9 +397,7 @@ def diversify_candidates(documents, max_per_document=4, max_per_section=1, cap=4
             or metadata.get("source")
             or "unknown"
         )
-        document_key = (source_key, *(str(metadata.get(key) or "") for key in (
-            "version_no", "publication_version", "serving_epoch",
-        )))
+        document_key = (source_key, revision_key(metadata))
         parent_section = str(metadata.get("parent_section") or "").strip()
         parent_page = metadata.get("parent_page") or metadata.get("trang_so")
         # A chunk with no section/page provenance is not known to share a
@@ -411,14 +409,7 @@ def diversify_candidates(documents, max_per_document=4, max_per_section=1, cap=4
             if parent_section or parent_page not in (None, "")
             else None
         )
-        text_value = str(
-            metadata.get("noi_dung_goc") or getattr(doc, "page_content", "") or ""
-        ).strip()
-        content_key = (
-            document_key,
-            str(metadata.get("trang_so") or metadata.get("parent_page") or ""),
-            hashlib.sha1(text_value.encode("utf-8")).hexdigest(),
-        )
+        content_key = evidence_key(doc)
         if content_key in seen_content:
             continue
         count = per_document.get(document_key, 0)

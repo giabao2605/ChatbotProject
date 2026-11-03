@@ -7,6 +7,7 @@ from typing import Any, Iterable
 
 
 _BAD_EFFECTIVE_STATES = {"expired", "superseded", "draft"}
+_HISTORY_LIFECYCLE_STATES = {"published", "archived", "superseded", "retired"}
 
 
 def _token(value: Any) -> str:
@@ -64,19 +65,45 @@ def is_currently_servable(
     return True
 
 
+def is_history_servable(metadata: dict[str, Any] | None) -> bool:
+    """Return whether an old revision is safe to expose to an explicit reader.
+
+    Historical access is limited to source revisions that were actually
+    published and approved.  Draft, rejected, revoked, deleting and malformed
+    lifecycle rows remain denied even when a caller has the history role.
+    """
+    meta = metadata or {}
+    if any(
+        value not in (None, "") and _date(value) is date.min
+        for value in (meta.get("effective_date"), meta.get("expiry_date"))
+    ):
+        return False
+    effective_date = _date(meta.get("effective_date"))
+    if effective_date is not None and effective_date > date.today():
+        return False
+    expired = _token(meta.get("effective_status")) == "expired"
+    expiry = _date(meta.get("expiry_date"))
+    expired = expired or (expiry is not None and expiry < date.today())
+    return (
+        _token(meta.get("publication_state")) == "published"
+        and _token(meta.get("lifecycle_status")) in _HISTORY_LIFECYCLE_STATES
+        and _token(meta.get("review_status")) == "approved"
+        and (not _flag(meta.get("is_current")) or expired)
+    )
+
+
 def filter_currently_servable(
     documents: Iterable[Any],
     *,
     today: date | None = None,
+    allow_history: bool = False,
 ) -> list[Any]:
     return [
         document
         for document in (documents or [])
-        if is_currently_servable(
-            getattr(document, "metadata", None),
-            today=today,
-        )
+        if is_currently_servable(getattr(document, "metadata", None), today=today)
+        or (allow_history and is_history_servable(getattr(document, "metadata", None)))
     ]
 
 
-__all__ = ["filter_currently_servable", "is_currently_servable"]
+__all__ = ["filter_currently_servable", "is_currently_servable", "is_history_servable"]

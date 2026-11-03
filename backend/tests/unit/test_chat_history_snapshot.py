@@ -49,6 +49,38 @@ def seed_history(database):
     assert chat.save_answer_sources(11, [{**card,'trang':1,'file_goc':'before.pdf'}], db_engine=database)
 
 
+def test_history_retains_distinct_excerpt_identity_through_sql_and_http(history_store, monkeypatch, tmp_path):
+    from mech_chatbot.application.chat_citations import build_citation_list
+    seed_history(history_store)
+    base = {'doc_id': 1, 'version_no': 2, 'trang': 1, 'file_goc': 'before.pdf',
+            'snapshot_id': 'snapshot-a', 'source_hash': 'a' * 64, 'chunk_index': 0}
+    records = [base, {**base, 'chunk_index': 1}, base]
+    with history_store.begin() as conn:
+        conn.execute(text('DELETE FROM AnswerSource WHERE ChatID=11'))
+        conn.execute(text('UPDATE ChatEvidenceManifest SET AdvancedRagJson=NULL'))
+    assert chat.save_answer_sources(11, records, db_engine=history_store)
+    assert chat.save_answer_evidence(11, records, db_engine=history_store)
+    with history_store.connect() as conn:
+        assert conn.execute(text('SELECT COUNT(*) FROM AnswerEvidence WHERE ChatID=11')).scalar() == 2
+    database = create_engine('sqlite:///' + (tmp_path / 'identity.sqlite').as_posix())
+    with history_store.connect() as source, database.connect() as target:
+        source.connection.driver_connection.backup(target.connection.driver_connection)
+    engine = HistoryEngine(database)
+    app = FastAPI(); app.include_router(routes.router)
+    app.dependency_overrides[csrf_profile] = lambda: PROFILE
+    app.state.database_runtime = SimpleNamespace(engine=engine)
+    app.state.runtime = SimpleNamespace(db_engine=engine, app_support_queries=SqlAppSupportQueries(engine=engine))
+    monkeypatch.setattr(routes, 'get_chat_history', partial(chat.get_chat_history, db_engine=engine))
+    response = TestClient(app).post('/api/chat/history', json={'session_id': 's1'})
+    assert response.status_code == 200
+    cards = response.json()['messages'][-1]['citations']
+    assert [card['chunk_index'] for card in cards] == [0, 1]
+    expected = build_citation_list(records, page_has_vision=lambda *_: False)
+    assert [card['evidence_identity'] for card in cards] == [card['evidence_identity'] for card in expected]
+    assert all(card['snapshot_id'] == 'snapshot-a' and card['source_hash'] == 'a' * 64 for card in cards)
+    database.dispose()
+
+
 def test_http_history_keeps_source_version_and_title_in_the_authorization_snapshot(history_store, tmp_path, monkeypatch):
     seed_history(history_store)
     path = tmp_path/'history.sqlite'

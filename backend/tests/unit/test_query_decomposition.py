@@ -23,6 +23,57 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.mark.parametrize('question', [
+    'Việc nội dung quy trình đã được duyệt có đủ để khẳng định thời gian thử việc cho từng vị trí và cấp duyệt, hạn mức thanh toán đã được xác nhận và đang áp dụng không?',
+    'Giấy tờ, chứng từ, hóa đơn và thông tin nhà cung cấp đã được xác nhận và đang áp dụng không?',
+])
+def test_undivided_complex_question_keeps_normal_retrieval_source_coverage(monkeypatch, question):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from mech_chatbot.rag.phases import retrieval as module
+    plan = compile_query_plan(question, {}, planner=lambda _: {})
+    assert plan.is_complex and plan.subqueries == plan.intents == (question,)
+    context = SimpleNamespace(effective_question=question)
+    state = SimpleNamespace(explicit_text_intents=())
+    docs = (Document(page_content='HR source', metadata={'doc_id':1174}),
+            Document(page_content='Accountant source', metadata={'doc_id':1173}))
+    direct = Mock(return_value=module._RetrievalBatch(docs, 5, 'general', 0))
+    branch = Mock(return_value=module._DecompositionResult(module._RetrievalBatch(docs[:1], 5, 'general', 0)))
+    monkeypatch.setattr(module, '_access_context', lambda _: {'fixed_acl':'scope'})
+    monkeypatch.setattr(module, '_compile_plan', lambda *args: module._PlannerResult(plan, 3, 5, 0.01))
+    monkeypatch.setattr(module, '_decomposition_usage', lambda *args: {})
+    monkeypatch.setattr(module, '_retrieve_direct', direct)
+    monkeypatch.setattr(module, '_run_complex_plan', branch)
+    result = module._run_decomposition(context, state)
+    assert result.batch.documents == docs
+    direct.assert_called_once_with(context, state)
+    branch.assert_not_called()
+    assert (result.auxiliary_input_tokens, result.auxiliary_output_tokens, result.planner_estimated_cost) == (3, 5, 0.01)
+
+
+@pytest.mark.parametrize('kind', ['multiple_intents', 'rewritten_subquery', 'explicit_slot'])
+def test_single_intent_coverage_fix_preserves_real_branch_routes(monkeypatch, kind):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from mech_chatbot.rag.phases import retrieval as module
+    original = 'Original request and conditions?'
+    subqueries = ('Intent A?', 'Intent B?') if kind == 'multiple_intents' else (
+        'Rewritten intent?' if kind == 'rewritten_subquery' else original,)
+    intents = subqueries if kind == 'multiple_intents' else (original,)
+    plan = BranchPlan(original, True, subqueries, intents=intents)
+    context = SimpleNamespace(effective_question=original)
+    state = SimpleNamespace(explicit_text_intents=(original,) if kind == 'explicit_slot' else ())
+    expected = object()
+    branch, direct = Mock(return_value=expected), Mock()
+    monkeypatch.setattr(module, '_access_context', lambda _: {})
+    monkeypatch.setattr(module, '_compile_plan', lambda *args: module._PlannerResult(plan, 0, 0, 0.0))
+    monkeypatch.setattr(module, '_run_complex_plan', branch)
+    monkeypatch.setattr(module, '_retrieve_direct', direct)
+    assert module._run_decomposition(context, state) is expected
+    branch.assert_called_once()
+    direct.assert_not_called()
+
+
+@pytest.mark.parametrize('question', [
     'Mình mới vào công ty, muốn xin nghỉ phép thì làm thế nào, cần báo ai và trước bao lâu?',
     'Nếu tài khoản bị khóa, cần báo ai, gửi thông tin gì và kiểm tra ở đâu?',
     'Giấy tờ, chứng từ, hóa đơn và thông tin nhà cung cấp đã được xác nhận chưa?',
@@ -33,6 +84,27 @@ def test_context_and_subject_lists_are_not_independent_requests(question):
     assert not plan.intent_overflow
     assert plan.subqueries == (question,)
     assert calls == [question]
+
+
+@pytest.mark.parametrize('question', [
+    'Việc nội dung quy trình đã được duyệt có đủ để khẳng định thời gian thử việc cho từng vị trí và cấp duyệt, hạn mức thanh toán đã được xác nhận và đang áp dụng không?',
+    'Giấy tờ, chứng từ, hóa đơn và thông tin nhà cung cấp đã được xác nhận và đang áp dụng không?',
+    'Giay to, chung tu, hoa don va thong tin nha cung cap da duoc xac nhan va dang ap dung khong?',
+])
+def test_shared_yes_no_confirmation_keeps_its_subjects_and_predicate(question):
+    plan = compile_query_plan(question, {}, planner=lambda _: {})
+    assert not plan.intent_overflow and not plan.clarification_required
+    assert plan.subqueries == (question,)
+
+
+@pytest.mark.parametrize('question', [
+    'Tóm tắt BOM, so sánh vật liệu, giải thích dung sai và kiểm tra hồ sơ đã được xác nhận và đang áp dụng không?',
+    'Bảo trì đã được xác nhận không, hồ sơ nhân sự đã được xác nhận không, thanh toán đã được xác nhận không, quyền truy cập đã được xác nhận không?',
+])
+def test_shared_confirmation_cannot_hide_four_independent_requests(question):
+    plan = compile_query_plan(question, {}, planner=lambda _: {})
+    assert plan.intent_overflow or plan.clarification_required
+    assert not plan.subqueries
 
 
 def test_semantic_split_retains_leave_topic_and_uses_existing_planner_once():

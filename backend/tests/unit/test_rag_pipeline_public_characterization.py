@@ -162,6 +162,32 @@ def _answer(events):
     return "".join(event.text for event in events if isinstance(event, RagToken))
 
 
+def test_executor_preserves_identical_sources_through_context_and_citations(offline_pipeline):
+    from langchain_core.runnables import RunnableLambda
+    from mech_chatbot.application.chat_citations import resolve_chat_citations
+    from mech_chatbot.domain.evidence_identity import evidence_key
+
+    documents, _calls, executor, _runtime = offline_pipeline
+    text = 'Nhân viên được nghỉ phép có lương 1 ngày mỗi tháng.'
+    first = _document(text)
+    second = Document(page_content=text, metadata={**first.metadata, 'doc_id': 18, 'file_goc': 'staff.pdf'})
+    documents.extend([first, second, first])
+    prompts = []
+
+    def generate(prompt, **kwargs):
+        prompts.append(str(prompt))
+        return 'Được nghỉ phép 1 ngày mỗi tháng. [SRC:D17P2] [SRC:D18P2]'
+
+    executor._provider_adapter.client = RunnableLambda(generate)
+    events = _run('Mỗi tháng được nghỉ phép mấy ngày?', trace_id='gd2-sources', executor=executor)
+    assert isinstance(events[-1], RagCompleted) and events[-1].outcome == 'answered'
+    assert len(prompts) == 1 and all(f'SOURCE_ID: {source}' in prompts[0] for source in ('D17P2', 'D18P2'))
+    records = events[-1].diagnostics['citation_docs']
+    cards, _ = resolve_chat_citations(records, [], _answer(events), page_has_vision=lambda *_: False)
+    assert {card['doc_id'] for card in cards} == {17, 18} and len(cards) == 2
+    assert {card['evidence_identity'] for card in cards} == {evidence_key(first), evidence_key(second)}
+
+
 def test_math_query_flags_do_not_retain_decomposition_after_disable(offline_pipeline, caplog, monkeypatch):
     from langchain_core.language_models.fake_chat_models import FakeListChatModel
     from tests.unit.test_strict_stream_guard import _no_network_audit
@@ -511,7 +537,8 @@ def test_unpinned_exact_cache_falls_back_to_current_retrieval(
         executor=executor,
     )
 
-    assert cache_reads == [True]
+    # Current/applicability-sensitive questions bypass reusable answer cache.
+    assert cache_reads == []
     assert qdrant_calls
     assert _answer(events) != cache_row["answer"]
     assert isinstance(events[-1], RagCompleted)

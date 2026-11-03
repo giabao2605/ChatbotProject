@@ -331,7 +331,8 @@ def test_text_citation_has_download_without_preview(monkeypatch):
             "version_no": 3,
         }
     ])
-    assert citations == [{
+    assert len(citations[0]['evidence_identity']) == 64
+    assert [{key: value for key, value in card.items() if key != 'evidence_identity'} for card in citations] == [{
         "doc_id": 9,
         "page_no": 1,
         "file_name": "policy.docx",
@@ -567,7 +568,7 @@ def test_structured_citations_keep_sheet_cell_row_and_never_invent_a_pdf_page():
     assert len(cards) == 2 and len({c['source_id'] for c in cards}) == 2
     assert all(c['page_no'] is None and c['page_url'] is None and not c['has_vision'] for c in cards)
     assert cards[0]['locator']['cell'] == 'B2' and cards[1]['locator']['row_key'] == 'Ledger:row-3'
-    assert cards[0]['original_url'] == '/api/files/documents/17/original?citation_version=3'
+    assert cards[0]['original_url'] == '/api/files/documents/17/original?version_no=3&snapshot_id=s1&source_hash='+'a'*64
     answer = f"Tổng A = 25 [SRC:{cards[0]['source_id']}]"
     assert filter_citations_by_answer(cards, answer) == [cards[0]]
     assert attributed_citations({'citation_docs':records}, answer) == (cards[0],)

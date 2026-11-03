@@ -75,6 +75,36 @@ def _point(metadata, content):
     return SimpleNamespace(payload={"metadata": metadata, "page_content": content})
 
 
+def test_hydration_keeps_snapshot_and_dates_with_own_row_context():
+    selected_md = _metadata(snapshot_id='current', source_hash='a' * 64)
+    selected = SimpleNamespace(page_content='anchor', metadata=selected_md)
+    neighbor = _metadata(snapshot_id='current', source_hash='a' * 64, chunk_index=2,
+                         title='Allowances', parent_section='Night shift', table_index=1,
+                         row_key='night', cell='B2', unit='VND', footnote='Only full 8 hours')
+    client = _ScrollClient([
+        _point(neighbor, '25000'),
+        _point({**neighbor, 'snapshot_id': 'other'}, 'wrong snapshot'),
+        _point({**neighbor, 'source_hash': 'b' * 64}, 'wrong hash'),
+        _point({**neighbor, 'expiry_date': '2000-01-01'}, 'expired'),
+        _point({**neighbor, 'effective_date': '2999-01-01'}, 'future'),
+        _point({**neighbor, 'effective_date': 'invalid'}, 'invalid date'),
+    ])
+    docs = context_builders.hydrate_parent_context(
+        [selected], client=client, collection_name='test', max_chunks_per_section=7,
+    )
+    assert [d.page_content for d in docs] == ['anchor', '25000']
+    rendered = context_builders.format_docs(docs)
+    for value in ('Allowances', 'Night shift', 'night', 'B2', 'VND', 'Only full 8 hours'):
+        assert value in rendered
+
+
+def test_hydration_does_not_expand_an_unknown_revision():
+    selected = SimpleNamespace(page_content='legacy anchor', metadata=_metadata(version_no=None))
+    client = _ScrollClient([_point(_metadata(chunk_index=2), 'unbound neighbor')])
+    docs = context_builders.hydrate_parent_context([selected], client=client, collection_name='test')
+    assert docs == [selected]
+
+
 def test_parent_loader_defensively_filters_bad_points_and_carries_scope_filters(monkeypatch):
     selected = _metadata()
     client = _ScrollClient(

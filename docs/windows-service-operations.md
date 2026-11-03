@@ -119,6 +119,16 @@ source commit, Windows/SQL identity, quyền dữ liệu/model và activation tr
 khởi động phục vụ. Xóa request preflight của chính lượt chuyển sau khi thu receipt;
 request còn tồn tại khiến host chạy chế độ probe thay vì phục vụ.
 
+Preflight hiện đọc từng file Python trong `backend/src` và `scripts/windows_service`,
+gồm cả file chưa tracked hoặc bị ignore, dưới đúng token service trước import ứng dụng;
+receipt phải có `python_source_read`. Khi đóng gói, không chép DACL của worktree
+vào production. Giữ DACL file đích hiện hữu; với file source mới, tái áp đúng ba
+ACE ReadAndExecute của service như source production cùng thư mục, chỉ trên
+manifest source được phát hành. ACE thư mục hiện tại không có OI/CI nên file mới
+không tự nhận quyền. Không cấp Modify/FullControl, không đổi ACL data hoặc repo
+toàn cây; bước áp quyền source thuộc cutover được duyệt và phải kiểm lại bằng
+preflight từng identity trước khởi động phục vụ.
+
 Chuyển Cloudflared riêng: binary đích đề xuất
 `C:\ProgramData\MechRAGServices\bin\cloudflared.exe`, byte/hash phải bằng bản cũ,
 quyền ghi chỉ dành người quản trị được tin cậy. Giữ nguyên token-file và tài khoản

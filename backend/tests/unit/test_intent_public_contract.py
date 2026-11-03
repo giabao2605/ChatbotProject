@@ -173,6 +173,21 @@ def test_version_intent_is_deterministic(question, expected_policy, expected_ver
     assert intent.deterministic_version_intent(question) == (expected_policy, expected_versions)
 
 
+def test_historical_intent_requires_explicit_history_reader_role():
+    _, _, _, _, _, denied = intent.extract_search_intent(
+        "lịch sử version 3", user_roles=["admin"], allowed_departments=["TECH"],
+        allowed_sites=["HQ"], max_security_level="internal",
+    )
+    assert denied["history_access_denied"] is True
+    assert denied["version_policy"] == "current_only"
+
+    _, _, _, _, _, granted = intent.extract_search_intent(
+        "lịch sử version 3", user_roles=["viewer", "document_history_reader"],
+        allowed_departments=["TECH"], allowed_sites=["HQ"], max_security_level="internal",
+    )
+    assert granted["version_policy"] == "version_history"
+
+
 def test_mechanical_code_extraction_deduplicates_and_sorts_supported_formats():
     assert intent.extract_mechanical_codes(
         "Tra 9.3.03844, AB-120 va 123-456; lap lai AB-120"
@@ -403,6 +418,36 @@ def test_context_analysis_returns_clean_standalone_question_and_trace(monkeypatc
     assert "tai lieu dang trao doi: ['DOC-A']" in prompt
     assert "Bot: Quy trinh A" in prompt
     assert kwargs == {"surface": "query_disambiguation", "trace_id": "trace-context-contract"}
+
+
+@pytest.mark.parametrize(
+    ("question", "rewritten"),
+    [
+        ("Tra mã AB-120, version 2, dung sai 0.2 mm, không áp dụng cho mẫu cũ?", "Tra dung sai áp dụng."),
+        ("Quy trình nghỉ phép trong tháng 2026 có được cộng dồn không?", "Quy trình nghỉ phép có được cộng dồn không?"),
+        ("Trong policy-nghi-phep.pdf, bản v2 có áp dụng không?", "Chính sách nghỉ phép có áp dụng không?"),
+    ],
+)
+def test_context_rewrite_falls_back_when_it_drops_codes_numbers_or_negation(
+    monkeypatch, question, rewritten,
+):
+    monkeypatch.setattr(
+        intent,
+        "cohere_invoke",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            content=json.dumps({"context_action": "continue", "standalone_question": rewritten})
+        ),
+    )
+
+    result = intent.analyze_context(
+        question,
+        chat_history=[{"role": "user", "content": "Tra thông tin liên quan"}],
+        current_part_ids=["AB-120"],
+        runtime=_runtime(),
+    )
+
+    assert result["standalone_question"] == question
+    assert result["llm_resolved"] is False
 
 
 @pytest.mark.parametrize(

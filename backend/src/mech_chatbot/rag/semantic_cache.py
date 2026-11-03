@@ -17,8 +17,9 @@ from mech_chatbot.rag.entity_resolver import has_explicit_code
 
 
 _REPLAY_CACHE_DISABLED = ContextVar("replay_cache_disabled", default=False)
-_ANSWER_CONTRACT = "grounded-answer-v8-source-scope"
+_ANSWER_CONTRACT = "grounded-answer-v12-undivided-query-scope"
 _PROMPT_SHA256 = hashlib.sha256(Path(__file__).with_name("prompt.py").read_bytes()).hexdigest()
+_VERIFIER_SHA256 = hashlib.sha256(Path(__file__).with_name("claim_verification.py").read_bytes()).hexdigest()
 _FILE_REFERENCE = re.compile(
     rf"(?<=[^\s\"'“”‘’])(?:{'|'.join(sorted(map(re.escape, SUPPORTED_LEARNING_EXTENSIONS), key=len, reverse=True))})(?!\w)",
     re.IGNORECASE,
@@ -41,6 +42,21 @@ def _requires_exact_question(question):
         r"isn't|aren't|don't|doesn't|didn't|wasn't|weren't|won't|hasn't|haven't|"
         r"version|revision|today|yesterday|tomorrow|current|previous|next|"
         r"before|after|latest|last|until|period|date|month|quarter|year|week|day)\b", text,
+    ))
+
+
+def _replay_is_scope_sensitive(question):
+    """Bypass replay when time, personal applicability or completeness is unpinned."""
+    from mech_chatbot.rag.text_utils import remove_accents
+
+    text = remove_accents(str(question or "").lower())
+    return bool(re.search(
+        r"\b(?:lich\s*su|phien\s*ban|ban\s*cu|tung\s*ap\s*dung|archive|archived|superseded|historical|"
+        r"tat\s*ca|toan\s*bo|day\s*du|moi|all|every|complete|comprehensive|"
+        r"toi|minh|cua\s*ban|me|my|mine|your|"
+        r"hien\s*tai|hien\s*nay|hieu\s*luc|moi\s*nhat|hom|ngay|tuan|thang|quy|nam|"
+        r"truoc|sau|today|yesterday|tomorrow|current|previous|next|latest|last|"
+        r"before|after|until|period|date|month|quarter|year|week|day)\b", text,
     ))
 
 
@@ -123,6 +139,9 @@ def scope_signature(
     *,
     pipeline_environment=None,
     response_language="vi",
+    user_id=None,
+    username=None,
+    execution_context="production",
 ):
     roles = sorted([str(r).lower() for r in (user_roles or [])])
     deps = sorted(set(str(d).strip() for d in (allowed_departments or []) if str(d).strip()) | {"CHUNG"})
@@ -130,15 +149,18 @@ def scope_signature(
     lvl = str(max_security_level or "public")
     environment = pipeline_environment or {}
     identity = {
-        "access": "admin" if "admin" in roles else [deps, lvl, sites, bool(roles)],
+        "access": [deps, lvl, sites, roles],
+        "applicability": [user_id, username, user_department],
+        "execution_context": str(execution_context).strip().lower(),
         "language": str(response_language or "vi").strip().lower(),
         "contract": _ANSWER_CONTRACT,
         "prompt": _PROMPT_SHA256,
+        "verifier": _VERIFIER_SHA256,
         "provider": {name: str(environment.get(name, "")) for name in
             ("GPT_MODEL_NAME", "LLM_BASE_URL", "GPT_TEMPERATURE", "GPT_MAX_OUTPUT_TOKENS")},
     }
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
-    return "scope-v2|" + digest + "|pipe=" + pipeline_namespace(environment)
+    return "scope-v3|" + digest + "|pipe=" + pipeline_namespace(environment)
 
 
 def normalize_question(question):
@@ -227,7 +249,7 @@ def _validated_cache_payload(best, actor):
 
 def lookup_exact(question, scope_sig, *, ttl=24.0, actor=None):
     """Indexed fast path that avoids embeddings and interaction routing."""
-    if _document_specific(question):
+    if _document_specific(question) or _replay_is_scope_sensitive(question):
         return None
     from mech_chatbot.db.repositories.semantic_cache import (
         sc_delete,
@@ -281,7 +303,8 @@ def select_best(candidates, embedding, threshold):
 
 
 def lookup(question, embedding, scope_sig, *, ttl=24.0, threshold=0.93, actor=None):
-    if _document_specific(question) or _requires_exact_question(question):
+    if (_document_specific(question) or _requires_exact_question(question)
+            or _replay_is_scope_sensitive(question)):
         return None
     from mech_chatbot.db.repositories.semantic_cache import (
         sc_get_candidates, sc_docs_all_current, sc_record_lookup, sc_record_hit, sc_delete,
@@ -295,7 +318,8 @@ def lookup(question, embedding, scope_sig, *, ttl=24.0, threshold=0.93, actor=No
         try:
             candidate_question = str(c.get("question") or "").strip()
             if (not candidate_question or _document_specific(candidate_question)
-                    or _requires_exact_question(candidate_question)):
+                    or _requires_exact_question(candidate_question)
+                    or _replay_is_scope_sensitive(candidate_question)):
                 continue
             emb = c.get("embedding")
             c["embedding"] = json.loads(emb) if isinstance(emb, str) else emb
@@ -361,7 +385,8 @@ def _looks_like_refusal(answer):
 
 def store(question, embedding, answer, ref_text, ref_images, source_doc_ids, scope_sig, model, est_cost,
           citation_snapshot=None, evidence_snapshot=None, cache_enabled=True):
-    if not enabled(cache_enabled) or not answer or not str(answer).strip():
+    if (not enabled(cache_enabled) or _replay_is_scope_sensitive(question)
+            or not answer or not str(answer).strip()):
         return
     if _looks_like_refusal(answer):
         return

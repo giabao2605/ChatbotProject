@@ -4,6 +4,8 @@ import { apiGet, apiSend } from '@/api/client';
 
 type Field = { fact_id: string; kind: string; label: string; raw_value: string; value: string | null; sequence_number?: number;
   bom_position?: string; candidates: string[]; conflicts: string[]; review_status: string; linked_step_fact_id?: string | null; linked_bom_fact_id?: string | null; linked_bom_status?: 'valid' | 'unknown' | null;
+  subject?: string; attributes?: [string, string][]; applicability?: string[]; activity_status?: string;
+  valid_from?: string | null; valid_until?: string | null; confirmed_at?: string | null;
   locator: { doc_id: string; version: string; page?: number; row_key?: string; bbox?: number[] } };
 type BomOption = Pick<Field, 'fact_id' | 'label' | 'bom_position' | 'locator'>;
 type StepOption = { fact_id: string; sequence_number: number; label: string; review_status: string };
@@ -25,8 +27,9 @@ const bomOffset = ref(0);
 const bomMore = ref(true);
 const bomLoading = ref(false);
 let serial = 0;
-const kinds: Record<string, string> = { material: 'Vật liệu', symbol: 'Mã / ký hiệu', assembly_step: 'Bước lắp ráp', drawing_note: 'Chú thích bản vẽ' };
+const kinds: Record<string, string> = { material: 'Vật liệu', symbol: 'Mã / ký hiệu', assembly_step: 'Bước lắp ráp', drawing_note: 'Chú thích bản vẽ', business_fact: 'Dữ kiện nghiệp vụ' };
 const statuses: Record<string, string> = { pending: 'Chờ duyệt', approved: 'Đã duyệt', rejected: 'Đã từ chối' };
+const activityStatuses: Record<string, string> = { active: 'Đang áp dụng', inactive: 'Không còn áp dụng', superseded: 'Bị thay thế', unknown: 'Chưa xác định', unconfirmed: 'Chưa xác nhận' };
 const conflicts: Record<string, string> = { material_conflict: 'Vật liệu chưa thống nhất giữa tên chi tiết và bảng kê',
   material_extractor_disagreement: 'Vật liệu đọc từ chữ và ảnh chưa thống nhất', missing_material: 'Chưa đọc được vật liệu',
   duplicate_step_number: 'Số bước bị trùng; cần đối chiếu lại trình tự', invalid_step: 'Bước chưa đủ nội dung hoặc số thứ tự',
@@ -47,6 +50,12 @@ function noteAssociation(field: Field) {
   if (field.linked_step_fact_id === null) return 'Ghi chú chung của tài liệu';
   const step = approvedStep(field.linked_step_fact_id || '');
   return step ? `Bước ${step.sequence_number} — ${step.label}` : 'Liên kết bước cần kiểm tra lại';
+}
+
+function contextStatus(field: Field) {
+  return field.confirmed_at && field.review_status === 'approved'
+    ? (activityStatuses[field.activity_status || 'unknown'] || 'Chưa xác định')
+    : 'Chưa xác nhận';
 }
 
 function sourceUrl(field: Pick<Field, 'locator'>, page = false) {
@@ -189,9 +198,9 @@ onBeforeUnmount(() => { serial += 1; });
       <caption>Trường kỹ thuật và căn cứ nguồn, {{ fields.length }} dòng trên trang</caption>
       <thead><tr><th scope="col">Trường / vị trí</th><th scope="col">Giá trị gốc</th><th scope="col">Chuẩn hóa / đối chiếu</th><th scope="col">Trạng thái</th><th scope="col">Nguồn</th><th scope="col">Thao tác</th></tr></thead>
       <tbody><tr v-for="field in fields" :key="field.fact_id">
-        <td>{{ kinds[field.kind] || field.kind }} — {{ field.label }}<br><template v-if="field.bom_position">STT bảng kê: {{ field.bom_position }}<br></template><template v-if="field.sequence_number">Bước {{ field.sequence_number }}<br></template>{{ field.locator.row_key }}</td>
-        <td>{{ field.raw_value }}</td><td>{{ field.value ?? 'Chưa xác định' }}<p v-for="candidate in field.candidates" :key="candidate">{{ candidate }}</p></td>
-        <td>{{ statuses[field.review_status] || field.review_status }}<p v-if="field.kind === 'drawing_note'">{{ noteAssociation(field) }}</p><p v-for="conflict in field.conflicts" :key="conflict">{{ conflicts[conflict] || conflict }}</p></td>
+        <td>{{ kinds[field.kind] || field.kind }} — {{ field.label }}<br><template v-if="field.bom_position">STT bảng kê: {{ field.bom_position }}<br></template><template v-if="field.sequence_number">Bước {{ field.sequence_number }}<br></template><template v-if="field.subject">Đối tượng: {{ field.subject }}<br></template>{{ field.locator.row_key }}</td>
+        <td>{{ field.raw_value }}</td><td>{{ field.value ?? 'Chưa xác định' }}<p v-for="candidate in field.candidates" :key="candidate">{{ candidate }}</p><p v-if="field.attributes?.length">Thuộc tính: {{ field.attributes.map(item => `${item[0]}=${item[1]}`).join('; ') }}</p><p v-if="field.applicability?.length">Phạm vi: {{ field.applicability.join('; ') }}</p><p v-if="field.valid_from || field.valid_until">Thời gian: {{ field.valid_from || 'chưa có ngày bắt đầu' }} — {{ field.valid_until || 'chưa có ngày kết thúc' }}</p></td>
+        <td>{{ statuses[field.review_status] || field.review_status }}<p>Dữ kiện: {{ contextStatus(field) }}</p><p v-if="field.kind === 'drawing_note'">{{ noteAssociation(field) }}</p><p v-for="conflict in field.conflicts" :key="conflict">{{ conflicts[conflict] || conflict }}</p></td>
         <td>Phiên bản {{ field.locator.version }}<template v-if="field.locator.page">, trang {{ field.locator.page }}</template><p v-if="field.locator.bbox">Vùng: {{ field.locator.bbox.join(', ') }}</p><br>
           <a v-if="sourceUrl(field, true)" data-source="page" :href="sourceUrl(field, true)" target="_blank" rel="noopener noreferrer">Xem trang nguồn</a><br>
           <a v-if="sourceUrl(field)" :href="sourceUrl(field)" target="_blank" rel="noopener noreferrer">Mở tệp gốc</a>

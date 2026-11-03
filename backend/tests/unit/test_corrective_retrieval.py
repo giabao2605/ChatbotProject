@@ -58,7 +58,7 @@ def test_ambiguous_state_does_not_override_policy_that_forbids_correction():
 
 def test_corrected_documents_are_deduplicated_without_changing_metadata():
     original = Document(page_content="same", metadata={"doc_id": 1, "trang_so": 2, "site": "HQ"})
-    duplicate = Document(page_content="same updated", metadata={"doc_id": 1, "trang_so": 2, "site": "HQ"})
+    duplicate = Document(page_content="same", metadata={"doc_id": 1, "trang_so": 2, "site": "HQ"})
     added = Document(page_content="new", metadata={"doc_id": 2, "trang_so": 1, "site": "HQ"})
 
     merged = merge_corrected_documents([original], [duplicate, added])

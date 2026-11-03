@@ -1,4 +1,4 @@
-import type { AdvancedRagMetadata, Citation, ChatMessage, SessionItem, UserProfile } from "@/types";
+import type { ChatMessage, SearchProgress, SessionItem, UserProfile } from "@/types";
 import { parseSseBuffer } from "@/api/sse";
 import { t } from "@/i18n";
 
@@ -232,25 +232,26 @@ export async function uploadChatImage(file: File) {
 
 export type ChatStreamCallbacks = {
   onThinking: () => void;
+  onProgress?: (progress: SearchProgress) => void;
   onDelta: (text: string) => void;
   onWarning: (message: string) => void;
-  onDone: (data: {
+  onDone: (data: Partial<ChatMessage> & {
     chat_id?: number | null;
     ref_text?: string;
-    citations?: Citation[];
-    advanced_rag?: AdvancedRagMetadata;
     new_part_ids?: string[];
     conversation_context?: Record<string, unknown> | null;
   }) => void;
-  onError: (message: string) => void;
+  onError: (message: string, data?: {status?: number; code?: string; search_progress?: SearchProgress}) => void;
 };
 
 export async function sendChatMessage(
   payload: Record<string, unknown>,
   callbacks: ChatStreamCallbacks,
+  signal?: AbortSignal,
 ) {
   const requestCsrfToken = csrfToken;
   const response = await fetch("/api/chat/message", {
+    signal,
     method: "POST",
     credentials: "include",
     cache: "no-store",
@@ -263,7 +264,7 @@ export async function sendChatMessage(
   if (!response.ok || !response.body) {
     notifyUnauthorized(response.status, "/api/chat/message", requestCsrfToken);
     const detail = await response.text().catch(() => "");
-    throw new Error(detail || `HTTP ${response.status}`);
+    throw Object.assign(new Error(errorDetail(detail,response.status)),{status:response.status});
   }
 
   const reader = response.body.getReader();
@@ -271,7 +272,7 @@ export async function sendChatMessage(
   let buffer = "";
   let terminalEventReceived = false;
 
-  while (true) {
+  try { while (true) {
     const { value, done } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
@@ -279,6 +280,8 @@ export async function sendChatMessage(
     buffer = parsed.rest;
     for (const item of parsed.events) {
       const data = item.data as Record<string, unknown>;
+      if (signal?.aborted) throw new DOMException('Request aborted','AbortError');
+      if (data.search_progress && item.event !== 'done') callbacks.onProgress?.(data.search_progress as SearchProgress);
       if (item.event === "thinking") callbacks.onThinking();
       if (item.event === "delta" || item.event === "token") callbacks.onDelta(String(data.text ?? ""));
       if (item.event === "warning") callbacks.onWarning(String(data.message ?? ""));
@@ -288,11 +291,14 @@ export async function sendChatMessage(
       }
       if (item.event === "error") {
         terminalEventReceived = true;
-        callbacks.onError(String(data.detail || data.message || "Unknown error"));
+        const message=typeof data.detail === 'string' ? data.detail : String(data.message || 'Unknown error');
+        if (data.status !== undefined || data.code || data.search_progress) callbacks.onError(message,data);
+        else callbacks.onError(message);
       }
     }
   }
   if (!terminalEventReceived) throw new Error("Phản hồi chưa hoàn tất. Vui lòng thử lại.");
+  } finally { reader.releaseLock?.(); }
 }
 
 export async function sendFeedback(chatId: number, rating: number) {

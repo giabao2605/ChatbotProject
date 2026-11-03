@@ -60,19 +60,8 @@ def enabled(config: LateInteractionConfig | None = None) -> bool:
 
 
 def candidate_key(document) -> str:
-    metadata = getattr(document, "metadata", {}) or {}
-    content = str(metadata.get("noi_dung_goc") or getattr(document, "page_content", "") or "")
-    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
-    identity = "|".join(
-        str(value if value is not None else "")
-        for value in (
-            metadata.get("doc_id"),
-            metadata.get("trang_so"),
-            metadata.get("chunk_index"),
-            content_hash,
-        )
-    )
-    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    from mech_chatbot.domain.evidence_identity import evidence_key
+    return evidence_key(document)
 
 
 def _load_encoder_type():

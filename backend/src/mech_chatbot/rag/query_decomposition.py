@@ -530,12 +530,13 @@ _DOCUMENT_SCOPE_PREFIX = re.compile(
 _INDEPENDENT_REQUEST = re.compile(
     r"(?:^(?:nêu|neu|tìm|tim|liệt kê|liet ke|cho biết|cho biet|xem|kiểm|kiem|check|list|find)\b"
     r"|^(?:tóm tắt|tom tat|so sánh|so sanh|giải thích|giai thich|đánh giá|danh gia)\b"
+    r"|\b(?:đã|da|có|co)\b[^;\n?!]*\b(?:chưa|chua|không|khong)\s*$"
     r"|\b(?:bao lâu|bao lau|bao nhiêu|bao nhieu|thế nào|the nao|gì|gi|ai|what|when|how|who)\b)",
     re.IGNORECASE,
 )
 _SHARED_CONFIRMATION = re.compile(
     r"\b(?:đã|da)\s+(?:(?:được|duoc)\s+)?(?:xác\s+(?:định|nhận)|xac\s+(?:dinh|nhan))"
-    r"[^;\n?!]*\b(?:chưa|chua)\s*\??$", re.IGNORECASE,
+    r"[^;\n?!]*\b(?:chưa|chua|không|khong)\s*\??$", re.IGNORECASE,
 )
 _REQUEST_COMMAND = re.compile(
     r'^(?:nêu|tìm|liệt kê|cho biết|xem|kiểm|tóm tắt|so sánh|giải thích|đánh giá|check|list|find)\b', re.IGNORECASE)
@@ -857,17 +858,12 @@ def reconcile_grounded_calculation_branch(branches, citations):
 
 def merge_branch_documents(branches):
     """Fuse branch results without introducing a document outside a branch."""
+    from mech_chatbot.domain.evidence_identity import evidence_key
     merged = []
     seen = set()
     for branch in branches or ():
         for document in branch or ():
-            metadata = getattr(document, "metadata", {}) or {}
-            key = (
-                metadata.get("doc_id"),
-                metadata.get("trang_so"),
-                metadata.get("chunk_index"),
-                str(getattr(document, "page_content", ""))[:200],
-            )
+            key = evidence_key(document)
             if key in seen:
                 continue
             seen.add(key)
