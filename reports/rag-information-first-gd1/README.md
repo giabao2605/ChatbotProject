@@ -379,3 +379,17 @@ Người dùng duyệt **“Duyệt phục hồi bản đã ký, giữ GD8 riên
 Phiên Codex không có quyền SCM Start; người dùng đã Start cả ba qua Task Manager. Kiểm mới: cả ba Running, local/public health200 với `db=ok`, worker `ready`; RAG authenticated health200, `git_sha=8118dc0`, `rag_loaded=true`, `live_authorized=true`, bundle `acb279732e13610e62de6590afa13b2bfc78e28f876ea551fc54c4cdbcc34f4e`. Trang local/public200, 14 lượt asset khớp byte với `frontend/dist`. Backend root `git diff HEAD -- backend/src` rỗng. Không chạy migration production, không ký bundle mới; **production được khôi phục về bản cũ, GD8 chưa triển khai**.
 
 Chưa kiểm trong GD8: provider/SSE/UI/citation/history xuyên suốt trên candidate, mạng ngắt thật, nguồn nhiều version/mâu thuẫn thật, nghiệm thu nghiệp vụ, full suite/load/benchmark/recall/p95, restore DB/vector hoặc browser E2E production. Không suy các mục này từ kết quả khôi phục health/assets.
+
+### Bàn giao sang Claude — 2026-11-03
+
+Tracker chính từ đây là bản này trong nhánh `codex/gd8-acceptance-20261103` (commit đầu tiên của candidate: `6dbe1dc`, đã push lên GitHub). `origin/main` đã được fast-forward lên `8118dc0` (bản đang chạy production); 9 nhánh remote đã merge đã xóa.
+
+**Rà nguồn sẵn có cho ba nhóm B1 (chỉ đọc, `Mech_Chatbot_DB` + `data/raw` + thư mục bản vẽ ở root):**
+
+| Nhóm B1 | Kết quả rà | Kết luận |
+|---|---|---|
+| Nhiều phiên bản / thay thế thật | 174 tài liệu; chỉ 3 bản `superseded`, đều là file QA/demo/eval tổng hợp. Sáu mã bản vẽ thật (9.1.00678, 9.3.03843, 9.3.03844, 9.3.03951, 9.3.04068, 9.3.04080) mỗi mã chỉ có một phiên bản | Vẫn thiếu; cần chủ tài liệu cung cấp ít nhất một tài liệu thật có hai phiên bản và quan hệ thay thế |
+| Mâu thuẫn thật cùng đối tượng | Doc60 trang 1, vị trí C2, mã `8.3.06316.010`: cột vật liệu ghi Inox 201, mô tả ghi Inox 304 (đã đối chiếu hash tại `reports/rag-14-departments-20261005/primary-deployment-20261017/drawing-pending-evidence/README.md`) | Đóng được một phần: là mâu thuẫn trong một nguồn, chưa phải mâu thuẫn giữa hai nguồn. Đáp án kỳ vọng chỉ là nêu đủ hai giá trị và giữ chưa xác nhận; chưa thêm vào `gd8-acceptance.json` |
+| Trạng thái áp dụng/triển khai thực tế | 13 tài liệu nghiệp vụ chỉ có ngày hiệu lực phát hành 28/10/2026; theo quyết định của plan không được suy trạng thái thực thi từ ngày phát hành | Vẫn thiếu; cần chủ nghiệp vụ xác nhận trạng thái thực tế có phạm vi và thời gian |
+
+Không sửa code, không chạy runtime mới, không thay đổi production trong lượt này.
