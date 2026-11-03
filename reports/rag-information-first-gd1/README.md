@@ -393,3 +393,23 @@ Tracker chính từ đây là bản này trong nhánh `codex/gd8-acceptance-2026
 | Trạng thái áp dụng/triển khai thực tế | 13 tài liệu nghiệp vụ chỉ có ngày hiệu lực phát hành 28/10/2026; theo quyết định của plan không được suy trạng thái thực thi từ ngày phát hành | Vẫn thiếu; cần chủ nghiệp vụ xác nhận trạng thái thực tế có phạm vi và thời gian |
 
 Không sửa code, không chạy runtime mới, không thay đổi production trong lượt này.
+
+### GD8.5 — Đã phát hành 2026-11-03 (chưa nghiệm thu nghiệp vụ)
+
+Quyết định của chủ sở hữu (bao.nguyen, 03/11): "Phát hành, ghi chưa nghiệm thu". Production chạy commit `85e527c028d2b82a0725f200111161ce02ddc962`, bundle v8 `36c55b508ea6493b4414dcc6d4247b16b82a00b45bd3205ff3e1faae6343857b` (grants/versions không đổi so với 8118dc0), schema V0050.
+
+| Hạng mục | Kết quả |
+|---|---|
+| Backup | `COPY_ONLY, CHECKSUM` + `RESTORE VERIFYONLY` đạt trước migration (bản 89 MB, lượt 3); lượt 4 tạo thêm một backup mới |
+| Migration | V0049/V0050 áp một lần; `Roles` 8 -> 9, role `document_history_reader` chưa cấp cho ai; 3 bảng scan rỗng; 59 bảng còn lại giữ số dòng |
+| Code/UI | Checkout production detached tại `85e527c`; `frontend/dist` khớp từng byte bản build GD8 qua local và public |
+| Quyền đọc source | Preflight dưới từng service identity: 3/3 `ok`, có `python_source_read` |
+| Dữ liệu | 6.486 file vùng bảo vệ không đổi; `database/seed/01_roles.sql` đổi theo commit phát hành |
+| Health | Local/public 200, `db=ok`, worker `ready`; RAG `git_sha=85e527c`, `live_authorized=true` |
+| Lỗi sau khởi động | Không có lỗi trong log App/RAG/Worker sau lần khởi động mới |
+
+Bốn lượt chạy (biên nhận giữ trong `.local/runs/gd8-deploy-20261103/attempt*`): lượt 1 dừng ở drain do vòng đồng bộ Qdrant định kỳ 10 phút của worker, không tắt service; lượt 2 sai đường dẫn file hỗ trợ, helper từ chối trước SQL; lượt 3 chạy backup/migration/cài đặt rồi vấp kiểm dữ liệu do file seed, tự rollback code về 8118dc0 và giữ schema; lượt 4 đạt.
+
+**Chưa kiểm sau phát hành:** login, chat SSE có nguồn, comprehensive dừng/tiếp tục, mở nguồn, lịch sử, logout trên trình duyệt. Claude không đăng nhập production bằng mật khẩu; chủ sở hữu tự kiểm.
+
+**Chưa nghiệm thu nghiệp vụ:** B1 nhóm nhiều phiên bản thật và nhóm trạng thái áp dụng thực tế không có nguồn; nhóm mâu thuẫn chỉ có ứng viên trong một nguồn (Doc60, `8.3.06316.010`). B2 baseline recall/p95/chi phí chưa đo.
