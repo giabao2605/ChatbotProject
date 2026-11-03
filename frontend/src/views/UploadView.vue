@@ -8,6 +8,7 @@ import type { ApiRow } from "@/types";
 
 const router = useRouter();
 const files = ref<File[]>([]);
+const fileInput = ref<HTMLInputElement | null>(null);
 const busy = ref(false);
 const error = ref("");
 const notice = ref("");
@@ -62,9 +63,9 @@ const detail = reactive<Record<string, string>>({
 
 const departmentOptions = computed(() => departments.value.map((d) => d.code));
 const selectedFileSummary = computed(() => {
-  if (!files.value.length) return "Chưa chọn file";
+  if (!files.value.length) return t("upload.noSelection");
   const total = files.value.reduce((sum, file) => sum + file.size, 0);
-  return `${files.value.length} file, ${formatBytes(total)}`;
+  return t("upload.fileSummary", { count: files.value.length, size: formatBytes(total) });
 });
 
 function pick(row: ApiRow, keys: string[]): string {
@@ -146,7 +147,7 @@ function validate(): boolean {
   if (uploadMode.value === "per_file") {
     const missing = files.value.some((_file, index) => !selectedDept(index).trim());
     if (missing) {
-      error.value = "Vui lòng chọn phòng ban cho từng file";
+      error.value = t("upload.noPerFileDept");
       return false;
     }
   }
@@ -199,7 +200,7 @@ async function submit() {
         "/api/documents/upload-batch",
         form,
       );
-      notice.value = `Đã tạo ${result.created} job ingest${result.failed ? `, lỗi ${result.failed}` : ""}`;
+      notice.value = t("upload.batchSuccess", { created: result.created }) + (result.failed ? t("upload.batchFailures", { failed: result.failed }) : "");
       if (result.failed && result.errors?.length) {
         error.value = result.errors.map((e) => `${e.file_name}: ${e.error}`).join("\n");
       }
@@ -216,16 +217,16 @@ async function submit() {
 <template>
   <section class="content-page">
     <Message v-if="workerStatus !== 'ready'" severity="warn" :closable="false">
-      Chưa xác nhận được bộ xử lý tài liệu đang hoạt động. Tệp tải lên có thể chờ trong hàng đợi; hãy kiểm tra lại hoặc liên hệ quản trị viên.
+      {{ t('upload.workerWarning') }}
     </Message>
     <header class="page-header">
       <div>
-        <div class="eyebrow">Ingestion</div>
+        <div class="eyebrow">{{ t('upload.eyebrow') }}</div>
         <h1 v-text="t('upload.title')"></h1>
         <p class="page-subtitle" v-text="t('upload.subtitle')"></p>
       </div>
       <div class="page-actions">
-        <Button label="Tiến trình ingest" severity="secondary" outlined @click="router.push('/queue')" />
+        <Button :label="t('upload.queue')" severity="secondary" outlined @click="router.push('/queue')" />
       </div>
     </header>
 
@@ -238,19 +239,20 @@ async function submit() {
         <form class="upload-layout" @submit.prevent="submit">
           <section class="upload-section upload-drop">
             <div>
-              <h2>Tệp cần ingest</h2>
-              <p class="muted-text">Hỗ trợ tài liệu văn phòng, PDF và ảnh scan. Có thể chọn nhiều file một lần.</p>
+              <h2>{{ t('upload.filesHeading') }}</h2>
+              <p class="muted-text">{{ t('upload.formatsHelp') }}</p>
             </div>
-            <label class="file-drop">
+            <div class="file-drop">
               <input
+                ref="fileInput"
                 type="file"
                 multiple
                 accept=".pdf,.docx,.xlsx,.xls,.txt,.md,.csv,.pptx,.png,.jpg,.jpeg,.bmp,.gif,.webp,.tif,.tiff"
                 @change="onFileChange"
               />
-              <span>Chọn file</span>
+              <button type="button" :disabled="busy" @click="fileInput?.click()">{{ t('upload.chooseFiles') }}</button>
               <strong v-text="selectedFileSummary"></strong>
-            </label>
+            </div>
             <div v-if="files.length" class="file-list">
               <div v-for="(fileItem, index) in files" :key="`${fileItem.name}-${index}`" class="file-row">
                 <span v-text="fileItem.name"></span>
@@ -262,17 +264,17 @@ async function submit() {
           <section class="upload-section">
             <div class="section-heading">
               <div>
-                <h2>Phân quyền và phòng ban</h2>
-                <p class="muted-text">Chọn nơi sở hữu tài liệu và các phòng ban được chia sẻ thêm.</p>
+                <h2>{{ t('upload.permissions') }}</h2>
+                <p class="muted-text">{{ t('upload.permissionsHelp') }}</p>
               </div>
               <div class="mode-switch">
                 <label>
                   <input v-model="uploadMode" type="radio" value="batch" />
-                  <span>Cả lô</span>
+                  <span>{{ t('upload.batch') }}</span>
                 </label>
                 <label>
                   <input v-model="uploadMode" type="radio" value="per_file" />
-                  <span>Từng file</span>
+                  <span>{{ t('upload.perFile') }}</span>
                 </label>
               </div>
             </div>
@@ -281,7 +283,7 @@ async function submit() {
               <label class="stack-field">
                 <span v-text="t('upload.dept')"></span>
                 <select v-if="departments.length" v-model="meta.thu_muc" class="native-select">
-                  <option value="" disabled>Chọn phòng ban</option>
+                  <option value="" disabled>{{ t('upload.chooseDepartment') }}</option>
                   <option
                     v-for="dept in departments"
                     :key="dept.code"
@@ -289,10 +291,10 @@ async function submit() {
                     v-text="dept.name ? `${dept.code} - ${dept.name}` : dept.code"
                   ></option>
                 </select>
-                <InputText v-else v-model="meta.thu_muc" placeholder="VD: Production" />
+                <InputText v-else v-model="meta.thu_muc" :placeholder="t('upload.departmentExample')" />
               </label>
               <div v-if="departments.length" class="stack-field">
-                <span>Chia sẻ thêm</span>
+                <span>{{ t('upload.shareWith') }}</span>
                 <div class="checkbox-grid">
                   <label v-for="dept in extraOptions(meta.thu_muc)" :key="dept" class="check-row">
                     <input v-model="batchExtraDepartments" type="checkbox" :value="dept" />
@@ -306,9 +308,9 @@ async function submit() {
               <div v-for="(fileItem, index) in files" :key="`${fileItem.name}-${index}`" class="per-file-row">
                 <strong v-text="fileItem.name"></strong>
                 <label class="stack-field">
-                  <span>Phòng ban chính</span>
+                  <span>{{ t('upload.primaryDepartment') }}</span>
                   <select v-if="departments.length" v-model="assignments[index].thu_muc" class="native-select">
-                    <option value="" disabled>Chọn phòng ban</option>
+                    <option value="" disabled>{{ t('upload.chooseDepartment') }}</option>
                     <option
                       v-for="dept in departments"
                       :key="dept.code"
@@ -319,7 +321,7 @@ async function submit() {
                   <InputText v-else v-model="assignments[index].thu_muc" />
                 </label>
                 <div v-if="departments.length" class="stack-field full-span">
-                  <span>Chia sẻ thêm</span>
+                  <span>{{ t('upload.shareWith') }}</span>
                   <div class="checkbox-grid">
                     <label v-for="dept in extraOptions(assignments[index].thu_muc)" :key="dept" class="check-row">
                       <input v-model="assignments[index].extra_departments" type="checkbox" :value="dept" />
@@ -329,23 +331,23 @@ async function submit() {
                 </div>
               </div>
             </div>
-            <p v-else-if="uploadMode === 'per_file'" class="muted-text">Chọn file trước để gán phòng ban riêng.</p>
+            <p v-else-if="uploadMode === 'per_file'" class="muted-text">{{ t('upload.chooseFirst') }}</p>
           </section>
 
           <section class="upload-section">
-            <h2>Metadata chính</h2>
+            <h2>{{ t('upload.primaryMetadata') }}</h2>
             <div class="upload-grid">
               <label class="stack-field">
                 <span v-text="t('upload.domain')"></span>
-                <InputText v-model="meta.domain" placeholder="Để trống = tự suy theo phòng ban" />
+                <InputText v-model="meta.domain" :placeholder="t('upload.domainHint')" />
               </label>
               <label class="stack-field">
                 <span v-text="t('upload.security')"></span>
                 <select v-model="meta.security_level" class="native-select">
-                  <option value="">Tự động theo phòng ban và nội dung</option>
+                  <option value="">{{ t('upload.automaticSecurity') }}</option>
                   <option v-for="opt in SECURITY_LEVELS" :key="opt.value" :value="opt.value" v-text="opt.label"></option>
                 </select>
-                <small class="field-help">Để tự động nếu muốn worker tự gán mức mật, rồi nâng lên confidential khi phát hiện dữ liệu nhạy cảm.</small>
+                <small class="field-help">{{ t('upload.securityHelp') }}</small>
               </label>
               <label class="stack-field">
                 <span v-text="t('upload.stage')"></span>
@@ -354,7 +356,7 @@ async function submit() {
               <label class="stack-field">
                 <span v-text="t('upload.site')"></span>
                 <select v-if="sites.length" v-model="meta.site" class="native-select">
-                  <option value="">Không chọn</option>
+                  <option value="">{{ t('upload.none') }}</option>
                   <option
                     v-for="site in sites"
                     :key="site.code"
@@ -369,56 +371,56 @@ async function submit() {
 
           <section class="upload-section">
             <details class="detail-block">
-              <summary>Thông tin chi tiết dùng chung cho lô upload</summary>
+              <summary>{{ t('upload.sharedDetails') }}</summary>
               <div class="upload-grid detail-grid">
                 <label class="stack-field">
-                  <span>Tiêu đề</span>
+                  <span>{{ t('upload.documentTitle') }}</span>
                   <InputText v-model="detail.title" />
                 </label>
                 <label class="stack-field">
-                  <span>Tags</span>
-                  <InputText v-model="detail.tags" placeholder="Phân tách bởi dấu phẩy" />
+                  <span>{{ t('upload.tags') }}</span>
+                  <InputText v-model="detail.tags" :placeholder="t('upload.tagsHint')" />
                 </label>
                 <label class="stack-field">
-                  <span>Số hiệu tài liệu</span>
+                  <span>{{ t('upload.documentNumber') }}</span>
                   <InputText v-model="detail.doc_number" />
                 </label>
                 <label class="stack-field">
-                  <span>Người ký / chủ quản</span>
+                  <span>{{ t('upload.owner') }}</span>
                   <InputText v-model="detail.owner_signer" />
                 </label>
                 <label class="stack-field">
-                  <span>Ngày ban hành</span>
+                  <span>{{ t('upload.issuedDate') }}</span>
                   <input v-model="detail.issued_date" type="date" class="native-select" />
                 </label>
                 <label class="stack-field">
-                  <span>Ngày hiệu lực</span>
+                  <span>{{ t('upload.effectiveDate') }}</span>
                   <input v-model="detail.effective_date" type="date" class="native-select" />
                 </label>
                 <label class="stack-field">
-                  <span>Ngày hết hạn</span>
+                  <span>{{ t('upload.expiryDate') }}</span>
                   <input v-model="detail.expiry_date" type="date" class="native-select" />
                 </label>
                 <label class="stack-field">
-                  <span>Ngày rà soát</span>
+                  <span>{{ t('upload.reviewDate') }}</span>
                   <input v-model="detail.review_date" type="date" class="native-select" />
                 </label>
                 <label class="stack-field">
-                  <span>Ngôn ngữ</span>
+                  <span>{{ t('upload.language') }}</span>
                   <input v-model="detail.language" list="upload-langs" class="native-select" />
                   <datalist id="upload-langs">
                     <option v-for="l in LANGUAGES" :key="l" :value="l"></option>
                   </datalist>
                 </label>
                 <label class="stack-field">
-                  <span>Trạng thái hiệu lực</span>
+                  <span>{{ t('upload.effectiveStatus') }}</span>
                   <input v-model="detail.effective_status" list="upload-statuses" class="native-select" />
                   <datalist id="upload-statuses">
                     <option v-for="s in EFFECTIVE_STATUSES" :key="s" :value="s"></option>
                   </datalist>
                 </label>
                 <label class="stack-field full-span">
-                  <span>Tóm tắt</span>
+                  <span>{{ t('upload.summary') }}</span>
                   <textarea v-model="detail.summary" rows="3" class="native-select"></textarea>
                 </label>
               </div>
@@ -428,7 +430,7 @@ async function submit() {
           <div class="upload-submit">
             <div>
               <strong v-text="selectedFileSummary"></strong>
-              <p class="muted-text">Sau khi tạo job, hệ thống sẽ chuyển sang trang tiến trình ingest.</p>
+              <p class="muted-text">{{ t('upload.afterUpload') }}</p>
             </div>
             <Button type="submit" :label="t('upload.submit')" :loading="busy" />
           </div>
@@ -487,10 +489,16 @@ async function submit() {
 .file-drop input {
   display: none;
 }
-.file-drop span {
+.file-drop button {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  padding: .4rem;
   color: var(--accent);
   font-weight: 700;
 }
+.file-drop button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .file-list {
   display: grid;
   gap: 0.45rem;

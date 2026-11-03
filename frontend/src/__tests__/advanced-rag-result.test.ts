@@ -37,6 +37,8 @@ it('renders a scope total with exact values and invalidates its changed source',
   expect(wrapper.text()).toContain('9007199254740993.015');
   expect(wrapper.text()).toContain('9007199254740993.02');
   expect(wrapper.text()).toContain('sum(s)');
+  expect(wrapper.find('details').text()).toContain('sum(s)');
+  expect(wrapper.text()).toContain('Tổng trong phạm vi đã chọn');
   expect(wrapper.get('a').attributes('href')).toBe(source.original_url);
   vi.mocked(api.apiGet).mockResolvedValue({items:[],scope_hash:'c'.repeat(64),snapshot_id:'snapshot',offset:0,has_more:false});
   await wrapper.get('button').trigger('click');await flushPromises();

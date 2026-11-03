@@ -583,7 +583,10 @@ def _read_pdf_page_text(page, *, dpi):
     if text.strip():
         return text, False
     try:
-        text_page = page.get_textpage_ocr(language="eng+vie", dpi=dpi, full=True)
+        text_page = page.get_textpage_ocr(
+            language="eng+vie", dpi=dpi, full=True,
+            tessdata=os.environ.get("TESSDATA_PREFIX") or None,
+        )
         return page.get_text(textpage=text_page), True
     except Exception as error:
         logger.warning("Không OCR được trang PDF scan: %s", error)

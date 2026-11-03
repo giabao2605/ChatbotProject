@@ -755,7 +755,8 @@ describe("ChatView public behavior", () => {
       },
       expect.any(Object),
     );
-    expect(revokeObjectURL).toHaveBeenCalledWith("blob:pump");
+    expect(revokeObjectURL).not.toHaveBeenCalledWith("blob:pump");
+    expect(wrapper.find('img[src="blob:pump"]').exists()).toBe(true);
     expect(wrapper.text()).toContain("Câu trả lời hoàn chỉnh");
     expect(wrapper.text()).toContain("Nguồn tham khảo hạn chế");
     expect(wrapper.text()).toContain("Manual P-101");
@@ -772,6 +773,8 @@ describe("ChatView public behavior", () => {
     await button(wrapper, "Hữu ích").trigger("click");
     await flushPromises();
     expect(api.sendFeedback).toHaveBeenCalledWith(42, 1);
+    await button(wrapper, 'Cuộc trò chuyện mới').trigger('click');
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:pump');
   });
 
   it("renders a legacy markdown source appendix as readable source lines", async () => {
@@ -880,6 +883,7 @@ describe("ChatView public behavior", () => {
     expect(api.uploadChatImage).not.toHaveBeenCalled();
 
     const file = new File(["image"], "selected.png", { type: "image/png" });
+    Object.defineProperty(fileInput.element, 'value', { configurable:true, writable:true, value:'selected.png' });
     Object.defineProperty(fileInput.element, "files", {
       configurable: true,
       value: [file],
@@ -890,6 +894,13 @@ describe("ChatView public behavior", () => {
 
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:selected");
     expect(wrapper.find(".selected-file").exists()).toBe(false);
+    expect(fileInput.element.value).toBe('');
+    await fileInput.trigger('change');await flushPromises();
+    expect(api.uploadChatImage).toHaveBeenCalledTimes(2);
+    const attach = button(wrapper, 'Đính kèm');
+    expect(attach.attributes('type')).toBe('button');
+    const picker=vi.spyOn(fileInput.element,'click');
+    await attach.trigger('click');expect(picker).toHaveBeenCalledOnce();
   });
 });
 

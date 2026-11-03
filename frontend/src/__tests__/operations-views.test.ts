@@ -1078,3 +1078,15 @@ describe("Regression grading and scope form", () => {
     expect(api.apiSend).toHaveBeenLastCalledWith("/api/regression/questions", "POST", expect.objectContaining({ max_security_level: "internal" }));
   });
 });
+
+it("identifies unavailable question content only in observability without changing metrics", async () => {
+  const rows = [{ question: "", cost: 1.25 }, { question: "Stored legacy question", cost: 2 }];
+  vi.mocked(api.apiGet).mockResolvedValueOnce({ top_costly: rows });
+  const wrapper = mountView(ObservabilityView);
+  const result = await (wrapper.findComponent(StatViewStub).props("load") as () => Promise<{ top_costly: typeof rows }>)();
+  expect(result.top_costly).toEqual([
+    { question: "Không lưu nội dung câu hỏi", cost: 1.25 }, { question: "Stored legacy question", cost: 2 },
+  ]);
+  expect(rows[0].question).toBe("");
+  wrapper.unmount();
+});

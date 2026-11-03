@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, watch } from "vue";
+import { computed, ref, onMounted, onUnmounted, watch } from "vue";
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 import { SESSION_UNAUTHORIZED_EVENT } from "@/api/client";
 import { LOGOUT_STORAGE_KEY, useAuthStore } from "@/stores/auth";
@@ -10,6 +10,13 @@ import { visibleNavigationItems } from "@/authorization";
 const auth = useAuthStore();
 const router = useRouter();
 const route = useRoute();
+const menuOpen = ref(false);
+const menuToggle = ref<HTMLButtonElement | null>(null);
+function closeMenu(restoreFocus = false) {
+  menuOpen.value = false;
+  if (restoreFocus) menuToggle.value?.focus();
+}
+watch(() => route.fullPath, () => closeMenu());
 
 function receiveLogout(event: StorageEvent) {
   if (event.key === LOGOUT_STORAGE_KEY && event.newValue && event.storageArea === localStorage) {
@@ -53,7 +60,10 @@ async function doLogout() {
 
 <template>
   <div class="app-dark app-shell" :class="{ 'has-sidebar': auth.user }">
-    <aside v-if="auth.user" class="sidebar">
+    <button v-if="auth.user" ref="menuToggle" type="button" class="menu-toggle"
+      :aria-expanded="menuOpen" aria-controls="app-navigation" @click="menuOpen = !menuOpen" @keydown.esc.stop.prevent="closeMenu(true)">Menu</button>
+    <aside v-if="auth.user" id="app-navigation" class="sidebar" :class="{ 'is-open': menuOpen }"
+      @keydown.esc.stop.prevent="closeMenu(true)">
       <div class="brand">
         <div class="brand-mark">ID</div>
         <div>
@@ -68,6 +78,7 @@ async function doLogout() {
           :key="item.to"
           :to="item.to"
           class="nav-link"
+          @click="closeMenu()"
           v-text="t(item.key)"
         ></RouterLink>
       </nav>

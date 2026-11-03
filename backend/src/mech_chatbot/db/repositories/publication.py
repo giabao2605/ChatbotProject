@@ -18,7 +18,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from ..engine import _ensure_engine, engine, resolve_engine as _resolve_engine
 from mech_chatbot.config.constants import EVALUATION_SOURCE_COLLECTIONS
-from mech_chatbot.config.repository_runtime import current_qdrant_runtime
+from mech_chatbot.config.repository_runtime import current_qdrant_runtime, current_repository_policy
 from mech_chatbot.config.settings import RepositoryPolicySettings
 from mech_chatbot.config.logging import logger
 from . import audit as _r_audit
@@ -116,12 +116,7 @@ def _json_list(value):
 
 
 def _default_policy() -> RepositoryPolicySettings:
-    return RepositoryPolicySettings(
-        strict_site_filter=True,
-        allow_admin_metadata_override=False,
-        allow_admin_approval_override=False,
-        publication_max_attempts=MAX_PUBLICATION_ATTEMPTS,
-    )
+    return current_repository_policy()
 
 
 _REQUIRED_METADATA_COLUMNS = {

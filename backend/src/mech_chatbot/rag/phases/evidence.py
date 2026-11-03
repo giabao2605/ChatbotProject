@@ -268,9 +268,15 @@ def evaluate_evidence(
     """Apply citation and answerability policy to the retrieved evidence."""
     request = decision.request
     documents = list(reranked.documents)
-    from mech_chatbot.services.feedback_service import pin_generation_evidence
-    documents = pin_generation_evidence(documents,state.request.access,
-        checkpoint=state.checkpoint,deadline=state.budget.deadline_monotonic)
+    from mech_chatbot.services.feedback_service import pin_generation_evidence, EvidenceCertificationError
+    try:
+        documents = pin_generation_evidence(documents,state.request.access,
+            checkpoint=state.checkpoint,deadline=state.budget.deadline_monotonic,
+            image_analysis=request.image_analysis)
+    except EvidenceCertificationError:
+        from mech_chatbot.rag.phases.retrieval_rerank import _empty_context_terminal
+        return _empty_context_terminal(decision,enrichment,state,list(enrichment.new_part_ids),
+            'Chưa xác minh được chứng cứ nguồn. Vui lòng kiểm tra tài liệu hoặc hỏi lại sau.')
     reranked = replace(reranked,documents=tuple(documents))
     decomposition_branches = list(primary.decomposition_branches)
     if len(filter_applicable_sources(documents, request.user_question)) != len(documents):

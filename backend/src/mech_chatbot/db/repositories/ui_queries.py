@@ -273,9 +273,11 @@ def list_ingestion_jobs(status=None, dept=None, search=None, is_admin=False,
                 ISNULL(Priority, 100) AS Priority,
                 Domain, SecurityLevel, CongDoan, Site
             FROM dbo.IngestionJobs
-            WHERE Status NOT IN ('pending_review', 'published', 'archived', 'superseded')
+            WHERE 1 = 1
             """
 	params = {}
+	if status is None:
+		query_str += " AND Status NOT IN ('pending_review', 'published', 'archived', 'superseded')"
 	if status is not None:
 		query_str += " AND Status = :status"
 		params["status"] = status

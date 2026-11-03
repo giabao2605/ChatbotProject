@@ -185,6 +185,8 @@ def test_environment_and_stopping_preserve_runtime_contract():
     assert env["GIT_CONFIG_VALUE_0"] == "C:/project"
     assert env["HF_HUB_OFFLINE"] == "1"
     assert env["INGESTION_WORKER_READY_FILE"].endswith("ready.txt")
+    assert env["TESSDATA_PREFIX"] == "C:/Users/bao.nguyen/Documents/Tesseract-OCR/tessdata"
+    assert runtime.child_environment({"TESSDATA_PREFIX": "C:/custom/tessdata"})["TESSDATA_PREFIX"] == "C:/custom/tessdata"
     store = Mock()
     with pytest.raises(SystemExit):
         runtime.StopAwareJobStore(store, lambda: True).claim_next("worker")

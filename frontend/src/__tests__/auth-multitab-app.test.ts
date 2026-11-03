@@ -120,3 +120,19 @@ describe("App cross-tab logout", () => {
     expect(auth.user?.username).toBe("alice");
   });
 });
+
+it("toggles the mobile menu and closes it on Escape and navigation", async () => {
+  vi.mocked(api.loadMe).mockResolvedValue(user);
+  const { router } = await mountProtectedApp();
+  const toggle = wrapper!.get(".menu-toggle");
+  expect(toggle.attributes("aria-expanded")).toBe("false");
+  expect(toggle.attributes("aria-controls")).toBe("app-navigation");
+  await toggle.trigger("click");
+  expect(toggle.attributes("aria-expanded")).toBe("true");
+  await wrapper!.get(".sidebar").trigger("keydown", { key: "Escape" });
+  expect(toggle.attributes("aria-expanded")).toBe("false");
+  await toggle.trigger("click");
+  await router.push("/login"); await flushPromises();
+  expect(toggle.attributes("aria-expanded")).toBe("false");
+  wrapper!.unmount(); wrapper = undefined;
+});
