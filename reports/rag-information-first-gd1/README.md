@@ -413,3 +413,11 @@ Bốn lượt chạy (biên nhận giữ trong `.local/runs/gd8-deploy-20261103/
 **Chưa kiểm sau phát hành:** login, chat SSE có nguồn, comprehensive dừng/tiếp tục, mở nguồn, lịch sử, logout trên trình duyệt. Claude không đăng nhập production bằng mật khẩu; chủ sở hữu tự kiểm.
 
 **Chưa nghiệm thu nghiệp vụ:** B1 nhóm nhiều phiên bản thật và nhóm trạng thái áp dụng thực tế không có nguồn; nhóm mâu thuẫn chỉ có ứng viên trong một nguồn (Doc60, `8.3.06316.010`). B2 baseline recall/p95/chi phí chưa đo.
+
+### Phát hành bản sửa QA trên nền GD8 — 2026-11-03
+
+Production chạy commit `1c0a353f6a33f93555b7195797117378966a0fc6` (GD8 + 12 bản sửa QA web 31/10), bundle `9fcebe68f8b68ae4e82b04adc272d06acb1f942f2ce0a92c88c74165a5322156`, schema V0050 không đổi. Phát hành đạt ngay lượt đầu (15:32–15:40): backup mới trước khi chuyển, preflight 3/3 có `python_source_read`, 6.499 file vùng bảo vệ không đổi, health local/public 200, RAG `live_authorized=true`, không có lỗi sau khởi động. Sau đó cấp `NT SERVICE\MechRAGWorker` quyền ReadAndExecute trên `Documents\Tesseract-OCR` cho OCR PDF scan và khởi động lại Worker; health `ready`.
+
+Kiểm trước phát hành: 363 backend focused, 430 frontend, vue-tsc + build, 3 ca Chromium fixture. Ghép trên GD7: ChatView giữ logic resume/comprehensive và thêm giải phóng URL ảnh; test lịch sử endpoint cập nhật theo tham số `actor`/`allow_history` của GD5 (test này đã lỗi sẵn trên main).
+
+**Chưa kiểm:** OCR một PDF scan thật dưới worker, và luồng có đăng nhập trên trình duyệt.

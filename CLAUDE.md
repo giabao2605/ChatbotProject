@@ -13,7 +13,7 @@ Bàn giao từ Codex ngày 2026-11-03. Nguồn: `~/.codex/memories_v2/`, phiên 
 
 ## Checkout này là bản đang phục vụ production
 
-- `C:\Users\bao.nguyen\Documents\ChatBotProject` chạy production qua Windows service (App/RAG/Worker + Cloudflared, domain `mechraglab.click`). HEAD detached tại `85e527c` (tag `release/gd8-20261103`), schema V0050, bundle v8 `36c55b50`.
+- `C:\Users\bao.nguyen\Documents\ChatBotProject` chạy production qua Windows service (App/RAG/Worker + Cloudflared, domain `mechraglab.click`). HEAD detached tại `1c0a353` (GD8 + bản sửa QA web, phát hành 03/11), schema V0050, bundle v8 `9fcebe68`. Bản GD8 trước đó có tag `release/gd8-20261103`.
 - Không sửa file tracked ở đây: checkout phải sạch thì lần deploy sau mới qua preflight. Làm việc trong worktree rồi phát hành.
 - `git stash@{0}` ở checkout này giữ WIP cũ trước GD8 (57/64 file trùng candidate); chưa xóa.
 
@@ -31,6 +31,7 @@ Bàn giao từ Codex ngày 2026-11-03. Nguồn: `~/.codex/memories_v2/`, phiên 
 - Drain từ chối khi worker đang chạy vòng đồng bộ Qdrant (mỗi 10 phút, khoảng 75 giây). Sau khi start service đợi khoảng 150 giây rồi mới chạy.
 - Rollback không xóa `reports/<release>/release` trong checkout production; phải chuyển thư mục đó đi trước lần chạy lại.
 - Claude không đăng nhập production bằng mật khẩu; smoke có đăng nhập do người dùng tự làm.
+- Hash file đọc từ đĩa phải chuẩn hóa CRLF -> LF trước khi so (checkout production ra CRLF). Cửa sổ pwsh có thể treo ở bước in kết quả do QuickEdit: kiểm `result.json` trong `C:\ProgramData\MechRAGServicesudit-deploy-*` thay vì nhìn màn hình.
 
 ## GitHub (giabao2605/ChatbotProject, PUBLIC)
 
@@ -39,7 +40,7 @@ Bàn giao từ Codex ngày 2026-11-03. Nguồn: `~/.codex/memories_v2/`, phiên 
 
 ## Việc khác còn treo
 
-- Public-web QA 31/10: 12 lỗi, bản sửa ở worktree `.codex\worktrees\public-web-qa-fixes` (nhánh `codex/public-web-qa-fixes`), chưa commit/deploy. Còn kiểm tessdata dưới identity worker thật.
+- (Đã phát hành 03/11 trong `1c0a353`) Public-web QA 31/10: 12 lỗi, bản sửa ở worktree `.codex\worktrees\public-web-qa-fixes` (nhánh `codex/public-web-qa-fixes`), chưa commit/deploy. Còn kiểm tessdata dưới identity worker thật.
 - Nhiều worktree cũ dưới `.codex\worktrees\` và `.local\worktrees\`; chỉ dọn khi người dùng yêu cầu.
 
 ## Lệnh
