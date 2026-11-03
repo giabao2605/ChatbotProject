@@ -31,7 +31,7 @@ Bàn giao từ Codex ngày 2026-11-03. Nguồn: `~/.codex/memories_v2/`, phiên 
 - Drain từ chối khi worker đang chạy vòng đồng bộ Qdrant (mỗi 10 phút, khoảng 75 giây). Sau khi start service đợi khoảng 150 giây rồi mới chạy.
 - Rollback không xóa `reports/<release>/release` trong checkout production; phải chuyển thư mục đó đi trước lần chạy lại.
 - Claude không đăng nhập production bằng mật khẩu; smoke có đăng nhập do người dùng tự làm.
-- Hash file đọc từ đĩa phải chuẩn hóa CRLF -> LF trước khi so (checkout production ra CRLF). Cửa sổ pwsh có thể treo ở bước in kết quả do QuickEdit: kiểm `result.json` trong `C:\ProgramData\MechRAGServicesudit-deploy-*` thay vì nhìn màn hình.
+- Hash file đọc từ đĩa phải chuẩn hóa CRLF -> LF trước khi so (checkout production ra CRLF). Cửa sổ pwsh có thể treo ở bước in kết quả do QuickEdit: kiểm `result.json` trong `C:\ProgramData\MechRAGServices\audit-deploy-*` thay vì nhìn màn hình.
 
 ## GitHub (giabao2605/ChatbotProject, PUBLIC)
 
