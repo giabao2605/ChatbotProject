@@ -436,6 +436,10 @@ def _wrap_semantic_cache(
                 getattr(runtime, "semantic_cache_enabled", True),
                 state.invocation.mode,
             )
+            and semantic_cache.policy_allows_cache(
+                decision.intent_data.get("version_policy"),
+                decision.intent_data.get("history_access_denied", False),
+            )
             and decision.cache_query_embedding is not None
             and documents
             and not any(is_demo_source(doc.metadata) for doc in documents)
@@ -461,6 +465,8 @@ def _wrap_semantic_cache(
                 model=get_llm_model_name(state.provider_adapter),
                 input_char_len=input_length,
                 reported_cost=reported_cost,
+                version_policy=decision.intent_data.get("version_policy"),
+                history_access_denied=decision.intent_data.get("history_access_denied", False),
                 citation_snapshot=citation_snapshot,
                 evidence_snapshot=evidence_snapshot,
                 cache_enabled=bool(

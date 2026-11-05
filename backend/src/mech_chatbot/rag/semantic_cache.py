@@ -17,7 +17,7 @@ from mech_chatbot.rag.entity_resolver import has_explicit_code
 
 
 _REPLAY_CACHE_DISABLED = ContextVar("replay_cache_disabled", default=False)
-_ANSWER_CONTRACT = "grounded-answer-v12-undivided-query-scope"
+_ANSWER_CONTRACT = "grounded-answer-v13-history-intent-before-cache"
 _PROMPT_SHA256 = hashlib.sha256(Path(__file__).with_name("prompt.py").read_bytes()).hexdigest()
 _VERIFIER_SHA256 = hashlib.sha256(Path(__file__).with_name("claim_verification.py").read_bytes()).hexdigest()
 _FILE_REFERENCE = re.compile(
@@ -247,8 +247,15 @@ def _validated_cache_payload(best, actor):
     return doc_ids, citations, evidence
 
 
-def lookup_exact(question, scope_sig, *, ttl=24.0, actor=None):
-    """Indexed fast path that avoids embeddings and interaction routing."""
+def policy_allows_cache(version_policy, history_access_denied=False):
+    return version_policy == "current_only" and not history_access_denied
+
+
+def lookup_exact(question, scope_sig, *, ttl=24.0, actor=None,
+                 version_policy="current_only", history_access_denied=False):
+    """Indexed fast path after intent has established current-only applicability."""
+    if not policy_allows_cache(version_policy, history_access_denied):
+        return None
     if _document_specific(question) or _replay_is_scope_sensitive(question):
         return None
     from mech_chatbot.db.repositories.semantic_cache import (
@@ -302,7 +309,10 @@ def select_best(candidates, embedding, threshold):
     return None, best_s
 
 
-def lookup(question, embedding, scope_sig, *, ttl=24.0, threshold=0.93, actor=None):
+def lookup(question, embedding, scope_sig, *, ttl=24.0, threshold=0.93, actor=None,
+           version_policy="current_only", history_access_denied=False):
+    if not policy_allows_cache(version_policy, history_access_denied):
+        return None
     if (_document_specific(question) or _requires_exact_question(question)
             or _replay_is_scope_sensitive(question)):
         return None
@@ -384,7 +394,10 @@ def _looks_like_refusal(answer):
 
 
 def store(question, embedding, answer, ref_text, ref_images, source_doc_ids, scope_sig, model, est_cost,
-          citation_snapshot=None, evidence_snapshot=None, cache_enabled=True):
+          citation_snapshot=None, evidence_snapshot=None, cache_enabled=True,
+          version_policy="current_only", history_access_denied=False):
+    if not policy_allows_cache(version_policy, history_access_denied):
+        return
     if (not enabled(cache_enabled) or _replay_is_scope_sensitive(question)
             or not answer or not str(answer).strip()):
         return
@@ -414,7 +427,8 @@ def store(question, embedding, answer, ref_text, ref_images, source_doc_ids, sco
 def teeing_store_stream(inner, question, embedding, scope_sig, ref_text, ref_images,
                         source_doc_ids, model, input_char_len=0,
                         citation_snapshot=None, evidence_snapshot=None,
-                        cache_enabled=True, reported_cost=None):
+                        cache_enabled=True, reported_cost=None,
+                        version_policy="current_only", history_access_denied=False):
     chunks = []
     completed = False
     try:
@@ -441,6 +455,8 @@ def teeing_store_stream(inner, question, embedding, scope_sig, ref_text, ref_ima
                     citation_snapshot=citation_snapshot,
                     evidence_snapshot=evidence_snapshot,
                     cache_enabled=cache_enabled,
+                    version_policy=version_policy,
+                    history_access_denied=history_access_denied,
                 )
             except Exception:
                 pass

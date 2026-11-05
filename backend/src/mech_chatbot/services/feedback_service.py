@@ -22,7 +22,7 @@ class EvidenceCertificationError(PermissionError):
     """A knowledge source could not be certified before generation."""
 
 
-def pin_generation_evidence(documents, actor, *, checkpoint=None, deadline=None, image_analysis=None):
+def pin_generation_evidence(documents, actor, *, checkpoint=None, deadline=None, image_analysis=None, allow_history=False):
     from copy import copy
     from dataclasses import asdict
     from mech_chatbot.db.repositories.feedback_access import access_transaction, pin_generation_sources
@@ -46,7 +46,8 @@ def pin_generation_evidence(documents, actor, *, checkpoint=None, deadline=None,
                 result.append(copy(document))
                 continue
             try:
-                pinned = pin_generation_sources(conn,[{**metadata,'text':metadata.get('noi_dung_goc') or document.page_content}],effective)[0]
+                pinned = pin_generation_sources(conn,[{**metadata,'text':metadata.get('noi_dung_goc') or document.page_content}],effective,
+                    allow_history=allow_history)[0]
                 metadata = {**metadata,**({'evidence_pin':pinned['evidence_pin']} if 'evidence_pin' in pinned else {})}
             except PermissionError:
                 logger.warning(

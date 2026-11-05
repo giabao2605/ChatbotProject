@@ -2,6 +2,7 @@
 import json
 import hashlib
 from dataclasses import FrozenInstanceError
+from datetime import date, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -46,6 +47,40 @@ def selected_reply(prompt, reply):
 
 def provider(*claims):
     return lambda prompt: selected_reply(prompt, {"claims": claims})
+
+
+@pytest.mark.parametrize('metadata,expected', [
+    ({'expiry_date':'2000-01-01','effective_status':'effective'}, 'Hết hiệu lực từ 2000-01-01'),
+    ({'expiry_date':'2000-01-01','effective_status':'superseded'}, 'Hết hiệu lực từ 2000-01-01'),
+    ({'expiry_date':datetime(2000,1,1,12),'effective_status':'expired'}, 'Hết hiệu lực từ 2000-01-01'),
+    ({'effective_date':'2020-01-01','expiry_date':'2099-01-01'}, 'Hiệu lực từ 2020-01-01'),
+    ({'effective_date':date(2020,1,1)}, 'Hiệu lực từ 2020-01-01'),
+    ({'effective_date':'2020-01-01T12:00:00+07:00'}, 'Hiệu lực từ 2020-01-01'),
+    ({'effective_date':'2020-01-01','effective_status':'expired'}, 'Chưa xác nhận'),
+    ({'effective_date':'2020-01-01','effective_status':'superseded'}, 'Chưa xác nhận'),
+    ({'expiry_date':'2000-01-01junk','effective_status':'expired'}, 'Chưa xác nhận'),
+    ({'expiry_date':'2000-02-30','effective_status':'expired'}, 'Chưa xác nhận'),
+    ({'effective_date':'2020-01-01','expiry_date':'invalid'}, 'Chưa xác nhận'),
+    ({'effective_date':'2020-01-01junk'}, 'Chưa xác nhận'),
+    ({'is_current':False}, 'Chưa xác nhận'),
+    ({}, 'Chưa xác nhận'),
+])
+def test_source_status_column_uses_only_valid_metadata_dates(metadata, expected):
+    quote = 'First action.'
+    reply = {'claims':[claim(supported=False,sources=[],quotes=[])], 'coverage':{'D1P1':quote}}
+    result = verify_answer_claims('Unconfirmed draft.',[document(quote,**metadata)],question='What?',
+        invoke=lambda prompt:selected_reply(prompt,reply))
+    row = next(line for line in result.answer.splitlines() if '[SRC:D1P1]' in line)
+    assert row.split(' | ')[3] == expected
+
+
+def test_source_status_keeps_relationship_and_english_date_label():
+    docs, text, row, coverage = relationship_evidence()
+    docs[0].metadata['expiry_date'] = '2000-01-01'
+    reply = {'claims':[row,claim(2,supported=False,sources=[],quotes=[])], 'coverage':coverage}
+    result = verify_answer_claims(text+'\nUnconfirmed.',docs,question='Compare.',lang='en',
+        invoke=lambda prompt:selected_reply(prompt,reply))
+    assert 'Expired since 2000-01-01, different scope' in result.answer
 
 
 def reference(sid="D1P1", passage=0, start=0, end=0, text="First action."):

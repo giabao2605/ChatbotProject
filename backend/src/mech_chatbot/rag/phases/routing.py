@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from mech_chatbot.config.logging import log_trace, logger
@@ -15,10 +15,10 @@ from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
 from mech_chatbot.rag.execution import RequestBudgetExceeded
 from mech_chatbot.rag.glossary_expand import glossary_expansion_terms
 from mech_chatbot.rag.phases.contracts import PreparedValues, RoutingReason
-from mech_chatbot.rag.phases.diagnostics import make_debug_info
-from mech_chatbot.rag.phases.preparation import PreparedRequest
+from mech_chatbot.rag.phases.diagnostics import make_debug_info, make_terminal_debug
+from mech_chatbot.rag.phases.preparation import PreparedRequest, _lookup_exact_cache
 from mech_chatbot.rag.pipeline_steps import _rewrite_and_anchor, _route
-from mech_chatbot.rag.prompt import _t_rag
+from mech_chatbot.rag.prompt import _t_rag, _normalize_lang
 from mech_chatbot.rag.rerank import tokenize_cached
 
 
@@ -155,7 +155,12 @@ def _lookup_semantic_cache(
     prepared: PreparedRequest,
     embed_cached: Callable[[str], Any],
     state: Any,
+    intent_data: Mapping[str, Any],
 ) -> _SemanticCacheLookup:
+    from mech_chatbot.rag.semantic_cache import policy_allows_cache
+
+    if not policy_allows_cache(intent_data.get("version_policy"), intent_data.get("history_access_denied")):
+        return _SemanticCacheLookup(None, None, None)
     query_embedding = None
     cache_scope = prepared.cache_scope
     lookup_started = time.time()
@@ -196,6 +201,8 @@ def _lookup_semantic_cache(
                     0.93,
                 ),
                 actor=state.request.access,
+                version_policy=intent_data.get("version_policy"),
+                history_access_denied=intent_data.get("history_access_denied", False),
             )
             if hit:
                 terminal = _semantic_cache_terminal(prepared, hit, lookup_started)
@@ -249,8 +256,12 @@ def _rewrite_request(prepared: PreparedRequest, state: Any) -> _RewriteDecision:
 
 
 def _needs_version_clarification(rewrite: _RewriteDecision) -> bool:
+    from mech_chatbot.rag.intent import deterministic_version_intent
+
+    explicit_policy, _versions = deterministic_version_intent(rewrite.effective_question)
     return bool(
-        rewrite.intent_data.get("version_policy") == "compare_versions"
+        explicit_policy == "compare_versions"
+        and rewrite.intent_data.get("version_policy") == "compare_versions"
         and not rewrite.intent_data.get("detected_versions")
     )
 
@@ -319,6 +330,32 @@ def _missing_version_terminal(prepared: PreparedRequest, state: Any, *, missing_
     return RoutingOutcome(
         terminal=(ask_version_stream(), "", (), prepared.current_part_ids, debug),
         reason_code=reason,
+    )
+
+
+def _history_access_denied_terminal(prepared: PreparedRequest, state: Any) -> RoutingOutcome:
+    message = (
+        "Your account needs permission to view older document versions to answer this question. "
+        "Please ask an administrator or department owner to grant that permission."
+        if _normalize_lang(prepared.response_language) == "en" else
+        "Tài khoản của bạn cần được cấp quyền xem các phiên bản tài liệu cũ để trả lời câu hỏi này. "
+        "Vui lòng liên hệ quản trị viên hoặc người phụ trách phòng ban để được cấp quyền."
+    )
+    debug = make_terminal_debug(prepared.user_question, "access_denied", [], access_denied=True)
+    debug["access_hint"] = {
+        "restricted": True,
+        "reason": "history_access_denied",
+        "question": prepared.user_question,
+    }
+    state.refuse("access_denied")
+    log_trace(
+        "rag_end", prepared.trace_id,
+        final_latency_ms=int((time.time() - prepared.started_at) * 1000),
+        refusal=True, refusal_reason="access_denied", access_reason="history_access_denied",
+    )
+    return RoutingOutcome(
+        terminal=(iter((message,)), "", (), prepared.current_part_ids, debug),
+        reason_code="access_denied",
     )
 
 
@@ -421,16 +458,22 @@ def route(prepared: PreparedRequest, state: Any) -> RoutingOutcome:
     setup = _enter_route(prepared, state)
     if isinstance(setup, RoutingOutcome):
         return setup
-    cache = _lookup_semantic_cache(prepared, setup.embed_cached, state)
-    if cache.terminal is not None:
-        return cache.terminal
     rewrite = _rewrite_request(prepared, state)
+    if rewrite.intent_data.get("history_access_denied"):
+        return _history_access_denied_terminal(prepared, state)
     if rewrite.intent_data.get("clarification_required"):
         return _missing_version_terminal(prepared, state, missing_context=True)
     if _needs_version_clarification(rewrite):
         return _missing_version_terminal(prepared, state)
     if rewrite.intent_data.get("is_chitchat"):
         return _chitchat_terminal(prepared, setup.mock_stream)
+    exact = _lookup_exact_cache(prepared, state, rewrite.intent_data)
+    if exact.terminal is not None:
+        return RoutingOutcome(terminal=exact.terminal.terminal, reason_code="exact_cache_hit")
+    prepared = replace(prepared, cache_scope=exact.scope)
+    cache = _lookup_semantic_cache(prepared, setup.embed_cached, state, rewrite.intent_data)
+    if cache.terminal is not None:
+        return cache.terminal
     search = _build_search_query(prepared, rewrite, state)
     return RoutingOutcome(
         decision=_build_route_decision(prepared, rewrite, search, cache, state)

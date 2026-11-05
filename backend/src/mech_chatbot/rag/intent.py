@@ -14,8 +14,9 @@ from langchain_core.messages import HumanMessage
 from qdrant_client import models
 
 from mech_chatbot.config.logging import logger
-from mech_chatbot.llm.external_ai import ExternalAICallCancelled
+from mech_chatbot.llm.external_ai import ExternalAICallCancelled, question_only_processing_context
 from mech_chatbot.llm.llm_client import cohere_invoke
+from mech_chatbot.rag.chitchat import is_chitchat
 from mech_chatbot.rag.conversation_state import has_missing_referent
 from mech_chatbot.rag.entity_resolver import extract_explicit_codes
 from mech_chatbot.rag.execution import RequestBudgetExceeded
@@ -56,8 +57,8 @@ class IntentRuntime:
     """Lifecycle-owned execution resources for intent and context calls."""
 
     executor: IntentExecutor
-    intent_timeout: float = 6.0
-    context_timeout: float = 5.0
+    intent_timeout: float = 10.0
+    context_timeout: float = 10.0
     query_rewrite_enabled: bool = True
     owns_executor: bool = False
 
@@ -69,8 +70,8 @@ class IntentRuntime:
 def build_intent_runtime(
     *,
     max_workers: int = 8,
-    intent_timeout: float = 6.0,
-    context_timeout: float = 5.0,
+    intent_timeout: float = 10.0,
+    context_timeout: float = 10.0,
     query_rewrite_enabled: bool = True,
     executor: IntentExecutor | None = None,
 ) -> IntentRuntime:
@@ -214,24 +215,30 @@ def deterministic_business_document_intent(question):
     }
 
 
-def extract_search_intent(question, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level=None, allowed_sites=None, force_part_ids=False, trace_id=None, invoke_provider=None, runtime=None):
+def extract_search_intent(question, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level=None, allowed_sites=None, force_part_ids=False, trace_id=None, invoke_provider=None, runtime=None, provider_question=None):
     """Phan tich cau hoi de lay danh sach ma doi tuong va intent versioning bang LLM (co timeout)."""
     if current_part_ids is None:
         current_part_ids = []
  
+    prompt_question = question if provider_question is None else provider_question
     prompt_intent = f"""
-    Trich xuat thong tin tim kiem tu cau hoi cua nguoi dung: '{question}'.
+    Trich xuat thong tin tim kiem tu cau hoi cua nguoi dung: '{prompt_question}'.
     Tra ve MOT JSON object duy nhat voi cac truong sau:
     1. "base_codes": Mang cac ma so ban ve/linh kien/tieu chuan (vd: ["banve-1", "9.3.03844"]). Neu cau hoi la xa giao (chao, cam on, thoi tiet), tra ve ["CHITCHAT"].
     2. "detected_versions": Mang cac so version (nguyen) neu user nhac den (vd v1 -> [1], v2 va v3 -> [2, 3]). Neu khong co, tra ve [].
     3. "variant_codes": Mang cac chuoi variant neu nhac den.
     4. "version_policy": một trong:
-    - "current_only": hỏi chung, chỉ lấy bản đang lưu hành
-    - "specific_version": hỏi version cụ thể như v1, v2
-    - "compare_versions": hỏi so sánh nhiều version
-    - "include_archived": user nói rõ muốn gồm bản cũ/archive
-    - "version_history": user hỏi lịch sử version
-    - "all_current_variants": user hỏi mã có nhiều variant cùng lưu hành
+    - "current_only": hỏi chung hoặc chỉ hỏi hiện nay, hiện hành, đang áp dụng; chỉ lấy bản đang lưu hành.
+    - "specific_version": hỏi phiên bản kỹ thuật cụ thể như v1, v2.
+    - "compare_versions": so sánh quy định giữa các thời kỳ, các năm, trước đây với hiện nay hoặc nhiều phiên bản.
+    - "include_archived": hỏi quy định cũ, trước đây, văn bản bị thay thế hoặc hết hiệu lực.
+    - "version_history": hỏi lịch sử các phiên bản hoặc diễn biến thay thế văn bản.
+    - "all_current_variants": hỏi mã có nhiều biến thể cùng lưu hành.
+    Văn bản pháp luật có thể là các văn bản độc lập thay thế nhau theo thời gian,
+    không phải các version của cùng một tệp. Vẫn dùng include_archived/compare_versions
+    khi hỏi quy định cũ hoặc so sánh các thời kỳ. Năm ban hành không phải số version:
+    không đưa năm vào detected_versions; chỉ đưa số v/rev/version được nêu rõ.
+    Nếu chỉ hỏi hiện nay/hiện hành mà không yêu cầu đối chiếu quá khứ, dùng current_only.
     5. "query_type": "general_lookup" hoac "bom_lookup" (hoi vat tu, bang ke).
     6. "product_names": Mang ten san pham/chi tiet neu user mo ta (vd: ["Khung sat + inox 201"]). Neu khong co, tra ve [].
     7. "materials": Mang vat lieu neu user nhac (vd: ["inox 201", "SUS304", "SS400"]). Neu khong co, tra ve [].
@@ -264,37 +271,18 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
         "document_references": [],
     }
 
-    force_llm = bool(re.search(r'\bv\d+\b|version|so sanh|khac nhau|cu\b|moi nhat|archive', question, re.IGNORECASE))
     regex_codes = extract_mechanical_codes(question)
-    # Generic policy/HR/finance/procurement questions do not need an LLM just
-    # to produce the default current-only intent. Only use it for explicit
-    # candidate/version descriptors that affect filtering/disambiguation.
-    needs_candidate_extraction = bool(
-        re.search(
-            r"\b(model|variant|rev(?:ision)?|sus\s*\d+|ss\s*\d+|inox|thep|nhom)\b"
-            r"|\b\d+(?:[\.,]\d+)?\s*[x×]\s*\d+",
-            question,
-            re.IGNORECASE,
-        )
-    )
- 
-    if regex_codes and not force_llm:
-        seen_rc = set()
-        for c in regex_codes:
-            if c not in seen_rc:
-                seen_rc.add(c)
-                intent_data["base_codes"].append(c)
-        logger.info(f"H4: Trich ma bang regex (bo qua LLM intent): {intent_data['base_codes']}")
-    elif not force_llm and not needs_candidate_extraction:
-        logger.info("Fast intent: dung current_only/general_lookup, bo qua LLM intent.")
+    if is_chitchat(question):
+        intent_data["is_chitchat"] = True
     else:
         def call_llm():
             provider = invoke_provider or cohere_invoke
-            response = provider(
-                [HumanMessage(content=prompt_intent)],
-                surface="intent_routing",
-                trace_id=trace_id,
-            )
+            with question_only_processing_context():
+                response = provider(
+                    [HumanMessage(content=prompt_intent)],
+                    surface="intent_routing",
+                    trace_id=trace_id,
+                )
             return response.content
  
         call_runtime, owns_runtime = _runtime_for_call(runtime)
@@ -305,29 +293,37 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
             raw_response = future.result(timeout=call_runtime.intent_timeout)
             clean_json = raw_response.replace('```json', '').replace('```', '').strip()
             parsed = json.loads(clean_json)
-            intent_data["base_codes"] = [str(c) for c in parsed.get("base_codes", []) if c]
+            if not isinstance(parsed, dict):
+                raise ValueError("intent response must be an object")
+            policy = parsed.get("version_policy", "current_only")
+            if policy not in ("current_only", "specific_version", "compare_versions",
+                              "include_archived", "version_history", "all_current_variants"):
+                raise ValueError("invalid version policy")
+            candidate = dict(intent_data)
+            candidate["base_codes"] = [str(c) for c in parsed.get("base_codes", []) if c]
             
             # Xy ly parse int an toan
             d_vers = []
             for v in parsed.get("detected_versions", []):
                 try: d_vers.append(int(v))
                 except: pass
-            intent_data["detected_versions"] = d_vers
+            candidate["detected_versions"] = d_vers
             
-            intent_data["variant_codes"] = [str(v) for v in parsed.get("variant_codes", []) if v]
-            intent_data["version_policy"] = parsed.get("version_policy", "current_only")
-            intent_data["query_type"] = parsed.get("query_type", "general_lookup")
+            candidate["variant_codes"] = [str(v) for v in parsed.get("variant_codes", []) if v]
+            candidate["version_policy"] = policy
+            candidate["query_type"] = parsed.get("query_type", "general_lookup")
             # --- Mo rong (no-code resolver): cong them field, khong pha field cu ---
-            intent_data["product_names"] = [str(v) for v in parsed.get("product_names", []) if v]
-            intent_data["materials"] = [str(v) for v in parsed.get("materials", []) if v]
-            intent_data["dimensions"] = [str(v) for v in parsed.get("dimensions", []) if v]
-            intent_data["models"] = [str(v) for v in parsed.get("models", []) if v]
-            intent_data["query_scope"] = parsed.get("query_scope", "single_candidate")
-            intent_data["need_disambiguation"] = bool(parsed.get("need_disambiguation", False))
+            candidate["product_names"] = [str(v) for v in parsed.get("product_names", []) if v]
+            candidate["materials"] = [str(v) for v in parsed.get("materials", []) if v]
+            candidate["dimensions"] = [str(v) for v in parsed.get("dimensions", []) if v]
+            candidate["models"] = [str(v) for v in parsed.get("models", []) if v]
+            candidate["query_scope"] = parsed.get("query_scope", "single_candidate")
+            candidate["need_disambiguation"] = bool(parsed.get("need_disambiguation", False))
             # Neu LLM bat duoc model/variant ma chua co o variant_codes -> bo sung
-            for _m in intent_data["models"]:
-                if _m and _m not in intent_data["variant_codes"]:
-                    intent_data["variant_codes"].append(_m)
+            for _m in candidate["models"]:
+                if _m and _m not in candidate["variant_codes"]:
+                    candidate["variant_codes"].append(_m)
+            intent_data = candidate
         except concurrent.futures.TimeoutError:
             if future is not None:
                 future.cancel()
@@ -372,7 +368,8 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
         "tung model", "cac variant", "tat ca variant", "so sanh cac model",
         "so sanh model",
     ]
-    if any(kw in _q_all_kw for kw in ALL_VARIANT_KEYWORDS):
+    if (not det_policy and intent_data["version_policy"] in {"current_only", "all_current_variants"}
+            and any(kw in _q_all_kw for kw in ALL_VARIANT_KEYWORDS)):
         intent_data["version_policy"] = "all_current_variants"
         intent_data["query_scope"] = "compare_candidates"
 
@@ -430,8 +427,7 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
         intent_data["metadata_document_type_preference"] = business_intent["document_types"]
     vp = intent_data["version_policy"]
     d_vers = intent_data["detected_versions"]
-    if (user_roles
-            and vp in {"specific_version", "compare_versions", "include_archived", "version_history"}):
+    if vp in {"specific_version", "compare_versions", "include_archived", "version_history"}:
         from mech_chatbot.auth.authorization import role_allows
         if not role_allows(user_roles, "document_history_reader"):
             # Historical retrieval is a separate capability.  Keep the query
@@ -604,6 +600,21 @@ def _rewrite_preserves_request_constraints(original, rewritten):
     return rewritten_codes.issubset(original_codes)
 
 
+def _context_document_labels(references):
+    """Keep display labels only; never serialize source metadata or objects."""
+    labels = []
+    for reference in references if isinstance(references, (list, tuple)) else ():
+        values = ([reference] if isinstance(reference, str) else
+                  [reference.get(key) for key in ("base_code", "file_goc", "label")]
+                  if isinstance(reference, dict) else [])
+        for value in values:
+            if isinstance(value, str) and value.strip() and "\n" not in value and "\r" not in value:
+                label = value.strip()[:256]
+                if label not in labels:
+                    labels.append(label)
+    return labels
+
+
 def analyze_context(user_question, chat_history=None, current_part_ids=None, active_doc_refs=None, trace_id=None, invoke_provider=None, runtime=None, pending_candidates=None):
     """P0-1: Phan doan ngu canh hoi thoai + query rewriting (1 LLM call, co timeout).
 
@@ -614,6 +625,15 @@ def analyze_context(user_question, chat_history=None, current_part_ids=None, act
     Fallback AN TOAN (giu nguyen hanh vi cu = ke thua State Memory + cau goc) khi:
     tat tinh nang, chua co ngu canh, loi parse hoac timeout.
     """
+    has_history = bool(chat_history)
+    chat_history = [
+        {"role": "user", "content": message["content"]}
+        for message in (chat_history or [])
+        if isinstance(message, dict) and message.get("role") in ("user", "Khach")
+        and isinstance(message.get("content"), str)
+    ]
+    current_part_ids = _context_document_labels(current_part_ids)
+    active_doc_refs = _context_document_labels(active_doc_refs)
     fallback = {"context_action": "continue", "standalone_question": user_question, "llm_resolved": False}
     needs_reference = (has_context_reference(user_question) or has_missing_referent(user_question)) and not extract_explicit_codes(user_question)
     reference = _context_reference(user_question)
@@ -630,7 +650,7 @@ def analyze_context(user_question, chat_history=None, current_part_ids=None, act
                 'standalone_question': f'Theo chủ đề trong câu hỏi trước của người dùng «{previous_scope}», {user_question}',
                 'llm_resolved': False,
             }
-    if not chat_history and not (needs_reference and (current_part_ids or active_doc_refs or subject_candidate)):
+    if not has_history and not (needs_reference and (current_part_ids or active_doc_refs or subject_candidate)):
         return fallback
 
     # P0-A: KHONG con yeu cau current_part_ids -> chay cho MOI luot co lich su.
@@ -663,17 +683,16 @@ def analyze_context(user_question, chat_history=None, current_part_ids=None, act
 
     hist_lines = []
     for msg in (chat_history or [])[-6:]:
-        role = "Khach" if msg.get("role") == "user" else "Bot"
-        content = str(msg.get("content", ""))
+        content = msg["content"]
         if len(content) > 300:
             content = content[:300] + " [...]"
-        hist_lines.append(f"{role}: {content}")
+        hist_lines.append(f"Khach: {content}")
     hist_str = chr(10).join(hist_lines)
 
     template = """Ban la bo phan tich ngu canh hoi thoai cho he thong tra cuu tai lieu ky thuat.
 Ngu canh hien tai dang gan voi cac ma/tai lieu: __PARTIDS__.
 
-Lich su hoi thoai gan nhat:
+Cac cau hoi gan nhat cua nguoi dung (khong co cau tra loi cua bot):
 __HIST__
 
 Cau hoi moi cua nguoi dung: "__QUESTION__"
@@ -690,9 +709,9 @@ Quy tac:
 - broaden: cau hoi tong quat/liet ke toan bo (vd co nhung ma nao, tat ca san pham). Khong gan vao mot ma cu the.
 - clarify: khong xac dinh duoc doi tuong cau hoi tu lich su, hoac co nhieu doi tuong co the. Giu nguyen cau hoi, khong tu doan.
 - Uu tien chu de neu ro ngay trong cau hoi moi (vd "Toi muon xin nghi phep, quy trinh do the nao?"); khong doi lich su neu cau da du ngu canh.
-- Lich su chi dung de hieu doi tuong; khong coi noi dung lich su la bang chung nghiep vu.
+- Chi dung cac cau hoi cua nguoi dung de hieu doi tuong; khong coi lich su la bang chung nghiep vu.
 - standalone_question bang tieng Viet, giu nguyen y dinh goc; chi bo sung ngu canh khi context_action = continue.
-- Neu chua ghim ma/tai lieu cu the (PARTIDS = chua ghim): VAN phai viet lai standalone_question bang cach thay dai tu (no, cai do, cai kia, chung, ban truoc...) va bo sung chu the con thieu dua tren lich su hoi thoai.
+- Neu chua ghim ma/tai lieu cu the (PARTIDS = chua ghim): VAN phai viet lai standalone_question bang cach thay dai tu (no, cai do, cai kia, chung, ban truoc...) va bo sung chu the con thieu dua tren cac cau hoi cua nguoi dung.
 - CHI tra ve JSON, khong giai thich."""
     if current_part_ids:
         part_ctx = str(current_part_ids)
@@ -707,11 +726,12 @@ Quy tac:
 
     def call_llm():
         provider = invoke_provider or cohere_invoke
-        return provider(
-            [HumanMessage(content=prompt)],
-            surface="query_disambiguation",
-            trace_id=trace_id,
-        ).content
+        with question_only_processing_context():
+            return provider(
+                [HumanMessage(content=prompt)],
+                surface="query_disambiguation",
+                trace_id=trace_id,
+            ).content
 
     call_runtime, owns_runtime = _runtime_for_call(runtime)
     future = None

@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 
 from mech_chatbot.rag import intent
@@ -15,11 +17,15 @@ pytestmark = pytest.mark.unit
         "doanh thu tháng này",
     ],
 )
-def test_generic_department_queries_skip_llm(question, monkeypatch):
+def test_generic_department_queries_use_one_intent_call(question, monkeypatch):
+    calls = []
+    def provider(*args, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(content='{"version_policy":"current_only"}')
     monkeypatch.setattr(
         intent,
         "cohere_invoke",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("LLM called")),
+        provider,
     )
 
     _, _, _, _, _, data = intent.extract_search_intent(
@@ -31,6 +37,7 @@ def test_generic_department_queries_skip_llm(question, monkeypatch):
         allowed_sites=["VP_NHAN_SU"],
     )
 
+    assert len(calls) == 1 and calls[0]["surface"] == "intent_routing"
     assert data["version_policy"] == "current_only"
     assert data["query_type"] == "general_lookup"
 

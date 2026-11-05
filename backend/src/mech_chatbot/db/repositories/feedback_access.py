@@ -12,6 +12,7 @@ from mech_chatbot.auth.core import load_user_profile
 from mech_chatbot.auth.authorization import role_allows
 from mech_chatbot.auth.authorization import normalized_roles
 from mech_chatbot.config.constants import SHARE_ALL_DEPARTMENT
+from mech_chatbot.domain.serving_state import is_history_servable
 from mech_chatbot.application.protected_files import LEVEL_ORDER
 from ..evidence_snapshot import evidence_read_connection, evidence_read_snapshot
 from .chat_provenance import load_structured_history, table, source_provenance_current, provenance_record
@@ -135,7 +136,7 @@ def _page_excerpt_matches(original, page, kind):
     return bool(excerpt) and any(excerpt in value for value in page_texts)
 
 
-def pin_generation_sources(conn, docs, actor):
+def pin_generation_sources(conn, docs, actor, *, allow_history=False):
     """Certify original page excerpts before generation; derived text needs its own full proof."""
     result = []
     for doc in docs:
@@ -149,9 +150,19 @@ def pin_generation_sources(conn, docs, actor):
                 or type(page_no) is not int or item.get('calculation_provenance') or item.get('community_id')
                 or item.get('loai_du_lieu') in {'community_summary','grounded_calculation'}):
             raise PermissionError('Evidence cannot be certified')
-        historical = bool(item.get('is_current') in (False, 0) or item.get('effective_status') in ('expired','superseded')
-                          or item.get('lifecycle_status') in ('archived','superseded','retired'))
-        record = _source(conn,item['doc_id'],item['version_no'],actor,historical=historical)
+        record = _source(conn,item['doc_id'],item['version_no'],actor,historical=allow_history)
+        # SQL is authoritative: an expired current row may still say "effective" in retrieval metadata.
+        historical = is_history_servable({
+            'publication_state': record.get('PublicationState'),
+            'lifecycle_status': record.get('LifecycleStatus'),
+            'review_status': record.get('ReviewStatus'),
+            'is_current': record.get('IsCurrent'),
+            'effective_status': record.get('EffectiveStatus'),
+            'effective_date': record.get('EffectiveDate'),
+            'expiry_date': record.get('ExpiryDate'),
+        })
+        if historical and not allow_history:
+            raise PermissionError('Evidence cannot be certified')
         page = conn.execute(text(f'SELECT TextExtract,LocalOCRText,VisionSummary FROM {table(conn,"DocumentPages")} '
                                 'WHERE DocID=:doc AND PageNo=:page'), {'doc':item['doc_id'],'page':page_no}).fetchone()
         original = str(item.get('text') or item.get('noi_dung_goc') or '')

@@ -269,10 +269,14 @@ def evaluate_evidence(
     request = decision.request
     documents = list(reranked.documents)
     from mech_chatbot.services.feedback_service import pin_generation_evidence, EvidenceCertificationError
+    from mech_chatbot.auth.authorization import role_allows
+    allow_history = decision.intent_data.get("version_policy") in {
+        "specific_version", "compare_versions", "include_archived", "version_history",
+    } and role_allows(request.user_roles, "document_history_reader")
     try:
         documents = pin_generation_evidence(documents,state.request.access,
             checkpoint=state.checkpoint,deadline=state.budget.deadline_monotonic,
-            image_analysis=request.image_analysis)
+            image_analysis=request.image_analysis,allow_history=allow_history)
     except EvidenceCertificationError:
         from mech_chatbot.rag.phases.retrieval_rerank import _empty_context_terminal
         return _empty_context_terminal(decision,enrichment,state,list(enrichment.new_part_ids),
@@ -375,6 +379,8 @@ def _make_refusal_debug(
     evidence_decision: Any,
     evidence_quotes: tuple[str, ...],
     documents: list[Any],
+    *,
+    version_policy: str | None = None,
 ) -> dict[str, Any]:
     base_debug = make_debug_info(documents)
     generation_metrics = {
@@ -398,12 +404,12 @@ def _make_refusal_debug(
         "generation_metrics": generation_metrics,
         "decomposition_usage": generation_metrics["decomposition_usage"],
         "pilot_request_validation": _refusal_request_validation(
-            request, documents
+            request, documents, version_policy=version_policy
         ),
     }
 
 
-def _refusal_request_validation(request: Any, documents: list[Any]) -> dict:
+def _refusal_request_validation(request: Any, documents: list[Any], *, version_policy: str | None = None) -> dict:
     from mech_chatbot.domain.serving_state import is_currently_servable, is_history_servable
     from mech_chatbot.auth.authorization import role_allows
     from mech_chatbot.rag.rbac import document_matches_access_scope
@@ -423,7 +429,9 @@ def _refusal_request_validation(request: Any, documents: list[Any]) -> dict:
         )
         for document in documents
     )
-    allow_history = role_allows(request.user_roles, "document_history_reader")
+    allow_history = version_policy in {
+        "specific_version", "compare_versions", "include_archived", "version_history",
+    } and role_allows(request.user_roles, "document_history_reader")
     current_passed = bool(documents) and all(
         is_governed_sql_bom_document(document)
         or is_currently_servable(getattr(document, "metadata", None), require_current=True)
@@ -473,6 +481,7 @@ def _prepare_refusal(
         evidence_decision,
         evidence_quotes,
         documents,
+        version_policy=decision.intent_data.get("version_policy"),
     )
     state.refuse("evidence_gate")
     return PhaseTerminal(

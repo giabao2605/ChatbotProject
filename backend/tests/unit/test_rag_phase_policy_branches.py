@@ -351,7 +351,7 @@ def test_routing_returns_typed_intent_terminals(monkeypatch, intent, reason):
         routing,
         "_rewrite_and_anchor",
         lambda **_kwargs: (
-            "question", [], False, False, intent, object(), object(), object(), False,
+            "So sánh các phiên bản", [], False, False, intent, object(), object(), object(), False,
         ),
     )
     state = _RoutingState()

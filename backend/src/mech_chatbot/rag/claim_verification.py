@@ -3,6 +3,7 @@ import json
 import hashlib
 import re
 from dataclasses import dataclass
+from datetime import date, datetime
 
 from mech_chatbot.domain.evidence_identity import revision_key
 from mech_chatbot.domain.source_ids import extract_source_ids
@@ -199,6 +200,33 @@ def _supported(row, text, passages, documents):
                  literal("subject"), literal("condition"), literal("time"))
 
 
+def _source_date_status(meta, lang):
+    def parsed(value):
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value.strip()).date()
+            except ValueError:
+                pass
+        return None
+    unknown = "Unconfirmed" if lang == "en" else "Chưa xác nhận"
+    expiry = parsed(meta.get("expiry_date"))
+    expired = str(meta.get("effective_status") or "").strip().lower() in ("expired", "superseded")
+    if expired or (expiry is not None and expiry < date.today()):
+        if expiry is None:
+            return unknown
+        return ("Expired since " if lang == "en" else "Hết hiệu lực từ ") + expiry.isoformat()
+    if meta.get("expiry_date") not in (None, "") and expiry is None:
+        return unknown
+    effective = parsed(meta.get("effective_date"))
+    if effective is not None:
+        return ("Effective from " if lang == "en" else "Hiệu lực từ ") + effective.isoformat()
+    return unknown
+
+
 def verify_answer_claims(answer, documents, *, question, invoke, lang="vi", require_complete_coverage=False):
     spans = [line for line in answer.splitlines(keepends=True) if line.strip()]
     passages, metadata = _passages(documents)
@@ -322,9 +350,8 @@ def verify_answer_claims(answer, documents, *, question, invoke, lang="vi", requ
                                              for v in (c.subject, c.condition, c.time) if v))
             relations = list(dict.fromkeys(c.relationship for c in accepted if sid in c.sources
                                            and c.relationship != "unknown"))
-            statuses = [r.replace("_", " ") if lang == "en" else labels[r] for r in relations]
-            if meta.get("is_current") in (False, 0) or meta.get("effective_status") in ("expired", "superseded"):
-                statuses.insert(0, "Historical" if lang == "en" else "Bản lịch sử")
+            statuses = [_source_date_status(meta, lang)]
+            statuses.extend(r.replace("_", " ") if lang == "en" else labels[r] for r in relations)
             lines.append(f"{label} (v{cell(meta.get('version_no') or '?')}) | {cell(' '.join(quotes))} | {cell(', '.join(conditions) or unknown)} | {cell(', '.join(statuses) or unknown)} | [SRC:{sid}]")
         rendered = "\n".join(lines) + ("\n\n" + rendered.strip() if rendered.strip() else "")
     if not complete:

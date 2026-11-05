@@ -24,8 +24,10 @@ PreparationReason: TypeAlias = Literal[
 ]
 RoutingReason: TypeAlias = Literal[
     "routed",
+    "access_denied",
     "route_terminal",
     "semantic_cache_hit",
+    "exact_cache_hit",
     "missing_compare_versions",
     "missing_context",
     "chitchat",
