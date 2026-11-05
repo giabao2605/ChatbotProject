@@ -97,25 +97,28 @@ def test_range_selectors_preserve_handling_coverage_without_accepting_rejected_s
     {"source_id":"D1P1", "passage":0, "start_line":0, "end_line":0},
 ])
 def test_range_selectors_fail_closed_for_malformed_or_unbound_ranges(selection):
-    from mech_chatbot.rag.claim_verification import ClaimVerificationUnavailable
     reply = {"claims":[claim(quotes=[selection])], "coverage":{"D1P1":[]}}
-    with pytest.raises(ClaimVerificationUnavailable):
-        verify_answer_claims("First action. [SRC:D1P1]", [document("First action.")],
-            question="Which action?", invoke=lambda _:json.dumps(reply))
+    result = verify_answer_claims("First action. [SRC:D1P1]", [document("First action.")],
+        question="Which action?", invoke=lambda _:json.dumps(reply))
+
+    assert result.status == "insufficient" and not result.claims
 
 
 def test_range_selectors_reject_coverage_bound_to_another_source():
     from mech_chatbot.rag.claim_verification import ClaimVerificationUnavailable
     reply = {"claims":[claim(quotes=[reference()])],
              "coverage":{"D1P1":[reference(sid="D2P1",text="Other action.")], "D2P1":[]}}
+    result = verify_answer_claims("First action. [SRC:D1P1]", [document("First action."), document("Other action.",2)],
+        question="Which action?", invoke=lambda _:json.dumps(reply))
+    assert result.status == "verified" and [g.doc_id for g in result.source_groups] == [1]
+    assert "Other action." not in result.answer
     with pytest.raises(ClaimVerificationUnavailable):
         verify_answer_claims("First action. [SRC:D1P1]", [document("First action."), document("Other action.",2)],
-            question="Which action?", invoke=lambda _:json.dumps(reply))
+            question="Which action?", invoke=lambda _:json.dumps(reply), require_complete_coverage=True)
 
 
 @pytest.mark.parametrize("kind", ["cross_passage", "foreign_source", "reversed", "case_changed", "missing_end"])
 def test_line_ids_reject_foreign_passages_reversed_and_unlisted_identifiers(kind):
-    from mech_chatbot.rag.claim_verification import ClaimVerificationUnavailable
     docs = [document("First action.\nCondition applies.\n"), document("Other passage.\nOther condition.\n"),
             document("Other source.\n",2)]
     first = reference(text=docs[0].page_content)
@@ -130,8 +133,9 @@ def test_line_ids_reject_foreign_passages_reversed_and_unlisted_identifiers(kind
     }
     selection = selections[kind]
     reply = {"claims":[claim(quotes=[selection])], "coverage":{"D1P1":[],"D2P1":[]}}
-    with pytest.raises(ClaimVerificationUnavailable):
-        verify_answer_claims("First action. [SRC:D1P1]", docs, question="Which action?", invoke=lambda _:json.dumps(reply))
+    result = verify_answer_claims("First action. [SRC:D1P1]", docs, question="Which action?", invoke=lambda _:json.dumps(reply))
+
+    assert result.status == "insufficient" and not result.claims
 
 
 def test_line_ids_preserve_multiline_conditions_from_the_selected_passage():
@@ -165,7 +169,6 @@ def test_line_ids_bind_distinct_source_passage_positions_without_coordinate_infe
 
 
 def test_opaque_line_ids_do_not_allow_a_cross_source_counterpart_guess():
-    from mech_chatbot.rag.claim_verification import ClaimVerificationUnavailable
     def invoke(prompt):
         passages = json.loads(prompt.split("\nDATA\n",1)[1])["passages"]
         first = next(iter(passages["D1P1"][0]["lines"]))
@@ -176,9 +179,10 @@ def test_opaque_line_ids_do_not_allow_a_cross_source_counterpart_guess():
         selection = {"source_id":"D2P1","start_id":guessed,"end_id":guessed}
         return json.dumps({"claims":[claim(sources=["D2P1"],quotes=[selection])],
                            "coverage":{"D1P1":[],"D2P1":[]}})
-    with pytest.raises(ClaimVerificationUnavailable):
-        verify_answer_claims("Only A action. [SRC:D2P1]", [document("Only A action."),document("Only B action.",2)],
-                             question="Which action?", invoke=invoke)
+    result = verify_answer_claims("Only A action. [SRC:D2P1]", [document("Only A action."),document("Only B action.",2)],
+                         question="Which action?", invoke=invoke)
+
+    assert result.status == "insufficient" and not result.claims
 
 
 def test_opaque_line_id_collisions_fail_before_provider_invocation(monkeypatch):
@@ -224,14 +228,21 @@ def test_proposed_instruction_contract_keeps_actual_activity_guard(draft, expect
 
 
 @pytest.mark.parametrize("field", ["quotes", "coverage"])
-def test_range_selectors_bound_total_resolved_expansion(field):
+def test_range_selectors_bound_total_resolved_expansion(field, caplog):
     from mech_chatbot.rag.claim_verification import ClaimVerificationUnavailable
     selected = reference(text="x" * 5000)
     row = claim(quotes=[selected] * 20 if field == "quotes" else [selected])
     reply = {"claims":[row], "coverage":{"D1P1":[selected] * 20 if field == "coverage" else []}}
-    with pytest.raises(ClaimVerificationUnavailable):
-        verify_answer_claims("Value. [SRC:D1P1]", [document("x" * 5000)],
-            question="Which value?", invoke=lambda _:json.dumps(reply))
+    result = verify_answer_claims("Value. [SRC:D1P1]", [document("x" * 5000)],
+        question="Which value?", invoke=lambda _:json.dumps(reply))
+    if field == "quotes":
+        assert result.status == "insufficient" and not result.claims
+    else:
+        assert result.status == "verified"
+        assert caplog.text.count("Dropped coverage selection") == 3
+        with pytest.raises(ClaimVerificationUnavailable):
+            verify_answer_claims("Value. [SRC:D1P1]", [document("x" * 5000)],
+                question="Which value?", invoke=lambda _:json.dumps(reply), require_complete_coverage=True)
 
 
 @pytest.mark.parametrize(("answer", "supported"), [("Valve A weighs 99 kg.", True),
@@ -531,10 +542,133 @@ def test_disjoint_coverage_remains_a_technical_failure_even_with_a_supported_cla
         )
 
 
-@pytest.mark.parametrize("response", [{"claims":[]}, {"claims":[claim(supported="yes")]},
-                                      {"claims":[claim(),claim()]}])
+@pytest.mark.parametrize("response", [{"claims":[]}, {"claims":[claim(),claim()]}])
 def test_verifier_protocol_error_is_technical(response):
     from mech_chatbot.rag.claim_verification import ClaimVerificationUnavailable
     with pytest.raises(ClaimVerificationUnavailable):
         verify_answer_claims("Weight [SRC:D1P1]", [document("weight")], question="weight?",
                              invoke=lambda prompt:selected_reply(prompt,response))
+
+
+@pytest.mark.parametrize('damage', ['range','missing_supported','missing_sources','missing_quotes','bad_supported','bad_sources','bad_quotes'])
+def test_bad_claim_is_dropped_without_losing_valid_claim(damage, caplog):
+    quote = 'Valve A requires review.'
+    good = claim(quotes=[reference(text=quote)])
+    bad = {**good, 'id':2}
+    if damage == 'range':
+        bad['quotes'] = [reference(sid='D999P1')]
+    elif damage.startswith('missing_'):
+        bad.pop(damage.removeprefix('missing_'))
+    else:
+        bad[damage.removeprefix('bad_')] = 'malformed'
+    answer = quote + ' [SRC:D1P1]\nUnverified private phrase. [SRC:D1P1]'
+    result = verify_answer_claims(answer,[document(quote)],question='What is required?',
+        invoke=lambda _:json.dumps({'claims':[good,bad]}))
+    assert len(result.claims) == 1 and result.claims[0].text.strip() == answer.splitlines()[0]
+    assert 'Unverified private phrase' not in result.answer
+    assert 'claim_id=2' in caplog.text and 'reason=' in caplog.text
+    assert 'Unverified private phrase' not in caplog.text and quote not in caplog.text
+
+
+@pytest.mark.parametrize('relation', ['undefined', None, ['conflict']])
+def test_invalid_relationship_becomes_unknown_without_losing_claim(relation):
+    quote = 'First action.'
+    row = claim(quotes=[reference(text=quote)],relationship=relation)
+    result = verify_answer_claims(quote+' [SRC:D1P1]',[document(quote)],question='What?',
+        invoke=lambda _:json.dumps({'claims':[row]}))
+    assert result.status == 'verified' and result.claims[0].relationship == 'unknown'
+
+
+def test_partial_coverage_preserves_valid_selection_and_fills_missing_source(caplog):
+    quote = 'First action.'
+    reply = {'claims':[claim(supported=False,sources=[],quotes=[])],
+             'coverage':{'D1P1':[reference(end=1),reference(text=quote)]}}
+    result = verify_answer_claims('Unverified.',[document(quote),document('Other action.',2)],
+        question='What?',invoke=lambda _:json.dumps(reply))
+    assert result.status == 'partial' and not result.claims
+    assert [g.doc_id for g in result.source_groups] == [1]
+    assert quote in result.answer and 'Other action.' not in result.answer
+    assert 'claim_id=coverage' in caplog.text and 'reason=' in caplog.text
+
+
+@pytest.mark.parametrize('coverage', [[], {'D999P1':[]}, {'D1P1':'not-list'}])
+def test_coverage_container_and_extra_sources_remain_global_failures(coverage):
+    from mech_chatbot.rag.claim_verification import ClaimVerificationUnavailable
+    with pytest.raises(ClaimVerificationUnavailable):
+        verify_answer_claims('First action. [SRC:D1P1]',[document('First action.')],question='What?',
+            invoke=lambda _:json.dumps({'claims':[claim(quotes=[reference()])],'coverage':coverage}))
+
+
+@pytest.mark.parametrize('raw', [None, 'x'*90001, 'not JSON', '{}', '{"claims":{}}',
+    '{"claims":[]}', '{"claims":[{"id":true}]}', '{"claims":[{"id":2}]}',
+    '{"claims":[{"id":1},{"id":1}]}'], ids=['not_string','oversize','bad_json','missing_claims','not_list','count','bool_id','wrong_id','duplicates'])
+def test_global_protocol_failures_are_still_fatal(raw):
+    from mech_chatbot.rag.claim_verification import ClaimVerificationUnavailable
+    with pytest.raises(ClaimVerificationUnavailable):
+        verify_answer_claims('First action. [SRC:D1P1]',[document('First action.')],question='What?',invoke=lambda _:raw)
+
+
+def test_dropped_claim_does_not_spend_valid_claim_quote_budget():
+    quote = 'x' * 5000
+    selection = reference(text=quote)
+    bad = claim(quotes=[selection] * 17 + [reference(end=1,text=quote)])
+    good = claim(2,quotes=[selection]*2)
+    result = verify_answer_claims('Unsupported. [SRC:D1P1]\nValue. [SRC:D1P1]',[document(quote)],question='What?',
+        invoke=lambda _:json.dumps({'claims':[bad,good]}))
+    assert len(result.claims) == 1 and result.claims[0].text.startswith('Value.')
+
+
+@pytest.mark.parametrize('coverage', [{}, {'D1P1':[reference(end=1)]}])
+def test_comprehensive_bad_or_missing_selection_is_still_fatal(coverage):
+    from mech_chatbot.rag.claim_verification import ClaimVerificationUnavailable
+    with pytest.raises(ClaimVerificationUnavailable):
+        verify_answer_claims('First action. [SRC:D1P1]',[document('First action.')],question='What?',
+            invoke=lambda _:json.dumps({'claims':[claim(quotes=[reference()])],'coverage':coverage}),
+            require_complete_coverage=True)
+
+
+
+def test_accepted_claims_share_one_expansion_budget():
+    quote = 'x' * 5000
+    selection = reference(text=quote)
+    rows = [claim(quotes=[selection]*10),claim(2,quotes=[selection]*10),claim(3,quotes=[selection]*8)]
+    answer = 'First value. [SRC:D1P1]\nSecond value. [SRC:D1P1]\nThird value. [SRC:D1P1]'
+    result = verify_answer_claims(answer,[document(quote)],question='What?',
+        invoke=lambda _:json.dumps({'claims':rows,'coverage':{'D1P1':[]}}))
+    assert [c.text.strip() for c in result.claims] == [answer.splitlines()[0],answer.splitlines()[2]]
+    assert sum(len(q) for c in result.claims for _,q in c.quotes) == 90000
+
+
+def test_missing_source_coverage_does_not_drop_other_source_claim():
+    quote = 'First action.'
+    result = verify_answer_claims(quote+' [SRC:D1P1]',[document(quote),document('Other action.',2)],
+        question='What?',invoke=lambda _:json.dumps({'claims':[claim(quotes=[reference()])]}))
+    assert result.status == 'verified' and len(result.claims) == 1
+    assert [g.doc_id for g in result.source_groups] == [1]
+
+
+def test_duplicate_claim_ids_are_fatal_when_claim_count_matches():
+    from mech_chatbot.rag.claim_verification import ClaimVerificationUnavailable
+    rows = [claim(quotes=[reference()]), claim(quotes=[reference()])]
+    with pytest.raises(ClaimVerificationUnavailable):
+        verify_answer_claims('First action. [SRC:D1P1]\nSecond action. [SRC:D1P1]',
+            [document('First action.')], question='What?',
+            invoke=lambda _:json.dumps({'claims':rows}))
+
+
+@pytest.mark.parametrize('selection', [None, [], 'invalid', {}, {'source_id':[]},
+    {'source_id':'D1P1','start_line':1,'end_line':False}])
+@pytest.mark.parametrize('field', ['claims','coverage'])
+def test_malformed_selection_keeps_unrelated_valid_evidence(selection, field):
+    quote = 'First action.'
+    good = claim(quotes=[reference()])
+    if field == 'claims':
+        reply = {'claims':[claim(quotes=[selection]), {**good,'id':2}]}
+        answer = 'Unverified. [SRC:D1P1]\n' + quote + ' [SRC:D1P1]'
+    else:
+        reply = {'claims':[good], 'coverage':{'D1P1':[selection,reference()]}}
+        answer = quote + ' [SRC:D1P1]'
+    result = verify_answer_claims(answer,[document(quote)],question='What?',
+        invoke=lambda _:json.dumps(reply))
+    assert len(result.claims) == 1 and result.claims[0].text.strip() == quote + ' [SRC:D1P1]'
+    assert 'Unverified.' not in result.answer

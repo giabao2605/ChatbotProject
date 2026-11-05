@@ -15,6 +15,9 @@ from mech_chatbot.rag.answer_checks import (
 from mech_chatbot.domain.number_normalization import normalized_number_values
 
 
+from mech_chatbot.config.logging import logger
+
+
 class ClaimVerificationUnavailable(RuntimeError):
     """Protocol/size error, distinct from a negative evidence decision."""
 
@@ -182,7 +185,9 @@ def _supported(row, text, passages, documents):
     if extract_known_materials(body) - extract_known_materials(joined):
         return None
     relation = row.get("relationship", "unknown")
-    _require(relation in ("consensus", "different_scope", "conflict", "replacement", "unknown"))
+    if relation not in ("consensus", "different_scope", "conflict", "replacement", "unknown"):
+        logger.warning("Claim relationship normalized claim_id=%s reason=invalid_relationship", row["id"])
+        relation = "unknown"
     if relation == "replacement" and not re.search(r"supersed|replac|thay thế", joined, re.I):
         return None
     if len({s.split("P")[0] for s in sources}) < 2 and relation != "replacement":
@@ -230,26 +235,47 @@ def verify_answer_claims(answer, documents, *, question, invoke, lang="vi", requ
         _require(all(isinstance(r, dict) and type(r.get("id")) is int for r in rows))
         ordered = sorted(rows, key=lambda r: r["id"])
         _require([r["id"] for r in ordered] == list(range(1, len(spans) + 1)))
-        remaining, resolved = 90000, []
-        for row in ordered:
-            _require(isinstance(row.get("quotes"), list))
-            quotes = []
-            for selection in row["quotes"]:
-                sid, quote = _resolve_range(selection, passages, remaining, locations)
-                remaining -= len(quote)
-                quotes.append({"source_id": sid, "quote": quote})
-            resolved.append({**row, "quotes": quotes})
-        accepted = tuple(c for row, span in zip(resolved, spans) if (c := _supported(row, span, passages, documents)))
+        remaining, accepted = 90000, []
+        for row, span in zip(ordered, spans):
+            claim_remaining, quotes = remaining, []
+            reason = "invalid_claim_fields"
+            try:
+                _require(type(row.get("supported")) is bool)
+                _require(isinstance(row.get("sources"), list) and all(isinstance(s, str) for s in row["sources"]))
+                _require(isinstance(row.get("quotes"), list))
+                reason = "invalid_claim_selection"
+                for selection in row["quotes"]:
+                    sid, quote = _resolve_range(selection, passages, claim_remaining, locations)
+                    claim_remaining -= len(quote)
+                    quotes.append({"source_id": sid, "quote": quote})
+                reason = "invalid_claim_support"
+                candidate = _supported({**row, "quotes": quotes}, span, passages, documents)
+            except (ClaimVerificationUnavailable, KeyError, TypeError, ValueError):
+                logger.warning("Dropped claim claim_id=%s reason=%s", row["id"], reason)
+                continue
+            remaining = claim_remaining
+            if candidate is not None:
+                accepted.append(candidate)
+            else:
+                logger.warning("Dropped claim claim_id=%s reason=unsupported", row["id"])
+        accepted = tuple(accepted)
         coverage = reply.get("coverage", {})
-        _require(isinstance(coverage, dict) and (
-            (len(passages) == 1 and not require_complete_coverage) or set(coverage) == passages.keys()))
-        selected_coverage = {}
+        _require(isinstance(coverage, dict) and set(coverage) <= passages.keys())
+        if require_complete_coverage:
+            _require(set(coverage) == passages.keys())
+        selected_coverage = {sid: () for sid in passages}
         for sid, selections in coverage.items():
             _require(sid in passages and isinstance(selections, list))
             quotes = []
-            for selection in selections:
-                selected_sid, quote = _resolve_range(selection, passages, remaining, locations)
-                _require(selected_sid == sid)
+            for index, selection in enumerate(selections):
+                try:
+                    selected_sid, quote = _resolve_range(selection, passages, remaining, locations)
+                    _require(selected_sid == sid)
+                except (ClaimVerificationUnavailable, KeyError, TypeError, ValueError):
+                    logger.warning("Dropped coverage selection claim_id=coverage source_id=%s selection=%s reason=invalid_coverage_selection", sid, index)
+                    if require_complete_coverage:
+                        raise
+                    continue
                 remaining -= len(quote)
                 quotes.append(quote)
             selected_coverage[sid] = tuple(quotes)
