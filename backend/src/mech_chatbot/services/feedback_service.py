@@ -1,4 +1,6 @@
 """P2.3 — Feedback/quality/regression service (L6). Pass-through toi db repositories."""
+import logging
+
 from mech_chatbot.db.repositories.feedback import (
     add_regression_question,
     cleanup_dangling_records,
@@ -11,6 +13,9 @@ from mech_chatbot.db.repositories.feedback import (
     upsert_golden_answer,
 )
 from mech_chatbot.db.repositories.feedback_access import FeedbackSchemaUnavailable
+
+
+logger = logging.getLogger(__name__)
 
 
 class EvidenceCertificationError(PermissionError):
@@ -44,13 +49,18 @@ def pin_generation_evidence(documents, actor, *, checkpoint=None, deadline=None,
                 pinned = pin_generation_sources(conn,[{**metadata,'text':metadata.get('noi_dung_goc') or document.page_content}],effective)[0]
                 metadata = {**metadata,**({'evidence_pin':pinned['evidence_pin']} if 'evidence_pin' in pinned else {})}
             except PermissionError:
-                # Synthetic title metadata has no page proof; exclude it before generation.
-                if metadata.get('loai_du_lieu') == 'title_block':
-                    continue
-                raise EvidenceCertificationError('Source evidence could not be certified') from None
+                logger.warning(
+                    "Excluded uncertified evidence doc_id=%s trang=%s loai_du_lieu=%s",
+                    metadata.get("doc_id"),
+                    metadata.get("trang") or metadata.get("page_no") or metadata.get("trang_so"),
+                    metadata.get("loai_du_lieu"),
+                )
+                continue
             duplicate = copy(document)
             duplicate.metadata = metadata
             result.append(duplicate)
+        if not result:
+            raise EvidenceCertificationError("Source evidence could not be certified")
         return result
 
 __all__ = [

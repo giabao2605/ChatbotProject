@@ -119,6 +119,22 @@ def capture_sources(conn, docs, actor):
     return sources
 
 
+def _page_excerpt_matches(original, page, kind):
+    if page is None:
+        return False
+    page_texts = [' '.join(str(value or '').split()) for value in page]
+    if kind == 'bang_ke_vat_tu':
+        cells = []
+        for line in original.splitlines():
+            row = [' '.join(cell.split()) for cell in line.split('|') if cell.strip()]
+            if row and all(re.fullmatch(r':?-{3,}:?', cell) for cell in row):
+                continue
+            cells.extend(row)
+        return bool(cells) and all(any(cell in value for value in page_texts) for cell in cells)
+    excerpt = ' '.join(original.split())
+    return bool(excerpt) and any(excerpt in value for value in page_texts)
+
+
 def pin_generation_sources(conn, docs, actor):
     """Certify original page excerpts before generation; derived text needs its own full proof."""
     result = []
@@ -144,8 +160,7 @@ def pin_generation_sources(conn, docs, actor):
             original = re.sub(r'^Noi dung chi tiet trang '+str(page_no)+r' tai lieu '+file_name+r' \(Ma: [^\r\n]*\):\r?\n','',original,count=1)
         elif item.get('loai_du_lieu') == 'image_summary':
             original = re.sub(r'^Phan tich hinh anh tai lieu '+file_name+r' \(Ma: [^\r\n]*\):\r?\n','',original,count=1)
-        excerpt = ' '.join(original.split())
-        if page is None or not excerpt or not any(excerpt in ' '.join(str(value or '').split()) for value in page):
+        if not _page_excerpt_matches(original, page, item.get('loai_du_lieu')):
             raise PermissionError('Evidence cannot be certified')
         pin = {**({'historical':True} if historical else {}),'schema':'answer-source-pin-v1','doc_id':item['doc_id'],'version_no':item['version_no'],
                'page_no':page_no,'source_hash':page_hash(page),'context_hash':context_hash(conn,record,page_no)}
