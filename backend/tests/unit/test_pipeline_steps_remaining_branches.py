@@ -690,6 +690,46 @@ def test_administrative_pages_are_not_misclassified_as_selectable_variants(load_
     assert returned == docs
 
 
+@pytest.mark.parametrize("drawing_domain", ["mechanical", None])
+def test_product_intent_with_fewer_than_two_mechanical_families_keeps_evidence_flow(
+    load_steps, drawing_domain,
+):
+    steps = load_steps()
+    docs = [
+        _doc("Synthetic bracket", domain=drawing_domain, base_code="DRAWING-A"),
+        _doc("Synthetic policy", domain="generic", base_code="POLICY-A"),
+        _doc("Synthetic schedule", domain="generic", base_code="PLAN-A"),
+        _doc("Synthetic stock table", domain="tabular", base_code="STOCK-A"),
+    ]
+
+    lifecycle, terminal, returned = _disambiguate(
+        steps, docs, "Which equipment applies?", intent={"product_names": ["equipment"]},
+    )
+
+    assert terminal is None and lifecycle.refusal_reason is None
+    assert returned == docs
+
+
+def test_strong_product_intent_selects_only_mechanical_families(load_steps):
+    steps = load_steps()
+    docs = [
+        _doc("Synthetic bracket", domain="mechanical", base_code="DRAWING-A"),
+        _doc("Synthetic bracket", domain="mechanical", base_code="DRAWING-B"),
+        _doc("Synthetic bracket policy", domain="generic", base_code="POLICY-A"),
+        _doc("Synthetic bracket stock", domain="tabular", base_code="STOCK-A"),
+    ]
+
+    lifecycle, terminal, returned = _disambiguate(
+        steps, docs, "Which bracket applies?", intent={"product_names": ["bracket"]},
+    )
+
+    assert lifecycle.refusal_reason == "multiple_candidates_need_choice"
+    response = "".join(terminal[0])
+    assert "DRAWING-A" in response and "DRAWING-B" in response
+    assert "POLICY-A" not in response and "STOCK-A" not in response
+    assert returned == docs
+
+
 def test_grounded_math_malformed_provenance_fails_closed_without_provider(
     load_steps,
     monkeypatch,

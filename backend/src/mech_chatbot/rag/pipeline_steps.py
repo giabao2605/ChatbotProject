@@ -2279,10 +2279,13 @@ def _disambiguate(*, retrieved_docs, user_question, new_part_ids, intent_data,
         }) == 1:
             # Enrichment can reintroduce sibling models after the explicit file was selected.
             return None, named
+        # A mechanical hit must not turn administrative evidence into model choices.
+        mechanical_docs = [doc for doc in retrieved_docs
+                           if (doc.metadata or {}).get("domain") == "mechanical"]
         # Tap hop cac "ho" tai lieu khac nhau (base_code + variant_code)
         distinct_families = set()
         unique_variants = set()
-        for doc in retrieved_docs:
+        for doc in mechanical_docs:
             _md = doc.metadata or {}
             _bc = (_md.get("base_code") or "").strip()
             _vc = (_md.get("variant_code") or "default").strip()
@@ -2324,7 +2327,7 @@ def _disambiguate(*, retrieved_docs, user_question, new_part_ids, intent_data,
         # only a single-candidate request may enter the model selector.
         _need_disambig = (
             query_scope not in {"general_policy", "compare_candidates"}
-            and _context_is_mechanical(retrieved_docs, new_part_ids)
+            and len(distinct_families) > 1
             and (
                 (len(unique_variants) > 1)
                 or (not new_part_ids and _strong_constraints and len(distinct_families) > 1)
@@ -2332,7 +2335,7 @@ def _disambiguate(*, retrieved_docs, user_question, new_part_ids, intent_data,
         )
 
         if _need_disambig:
-            resolution = resolve_candidates_from_docs(retrieved_docs, _constraints)
+            resolution = resolve_candidates_from_docs(mechanical_docs, _constraints)
             if resolution["decision"] == "single":
                 _sel = resolution["selected"]
                 logger.info(f"Disambiguation: chot 1 candidate {_sel.get('key')} tu rang buoc {_constraints}.")

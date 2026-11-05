@@ -619,8 +619,8 @@ def test_rewrite_resolves_a_pending_candidate_selection_without_an_llm_call(
 def test_disambiguation_returns_a_choice_table_for_multiple_variants(steps):
     lifecycle = _Lifecycle()
     docs = [
-        _doc("variant alpha", base_code="PART-9", variant_code="A", version_no=1),
-        _doc("variant beta", base_code="PART-9", variant_code="B", version_no=1),
+        _doc("variant alpha", domain="mechanical", base_code="PART-9", variant_code="A", version_no=1),
+        _doc("variant beta", domain="mechanical", base_code="PART-9", variant_code="B", version_no=1),
     ]
 
     terminal, returned_docs = steps._disambiguate(

@@ -259,12 +259,23 @@ def verify_answer_claims(answer, documents, *, question, invoke, lang="vi", requ
         _require(isinstance(raw, str) and len(raw) <= 90000)
         reply = json.loads(raw)
         rows = reply["claims"]
-        _require(isinstance(rows, list) and len(rows) == len(spans))
+        _require(isinstance(rows, list))
         _require(all(isinstance(r, dict) and type(r.get("id")) is int for r in rows))
-        ordered = sorted(rows, key=lambda r: r["id"])
-        _require([r["id"] for r in ordered] == list(range(1, len(spans) + 1)))
+        rows_by_id = {index: [row for row in rows if row["id"] == index]
+                      for index in range(1, len(spans) + 1)}
+        if require_complete_coverage:
+            _require(len(rows) == len(spans) and all(len(group) == 1 for group in rows_by_id.values()))
+        for row in rows:
+            if row["id"] not in rows_by_id:
+                logger.warning("Dropped claim claim_id=%s reason=unknown_claim_id", row["id"])
         remaining, accepted = 90000, []
-        for row, span in zip(ordered, spans):
+        for index, span in enumerate(spans, 1):
+            group = rows_by_id[index]
+            if len(group) != 1:
+                reason = "duplicate_claim_row" if group else "missing_claim_row"
+                logger.warning("Dropped claim claim_id=%s reason=%s", index, reason)
+                continue
+            row = group[0]
             claim_remaining, quotes = remaining, []
             reason = "invalid_claim_fields"
             try:
@@ -288,12 +299,15 @@ def verify_answer_claims(answer, documents, *, question, invoke, lang="vi", requ
                 logger.warning("Dropped claim claim_id=%s reason=unsupported", row["id"])
         accepted = tuple(accepted)
         coverage = reply.get("coverage", {})
-        _require(isinstance(coverage, dict) and set(coverage) <= passages.keys())
+        _require(isinstance(coverage, dict))
         if require_complete_coverage:
             _require(set(coverage) == passages.keys())
         selected_coverage = {sid: () for sid in passages}
         for sid, selections in coverage.items():
-            _require(sid in passages and isinstance(selections, list))
+            if sid not in passages:
+                logger.warning("Dropped coverage source reason=unknown_source")
+                continue
+            _require(isinstance(selections, list))
             quotes = []
             for index, selection in enumerate(selections):
                 try:
