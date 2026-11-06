@@ -351,7 +351,7 @@ def test_routing_returns_typed_intent_terminals(monkeypatch, intent, reason):
         routing,
         "_rewrite_and_anchor",
         lambda **_kwargs: (
-            "question", [], False, False, intent, object(), object(), object(), False,
+            "So sánh các phiên bản", [], False, False, intent, object(), object(), object(), False,
         ),
     )
     state = _RoutingState()
@@ -1293,3 +1293,37 @@ def test_rerank_fallback_stops_at_request_checkpoint(monkeypatch, stop_kind, sto
         execution._REQUEST_CHECKPOINT.reset(token)
     expected = {"before_first": [], "jina": ["jina"], "voyage": ["jina", "voyage"]}
     assert calls == expected[stop_after]
+
+
+@pytest.mark.parametrize('all_invalid', [False, True])
+def test_generation_certification_filters_caller_evidence(monkeypatch, all_invalid):
+    from mech_chatbot.rag.phases import evidence, retrieval_rerank
+    from mech_chatbot.services import feedback_service
+    good = Document(page_content='certified',metadata={'doc_id':1})
+    bad = Document(page_content='uncertified',metadata={'doc_id':2})
+    completed = object()
+    refused = object()
+    def certify(*args, **kwargs):
+        assert kwargs['image_analysis'] is None
+        if all_invalid:
+            raise feedback_service.EvidenceCertificationError('No certified sources')
+        return [good]
+    monkeypatch.setattr(feedback_service, 'pin_generation_evidence', certify)
+    monkeypatch.setattr(retrieval_rerank, '_empty_context_terminal', lambda *args: refused)
+    monkeypatch.setattr(evidence, 'filter_applicable_sources', lambda docs, *args: docs)
+    monkeypatch.setattr(evidence, '_assemble_context', lambda *args: '')
+    monkeypatch.setattr(evidence, 'demo_scope_context', lambda *args: '')
+    monkeypatch.setattr(evidence, '_select_citations', lambda *args: ('', []))
+    monkeypatch.setattr(evidence, '_audit_confidential_access', lambda *args: None)
+    monkeypatch.setattr(evidence, '_decide_evidence_policy', lambda *args: (None,None,[],False,0))
+    monkeypatch.setattr(evidence, '_trace_evidence_policy', lambda *args: None)
+    def complete(*args):
+        assert args[3].documents == (good,)
+        assert args[5] == [good]
+        return completed
+    monkeypatch.setattr(evidence, '_complete_evidence', complete)
+    state = _state()
+    state.request = SimpleNamespace(access=AccessScope())
+    result = evidence.evaluate_evidence(_decision(), _primary(), _enrichment([good,bad]),
+        RerankOutcome((good,bad), (), reason_code='reranked'), state)
+    assert result is (refused if all_invalid else completed)

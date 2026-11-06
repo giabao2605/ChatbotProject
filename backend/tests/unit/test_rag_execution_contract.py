@@ -1317,10 +1317,21 @@ def test_missing_referent_uses_english_clarification_without_cache_or_sources(
 def test_self_contained_questions_keep_the_existing_answer_path(
     monkeypatch, referent_executor, question,
 ):
-    from mech_chatbot.rag import semantic_cache
+    from mech_chatbot.rag.phases import routing
 
-    executor, calls, cache_read = referent_executor
-    monkeypatch.setattr(semantic_cache, "lookup_exact", cache_read("exact-cache", True))
+    executor, calls, _cache_read = referent_executor
+
+    def downstream_route(prepared, _state):
+        calls.append("routing")
+        assert prepared.user_question == question
+        return routing.RoutingOutcome(
+            terminal=(iter(["downstream answer"]), "", (), (), {}),
+            reason_code="route_terminal",
+        )
+
+    # Referent preparation must let a self-contained question reach routing;
+    # cache is now deliberately behind the version-intent decision.
+    monkeypatch.setattr(routing, "route", downstream_route)
     events = list(executor.run(
         RagRequest(question, AccessScope()),
         RagInvocation(trace_id="referent-explicit-subject", mode="test"),
@@ -1328,7 +1339,7 @@ def test_self_contained_questions_keep_the_existing_answer_path(
 
     assert isinstance(events[-1], RagCompleted)
     assert events[-1].outcome == "answered"
-    assert calls == ["exact-cache"]
+    assert calls == ["routing"]
 
 
 @pytest.mark.parametrize("context_values", [
@@ -1483,4 +1494,4 @@ def test_out_of_scope_question_keeps_the_real_router_refusal(monkeypatch, refere
 
     assert isinstance(events[-1], RagCompleted)
     assert events[-1].refusal_reason == "out_of_scope"
-    assert calls == ["exact-cache"]
+    assert calls == []

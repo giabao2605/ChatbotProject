@@ -865,3 +865,84 @@ def test_vision_retries_share_the_request_wide_provider_budget(monkeypatch):
         )
     assert len(attempts) == 3
     assert budget.provider_retries == 2
+
+
+@pytest.mark.parametrize('rejection', [None, 'request', 'model', 'endpoints', 'always', 'unrelated'])
+def test_verifier_schema_fallback_is_one_time_and_only_for_unsupported_schema(monkeypatch, rejection):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    draft = 'Employees receive paid leave. [SRC:D7P1]'
+    runtime = _prepare(module, monkeypatch, _FakeChain([draft]), real_verification=True)
+    monkeypatch.setattr(module, 'has_unsupported_numbers', lambda *a, **k: False)
+    calls, warnings, trace_events = [], [], []
+    monkeypatch.setattr(module, 'log_trace', lambda event, trace_id, **metadata: trace_events.append((event, trace_id, metadata)))
+    monkeypatch.setattr(module.logger, 'warning', lambda message, *a, **k: warnings.append(message))
+    def invoke(messages, **kwargs):
+        calls.append(kwargs)
+        if rejection == 'unrelated':
+            raise RuntimeError('upstream unavailable')
+        if rejection == 'always' or (len(calls) == 1 and rejection):
+            messages_by_kind = {
+                'request': "Unsupported parameter: response_format",
+                'model': "response_format of type json_schema is not supported with this model",
+                'endpoints': "No endpoints found that support the requested parameters",
+                'always': "Unsupported response_format",
+            }
+            error = ValueError(messages_by_kind[rejection])
+            error.status_code = 404 if rejection == 'endpoints' else 400
+            raise error
+        prompt = messages[0].content
+        data = json.loads(prompt.split('\nDATA\n')[1])
+        line_id = next(iter(data['passages']['D7P1'][0]['lines']))
+        selection = {'source_id': 'D7P1', 'start_id': line_id, 'end_id': line_id}
+        row = {'id': 1, 'supported': True, 'sources': ['D7P1'], 'quotes': [selection],
+               'subject': 'unknown', 'condition': 'unknown', 'time': 'unknown', 'relationship': 'unknown', 'reason': ''}
+        return SimpleNamespace(content=json.dumps({'claims': [row], 'coverage': {'D7P1': [selection]}}))
+    runtime.provider_adapter.invoke_once = invoke
+    docs = [SimpleNamespace(page_content='Employees receive paid leave.', metadata={
+        'doc_id': 7, 'trang_so': 1, 'version_no': 1, 'security_level': 'internal',
+        'external_processing_policy': 'all_external'})]
+    emitted = []
+    if rejection in {'always', 'unrelated'}:
+        with pytest.raises((ValueError, RuntimeError)):
+            emitted.extend(_run_generation(module, runtime=runtime, docs=docs, question='What is the leave policy?'))
+    else:
+        emitted.extend(_run_generation(module, runtime=runtime, docs=docs, question='What is the leave policy?'))
+    rendered = ''.join(emitted)
+    fallback = rejection in {'request', 'model', 'endpoints', 'always'}
+    assert len(calls) == (2 if fallback else 1)
+    assert calls[0]['response_format']['type'] == 'json_schema'
+    assert calls[0]['surface'] == 'evidence_verification'
+    verifier_events = [item for item in trace_events if item[0] == 'claim_verification_call']
+    assert len(verifier_events) == len(calls)
+    for attempt, (event, call) in enumerate(zip(verifier_events, calls), 1):
+        assert event[1] == call['trace_id']
+        assert event[2] == {'surface': 'evidence_verification', 'attempt': attempt,
+                            'response_format_sent': 'response_format' in call}
+    if fallback:
+        assert 'response_format' not in calls[1]
+        assert {k:v for k,v in calls[0].items() if k not in {'response_format', 'timeout_seconds'}} == {
+            k:v for k,v in calls[1].items() if k != 'timeout_seconds'}
+        assert warnings.count('Claim verification response_format unsupported; retrying once without schema') == 1
+    if rejection not in {'always', 'unrelated'}:
+        assert 'Employees receive paid leave.' in rendered
+    else:
+        assert 'Employees receive paid leave.' not in rendered
+
+
+@pytest.mark.parametrize('status, message, expected', [
+    (400, 'Unsupported response_format', True),
+    (422, 'Invalid parameter response_format', True),
+    (400, 'Model does not support structured outputs', True),
+    (None, "got an unexpected keyword argument 'response_format'", True),
+    (401, 'Unsupported response_format', False),
+    (403, 'Unsupported response_format', False),
+    (429, 'Unsupported response_format', False),
+    (500, 'Unsupported response_format', False),
+    (400, 'Invalid model', False),
+    (None, 'timeout', False),
+])
+def test_schema_fallback_distinguishes_unsupported_format_from_other_errors(monkeypatch, status, message, expected):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    error = ValueError(message)
+    error.status_code = status
+    assert module._unsupported_verification_schema(error) is expected

@@ -58,6 +58,7 @@ class PrimaryRetrievalOutcome:
     reason_code: str = "retrieved"
     lookup_documents: tuple[Any, ...] = ()
     decomposition_usage: Mapping[str, Any] | None = None
+    decomposition_documents: tuple[tuple[Any, ...], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +116,7 @@ class _DecompositionResult:
     planner_estimated_cost: float = 0.0
     correction_estimated_cost: float = 0.0
     usage: Mapping[str, Any] | None = None
+    decomposition_documents: tuple[tuple[Any, ...], ...] = ()
 
 
 def _make_context(decision: RouteDecision, state: Any) -> _RetrievalContext:
@@ -153,12 +155,14 @@ def _allow_history(context: _RetrievalContext) -> bool:
 
 
 def _compile_plan(context: _RetrievalContext, state: Any, access_context: Any) -> _PlannerResult:
-    from mech_chatbot.rag.query_decomposition import BranchPlan, compile_query_plan
+    from mech_chatbot.rag.query_decomposition import BranchPlan, compile_query_plan, independent_query_intents
 
     if state.explicit_text_intents:
         intents=state.explicit_text_intents
-        return _PlannerResult(BranchPlan(context.effective_question, True, intents,
-            "explicit-mixed-v1", intents, (True,) * len(intents)), 0, 0, 0.0)
+        plan = BranchPlan(context.effective_question, True, intents,
+            "explicit-mixed-v1", intents, (True,) * len(intents))
+        _log_planner_decision(context, plan, "explicit")
+        return _PlannerResult(plan, 0, 0, 0.0)
 
     deterministic_plan = compile_query_plan(
         context.effective_question,
@@ -171,11 +175,10 @@ def _compile_plan(context: _RetrievalContext, state: Any, access_context: Any) -
         ),
     )
     if (
-        deterministic_plan.intent_overflow
-        or (len(deterministic_plan.subqueries) > 1
-        and not deterministic_plan.intent_overflow
-        and all(deterministic_plan.intent_coverage))
+        independent_query_intents(deterministic_plan.subqueries)
+        and all(deterministic_plan.intent_coverage)
     ):
+        _log_planner_decision(context, deterministic_plan, "deterministic")
         return _PlannerResult(deterministic_plan, 0, 0, 0.0)
 
     input_tokens = 0
@@ -189,6 +192,8 @@ def _compile_plan(context: _RetrievalContext, state: Any, access_context: Any) -
         prompt = (
             "Tach cau hoi noi bo thanh cac yeu cau doc lap, toi da 8 de nhan dien vuot gioi han. "
             "Khong dem loi gioi thieu, dieu kien hay danh sach cung mot vi ngu thanh yeu cau rieng. "
+            "Yeu cau trinh bay (neu nguon, nam ban hanh, ky thuc hien) khong phai yeu cau rieng. "
+            "Loi mo dau ve pham vi, thoi gian va dia diem phai giu trong moi truy van con. "
             "Moi truy van phai giu chu de va dieu kien chung cua cau goc. Khong bo bat ky yeu cau nao; "
             "neu khong tach chac chan, tra mot truy van giu nguyen toan bo cau hoi. "
             "Giu nguyen thu tu cac y trong cau hoi goc. "
@@ -219,7 +224,18 @@ def _compile_plan(context: _RetrievalContext, state: Any, access_context: Any) -
             "planner-v1",
         ),
     )
+    _log_planner_decision(context, plan, "planner")
     return _PlannerResult(plan, input_tokens, output_tokens, estimated_cost)
+
+
+def _log_planner_decision(context, plan, origin):
+    undivided = origin != 'explicit' and plan.subqueries == plan.intents == (plan.original_query,)
+    decision = ('overflow' if plan.intent_overflow else 'clarification' if plan.clarification_required
+                else 'branches' if plan.is_complex and not undivided else 'original')
+    log_trace('query_decomposition_plan', context.trace_id, origin=origin, decision=decision,
+              branch_count=len(plan.subqueries), intent_count=len(plan.intents),
+              fallback=plan.used_fallback, overflow=plan.intent_overflow,
+              clarification=plan.clarification_required, coverage_complete=all(plan.intent_coverage))
 
 
 def _branch_filters(context: _RetrievalContext, subquery: str) -> tuple[list[str], Any, Any]:
@@ -431,14 +447,19 @@ def _finish_retrieved_branch(
     result: tuple[Any, ...],
     retrieval_started_at: float,
     retrieval_latency_ms: int | None = None,
+    branch_cap: int | None = None,
+    rerank_deadline_monotonic: float | None = None,
+    retrieved_documents: Sequence[Any] | None = None,
+    branch_index: int = 1,
 ) -> Any:
     from mech_chatbot.rag.query_decomposition import served_branch_documents
 
     from mech_chatbot.rag.demo_sources import refresh_applicable_sources
     state.checkpoint("branch_retrieval")
-    raw_documents = tuple(result[0])
+    raw_documents = tuple(result[0] if retrieved_documents is None else retrieved_documents)
+    had_scoped_candidates = bool(result[0])
     result = (_documents_in_question(refresh_applicable_sources(result[0], context.decision.request.user_question), subquery), *result[1:])
-    if raw_documents and not result[0]:
+    if had_scoped_candidates and not result[0]:
         result = (result[0], result[1], result[2] + '+source_scope_filtered', *result[3:])
     state.checkpoint("branch_retrieval")
     retrieval_latency_ms = (
@@ -461,8 +482,13 @@ def _finish_retrieved_branch(
         result, decision, policy, correction_budget, deadline_exceeded,
     )
     if correction.attempted:
-        correction = replace(correction, result=(
-            _documents_in_question(refresh_applicable_sources(correction.result[0], context.decision.request.user_question), subquery), *correction.result[1:]))
+        corrected = (_documents_in_question(refresh_applicable_sources(
+            correction.result[0], context.decision.request.user_question), subquery), *correction.result[1:])
+        if branch_cap is not None and correction.result is not result:
+            corrected = _rank_decomposed_results(context, state,
+                ((subquery, part_ids, strict_filter, broad_filter),), (corrected,),
+                branch_cap, rerank_deadline_monotonic, (branch_index,))[0]
+        correction = replace(correction, result=corrected)
     access_denied = _probe_branch_access(
         context,
         subquery,
@@ -693,6 +719,26 @@ def _decomposition_usage(
     }
 
 
+def _rank_decomposed_results(context, state, prepared, results, top_n, deadline, branch_indices=None):
+    from mech_chatbot.rag.demo_sources import refresh_applicable_sources
+    from mech_chatbot.rag.phases.branch_evidence import certify_branch_documents, rerank_branch_sets
+    from mech_chatbot.rag.phases.retrieval_enrichment import enrich_branch_candidates
+    candidates, modes = [], []
+    indices = tuple(branch_indices or range(1, len(prepared)+1))
+    for index, ((subquery, part_ids, *_), result) in zip(indices, zip(prepared, results, strict=True)):
+        scoped = _documents_in_question(refresh_applicable_sources(
+            result[0], context.decision.request.user_question), subquery)
+        modes.append(result[2] + ('+source_scope_filtered' if result[0] and not scoped else ''))
+        scoped = enrich_branch_candidates(context.decision, state, subquery, part_ids, scoped)
+        certified = certify_branch_documents(scoped, state, allow_history=_allow_history(context),
+            image_analysis=context.decision.request.image_analysis, trace_id=context.trace_id, branch_index=index)
+        candidates.append((subquery, certified))
+    ranked = rerank_branch_sets(candidates, context.runtime, trace_id=context.trace_id,
+        checkpoint=state.checkpoint, deadline_monotonic=deadline, top_n=top_n, branch_indices=indices)
+    return tuple((documents, result[1], mode + ('' if '+branch_ranked' in mode else '+branch_ranked'),
+                  *result[3:]) for result, documents, mode in zip(results, ranked, modes, strict=True))
+
+
 def _run_complex_plan(
     context: _RetrievalContext,
     state: Any,
@@ -737,6 +783,13 @@ def _run_complex_plan(
         branch_results = tuple(_empty_deadline_branch() for _item in prepared)
     else:
         state.checkpoint("branch_retrieval")
+        unranked_results = raw_results
+        branch_cap = max(2, 8 // len(prepared)) if len(prepared) > 1 else None
+        rerank_deadline = min(state.budget.deadline_monotonic,
+            time.monotonic() + float(getattr(context.runtime, 'rerank_timeout_seconds', 15.0)))
+        if branch_cap is not None:
+            raw_results = _rank_decomposed_results(context, state, prepared, raw_results,
+                                                   branch_cap, rerank_deadline)
         branch_results = tuple(
             _finish_retrieved_branch(
                 context,
@@ -751,13 +804,17 @@ def _run_complex_plan(
                 result,
                 retrieval_started_at,
                 retrieval_latency_ms,
+                branch_cap,
+                rerank_deadline,
+                original_result[0],
+                branch_index,
             )
-            for (
+            for branch_index, ((
                 subquery,
                 part_ids,
                 strict_filter,
                 broad_filter,
-            ), result in zip(prepared, raw_results, strict=True)
+            ), result, original_result) in enumerate(zip(prepared, raw_results, unranked_results, strict=True), 1)
         )
     correction_cost, input_tokens, output_tokens = _record_decomposition_usage(
         state, plan, planner_result, branch_results
@@ -769,6 +826,7 @@ def _run_complex_plan(
     )
     return _DecompositionResult(
         batch=_complex_retrieval_batch(branch_results, branches),
+        decomposition_documents=tuple(tuple(result.documents) for result in branch_results),
         notice=build_decomposition_instruction(branches),
         states=states, branches=branches, intents=tuple(plan.intents),
         intent_coverage=tuple(plan.intent_coverage),
@@ -893,7 +951,7 @@ def _apply_hyde(
     state: Any,
     batch: _RetrievalBatch,
 ) -> _RetrievalBatch:
-    if batch.documents or not context.decision.hyde_eligible:
+    if batch.documents or "+branch_ranked" in batch.mode or not context.decision.hyde_eligible:
         return batch
     logger.info("Retrieval rong; kich hoat HyDE fallback mot lan.")
     try:
@@ -943,6 +1001,9 @@ def retrieve_primary(decision: RouteDecision, state: Any) -> PrimaryRetrievalOut
     if query_decomposition_requested(state):
         result = _run_decomposition(context, state)
     else:
+        log_trace('query_decomposition_plan', context.trace_id, origin='disabled', decision='original',
+                  branch_count=0, intent_count=0, fallback=False, overflow=False,
+                  clarification=False, coverage_complete=True)
         result = _DecompositionResult(batch=_retrieve_direct(context, state))
     state.checkpoint("retrieval")
     blocked = result.batch.mode in {"intent_overflow", "intent_clarification"}
@@ -968,6 +1029,7 @@ def retrieve_primary(decision: RouteDecision, state: Any) -> PrimaryRetrievalOut
         correction_estimated_cost=result.correction_estimated_cost,
         lookup_documents=batch.lookup_documents or batch.documents,
         decomposition_usage=result.usage,
+        decomposition_documents=result.decomposition_documents,
         reason_code=result.batch.mode if blocked else "retrieved",
     )
 

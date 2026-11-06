@@ -319,24 +319,22 @@ def test_viewer_is_blocked_before_provider_without_math_capture_guard(store):
             RagInvocation('viewer', mode='test', task_routing_contract=VERSION)))
 
 
-def test_v1_default_rejects_four_independent_requests_without_planner(store):
+def test_v1_default_reaches_scope_validation_without_lexical_refusal(store):
     planner = Planner(lambda *_args, **_kwargs: pytest.fail('Default fixed v1 guard stays provider free'))
     with bind_repository_runtime(db_engine=store):
         result = collect_rag_events(DefaultRagExecutor(provider_adapter=planner).run(replace(request(), question='Tìm BOM; tìm vật liệu; tìm dung sai; tìm hướng dẫn hàn'),
             RagInvocation('legacy', mode='evaluation')))
-    assert result.refusal_reason == 'intent_overflow' and result.diagnostics['decomposition_intent_overflow'] is True
+    assert result.refusal_reason == 'scope_unavailable'
     assert result.diagnostics.budget.planners == result.diagnostics.budget.calculations == 0
 
 
-def test_legacy_fixed_guard_clarifies_unresolved_multi_subject_limit(store):
+def test_legacy_fixed_guard_does_not_clarify_from_lexical_fragments(store):
     text = 'Nghỉ phép được bao lâu, mua hàng thực hiện thế nào, bảo trì do ai phụ trách, hỗ trợ hệ thống gửi ở đâu?'
     planner = Planner(lambda *_args, **_kwargs: pytest.fail('Legacy guard must not start a planner'))
     with bind_repository_runtime(db_engine=store):
         result = collect_rag_events(DefaultRagExecutor(provider_adapter=planner).run(
             replace(request(), question=text), RagInvocation('legacy-uncertain', mode='evaluation')))
-    assert result.refusal_reason == 'task_clarification'
-    assert 'chưa xác định rõ' in result.answer
-    assert result.diagnostics['decomposition_intent_overflow'] is False
+    assert result.refusal_reason == 'scope_unavailable'
     assert result.diagnostics.budget.planners == result.diagnostics.budget.calculations == 0
 
 

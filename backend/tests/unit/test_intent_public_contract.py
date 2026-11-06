@@ -12,6 +12,11 @@ from mech_chatbot.llm.external_ai import ExternalProcessingDenied
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def offline_intent_provider(monkeypatch):
+    monkeypatch.setattr(intent, "cohere_invoke", lambda *args, **kwargs: SimpleNamespace(content="{}"))
+
+
 class _Future:
     def __init__(self, *, value=None, error=None):
         self.value = value
@@ -218,11 +223,15 @@ def test_business_document_intent_recognizes_types_aliases_and_references():
     assert result["document_references"] == ["PO-2024", "HD/998", "BM-77"]
 
 
-def test_search_intent_uses_regex_code_without_calling_llm(monkeypatch):
+def test_search_intent_keeps_regex_code_with_one_llm_call(monkeypatch):
+    calls = []
+    def provider(*args, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(content="{}")
     monkeypatch.setattr(
         intent,
         "cohere_invoke",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("LLM called")),
+        provider,
     )
 
     strict_filter, broad_filter, part_ids, inherited, is_bom, data = intent.extract_search_intent(
@@ -234,6 +243,7 @@ def test_search_intent_uses_regex_code_without_calling_llm(monkeypatch):
         allowed_sites=["HQ"],
     )
 
+    assert len(calls) == 1 and calls[0]["surface"] == "intent_routing"
     assert strict_filter is not None
     assert broad_filter is not None
     assert part_ids == ["ab-120"]
@@ -259,6 +269,7 @@ def test_search_intent_success_merges_llm_fields_and_deterministic_version(monke
     _, _, part_ids, inherited, is_bom, data = intent.extract_search_intent(
         "so sánh version 2 và v3 của model B",
         trace_id="trace-intent-contract",
+        user_roles=["document_history_reader"],
         runtime=_runtime(executor),
     )
 
@@ -310,6 +321,7 @@ def test_search_intent_provider_failure_keeps_explicit_codes_and_version(error):
 
     _, _, part_ids, inherited, is_bom, data = intent.extract_search_intent(
         "BOM Version 2 của DEMO-ASM-001, DEMO-PART-C có gì?",
+        user_roles=["document_history_reader"],
         runtime=_runtime(executor),
     )
 
@@ -324,7 +336,7 @@ def test_search_intent_broad_question_drops_inherited_part_ids(monkeypatch):
     monkeypatch.setattr(
         intent,
         "cohere_invoke",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("LLM called")),
+        lambda *_args, **_kwargs: SimpleNamespace(content="{}"),
     )
 
     _, _, part_ids, inherited, is_bom, _data = intent.extract_search_intent(
@@ -341,7 +353,7 @@ def test_search_intent_records_business_document_preference_alongside_reference_
     monkeypatch.setattr(
         intent,
         "cohere_invoke",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("LLM called")),
+        lambda *_args, **_kwargs: SimpleNamespace(content="{}"),
     )
 
     strict_filter, broad_filter, part_ids, inherited, _is_bom, data = intent.extract_search_intent(
@@ -416,7 +428,7 @@ def test_context_analysis_returns_clean_standalone_question_and_trace(monkeypatc
     }
     prompt, kwargs = calls[0]
     assert "tai lieu dang trao doi: ['DOC-A']" in prompt
-    assert "Bot: Quy trinh A" in prompt
+    assert "Quy trinh A" not in prompt
     assert kwargs == {"surface": "query_disambiguation", "trace_id": "trace-context-contract"}
 
 
@@ -542,7 +554,7 @@ def test_restored_history_referent_rewrites_without_in_memory_anchors(question):
     }
     assert len(calls) == 1
     prompt, kwargs = calls[0]
-    assert history[0]["content"] in prompt and history[1]["content"] in prompt
+    assert history[0]["content"] in prompt and history[1]["content"] not in prompt
     assert kwargs == {"surface": "query_disambiguation", "trace_id": "restored-history"}
 
 
@@ -606,7 +618,8 @@ def test_runtime_factory_owns_executor_lifecycle(monkeypatch):
 def test_version_comparison_does_not_accept_unstated_model_versions(monkeypatch):
     monkeypatch.setattr(intent, "cohere_invoke", lambda *a, **k: SimpleNamespace(content=
         '{"base_codes":[],"detected_versions":[1,2],"version_policy":"compare_versions"}'))
-    *_, data = intent.extract_search_intent("Compare two versions, please.", runtime=_runtime())
+    *_, data = intent.extract_search_intent("Compare two versions, please.", runtime=_runtime(),
+        user_roles=["document_history_reader"])
     assert data["version_policy"] == "compare_versions"
     assert data["detected_versions"] == []
 
@@ -639,3 +652,19 @@ def test_local_scope_does_not_treat_unresolved_variant_as_a_standalone_subject(e
     assert result["clarification_required"] is True
     assert result["standalone_question"] == question
     assert result["llm_resolved"] is False
+
+
+def test_intent_and_context_timeouts_default_to_ten_seconds():
+    # Measured intent_routing latency on the approved model is 2-7 s; 6 s cut ~1 in 5 history questions.
+    from mech_chatbot.config.settings import Settings
+
+    settings = Settings.from_env({})
+    runtime = intent.build_intent_runtime(executor=concurrent.futures.ThreadPoolExecutor(max_workers=1))
+    try:
+        assert settings.INTENT_TIMEOUT == 10.0
+        assert settings.CONTEXT_TIMEOUT == 10.0
+        assert runtime.intent_timeout == 10.0
+        assert runtime.context_timeout == 10.0
+        assert Settings.from_env({"INTENT_TIMEOUT": "4", "CONTEXT_TIMEOUT": "3"}).INTENT_TIMEOUT == 4.0
+    finally:
+        runtime.executor.shutdown(wait=False)

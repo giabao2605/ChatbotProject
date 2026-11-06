@@ -3,6 +3,7 @@ import hashlib
 import json
 import re
 from contextlib import contextmanager
+from functools import lru_cache
 from time import monotonic
 
 from sqlalchemy import text
@@ -12,6 +13,7 @@ from mech_chatbot.auth.core import load_user_profile
 from mech_chatbot.auth.authorization import role_allows
 from mech_chatbot.auth.authorization import normalized_roles
 from mech_chatbot.config.constants import SHARE_ALL_DEPARTMENT
+from mech_chatbot.domain.serving_state import is_history_servable
 from mech_chatbot.application.protected_files import LEVEL_ORDER
 from ..evidence_snapshot import evidence_read_connection, evidence_read_snapshot
 from .chat_provenance import load_structured_history, table, source_provenance_current, provenance_record
@@ -119,38 +121,79 @@ def capture_sources(conn, docs, actor):
     return sources
 
 
-def pin_generation_sources(conn, docs, actor):
-    """Certify original page excerpts before generation; derived text needs its own full proof."""
-    result = []
-    for doc in docs:
+def _page_excerpt_matches(original, page, kind):
+    if page is None:
+        return False
+    page_texts = [' '.join(str(value or '').split()) for value in page]
+    if kind == 'bang_ke_vat_tu':
+        cells = []
+        for line in original.splitlines():
+            row = [' '.join(cell.split()) for cell in line.split('|') if cell.strip()]
+            if row and all(re.fullmatch(r':?-{3,}:?', cell) for cell in row):
+                continue
+            cells.extend(row)
+        return bool(cells) and all(any(cell in value for value in page_texts) for cell in cells)
+    excerpt = ' '.join(original.split())
+    return bool(excerpt) and any(excerpt in value for value in page_texts)
+
+
+def generation_source_pinner(conn, actor, *, allow_history=False):
+    """Reuse reads only inside this connection/actor-bound certification batch."""
+    @lru_cache(maxsize=None)
+    def source(doc_id, version):
+        return _source(conn, doc_id, version, actor, historical=allow_history)
+
+    @lru_cache(maxsize=None)
+    def source_page(doc_id, page_no):
+        return conn.execute(text(f'SELECT TextExtract,LocalOCRText,VisionSummary FROM {table(conn,"DocumentPages")} '
+            'WHERE DocID=:doc AND PageNo=:page'), {'doc':doc_id,'page':page_no}).fetchone()
+
+    @lru_cache(maxsize=None)
+    def source_context(doc_id, version, page_no):
+        return context_hash(conn, source(doc_id, version), page_no)
+
+    def certify(doc):
         item = {key:value for key,value in doc.items() if key != 'evidence_pin'}
         if 'locator' in item:
             capture_sources(conn,[item],actor)
-            result.append(item)
-            continue
+            return item
         page_no = item.get('trang') or item.get('page_no') or item.get('trang_so')
         if (type(item.get('doc_id')) is not int or type(item.get('version_no')) is not int
                 or type(page_no) is not int or item.get('calculation_provenance') or item.get('community_id')
                 or item.get('loai_du_lieu') in {'community_summary','grounded_calculation'}):
             raise PermissionError('Evidence cannot be certified')
-        historical = bool(item.get('is_current') in (False, 0) or item.get('effective_status') in ('expired','superseded')
-                          or item.get('lifecycle_status') in ('archived','superseded','retired'))
-        record = _source(conn,item['doc_id'],item['version_no'],actor,historical=historical)
-        page = conn.execute(text(f'SELECT TextExtract,LocalOCRText,VisionSummary FROM {table(conn,"DocumentPages")} '
-                                'WHERE DocID=:doc AND PageNo=:page'), {'doc':item['doc_id'],'page':page_no}).fetchone()
+        record = source(item['doc_id'],item['version_no'])
+        # SQL is authoritative: an expired current row may still say "effective" in retrieval metadata.
+        historical = is_history_servable({
+            'publication_state': record.get('PublicationState'),
+            'lifecycle_status': record.get('LifecycleStatus'),
+            'review_status': record.get('ReviewStatus'),
+            'is_current': record.get('IsCurrent'),
+            'effective_status': record.get('EffectiveStatus'),
+            'effective_date': record.get('EffectiveDate'),
+            'expiry_date': record.get('ExpiryDate'),
+        })
+        if historical and not allow_history:
+            raise PermissionError('Evidence cannot be certified')
+        page = source_page(item['doc_id'],page_no)
         original = str(item.get('text') or item.get('noi_dung_goc') or '')
         file_name = re.escape(str(item.get('file_goc') or ''))
         if item.get('loai_du_lieu') == 'text':
             original = re.sub(r'^Noi dung chi tiet trang '+str(page_no)+r' tai lieu '+file_name+r' \(Ma: [^\r\n]*\):\r?\n','',original,count=1)
         elif item.get('loai_du_lieu') == 'image_summary':
             original = re.sub(r'^Phan tich hinh anh tai lieu '+file_name+r' \(Ma: [^\r\n]*\):\r?\n','',original,count=1)
-        excerpt = ' '.join(original.split())
-        if page is None or not excerpt or not any(excerpt in ' '.join(str(value or '').split()) for value in page):
+        if not _page_excerpt_matches(original, page, item.get('loai_du_lieu')):
             raise PermissionError('Evidence cannot be certified')
         pin = {**({'historical':True} if historical else {}),'schema':'answer-source-pin-v1','doc_id':item['doc_id'],'version_no':item['version_no'],
-               'page_no':page_no,'source_hash':page_hash(page),'context_hash':context_hash(conn,record,page_no)}
-        result.append({**item,'evidence_pin':pin})
-    return result
+               'page_no':page_no,'source_hash':page_hash(page),'context_hash':source_context(item['doc_id'],item['version_no'],page_no)}
+        return {**item,'evidence_pin':pin}
+    return certify
+
+
+def pin_generation_sources(conn, docs, actor, *, allow_history=False):
+    """Certify original page excerpts before generation; derived text needs its own full proof."""
+    certify = generation_source_pinner(conn, actor, allow_history=allow_history)
+    return [certify(doc) for doc in docs]
 
 
 def feedback_basis(conn, chat_id, actor, department, site, primary_doc_id=None):

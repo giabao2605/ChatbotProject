@@ -135,9 +135,15 @@ def test_old_contracts_do_not_inherit_new_graph_semantics(bom_store, version):
     selected = graph_request('1. A\n2. B\n3. C\n4. D')
     planner = Planner(lambda *_a, **_k: pytest.fail('Old contracts must not call planner for Graph'))
     result = execute(engine, selected, planner, version)
-    assert result.refusal_reason == ('intent_overflow' if version is None else 'task_unsupported')
-    assert result.diagnostics.budget.graph_examined_relations == 0
-    assert not planner.calls and result.citations == ()
+    assert not planner.calls
+    if version is None:
+        assert result.refusal_reason is None
+        assert result.diagnostics.budget.graph_examined_relations > 0
+        assert result.citations
+    else:
+        assert result.refusal_reason == 'task_unsupported'
+        assert result.diagnostics.budget.graph_examined_relations == 0
+        assert result.citations == ()
 
 
 @pytest.mark.parametrize('mutation', ['schema', 'direction', 'output', 'selection', 'operand', 'dropped'])

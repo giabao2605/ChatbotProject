@@ -49,6 +49,20 @@ class EvidenceOutcome:
     documents: tuple[Any, ...] = ()
 
 
+def interpretation_instruction(branches):
+    supported = [branch for branch in branches if branch.get("outcome") == "full_answer"]
+    if not supported:
+        return ""
+    lines = ["\n\nCâu hỏi có nhiều cách hiểu. Chỉ trả lời các cách hiểu được liệt kê dưới đây; "
+             "mỗi cách hiểu bắt đầu bằng tiêu đề khớp chính xác dòng ### dưới đây, rồi câu trả lời và nguồn riêng. "
+             "Chỉ dùng nguồn đã gắn với cách hiểu đó. Không nêu cách hiểu thiếu bằng chứng; "
+             "không tự thêm dòng gợi ý làm rõ, hệ thống sẽ thêm dòng này."]
+    for branch in supported:
+        sources = ", ".join(str(card.get("source_id")) for card in branch.get("citations", ()) if card.get("source_id"))
+        lines.append(f"### {branch['subquery']}\nNguồn được phép: {sources}")
+    return "\n".join(lines)
+
+
 def _select_citations(
     decision: RouteDecision,
     primary: PrimaryRetrievalOutcome,
@@ -121,6 +135,9 @@ def _decide_evidence_policy(
         branch.get("outcome") == "full_answer"
         for branch in decomposition_branches
     )
+    if decision.intent_data.get("interpretations_active") and not sufficient_branch_count:
+        from mech_chatbot.rag.evidence_gate import EvidenceDecision
+        evidence_decision = EvidenceDecision(EvidenceState.INSUFFICIENT, reason="no_supported_interpretation")
     answer_policy = decide_answer_policy(
         request.user_question,
         PolicyEvidence(
@@ -269,10 +286,14 @@ def evaluate_evidence(
     request = decision.request
     documents = list(reranked.documents)
     from mech_chatbot.services.feedback_service import pin_generation_evidence, EvidenceCertificationError
+    from mech_chatbot.auth.authorization import role_allows
+    allow_history = decision.intent_data.get("version_policy") in {
+        "specific_version", "compare_versions", "include_archived", "version_history",
+    } and role_allows(request.user_roles, "document_history_reader")
     try:
         documents = pin_generation_evidence(documents,state.request.access,
             checkpoint=state.checkpoint,deadline=state.budget.deadline_monotonic,
-            image_analysis=request.image_analysis)
+            image_analysis=request.image_analysis,allow_history=allow_history)
     except EvidenceCertificationError:
         from mech_chatbot.rag.phases.retrieval_rerank import _empty_context_terminal
         return _empty_context_terminal(decision,enrichment,state,list(enrichment.new_part_ids),
@@ -282,7 +303,9 @@ def evaluate_evidence(
     if len(filter_applicable_sources(documents, request.user_question)) != len(documents):
         from mech_chatbot.rag.phases.retrieval_rerank import _empty_context_terminal
         return _empty_context_terminal(decision, enrichment, state, list(enrichment.new_part_ids), DEMO_MISSING_NOTICE)
-    context_text = _assemble_context(documents, request.user_question) + primary.decomposition_notice
+    notice = (interpretation_instruction(decomposition_branches)
+              if decision.intent_data.get("interpretations_active") else primary.decomposition_notice)
+    context_text = _assemble_context(documents, request.user_question) + notice
     context_text = demo_scope_context(documents) + context_text
     from mech_chatbot.rag.query_dependencies import dependency_context
     dependencies = getattr(state, 'text_dependencies', ())
@@ -375,6 +398,8 @@ def _make_refusal_debug(
     evidence_decision: Any,
     evidence_quotes: tuple[str, ...],
     documents: list[Any],
+    *,
+    version_policy: str | None = None,
 ) -> dict[str, Any]:
     base_debug = make_debug_info(documents)
     generation_metrics = {
@@ -398,12 +423,12 @@ def _make_refusal_debug(
         "generation_metrics": generation_metrics,
         "decomposition_usage": generation_metrics["decomposition_usage"],
         "pilot_request_validation": _refusal_request_validation(
-            request, documents
+            request, documents, version_policy=version_policy
         ),
     }
 
 
-def _refusal_request_validation(request: Any, documents: list[Any]) -> dict:
+def _refusal_request_validation(request: Any, documents: list[Any], *, version_policy: str | None = None) -> dict:
     from mech_chatbot.domain.serving_state import is_currently_servable, is_history_servable
     from mech_chatbot.auth.authorization import role_allows
     from mech_chatbot.rag.rbac import document_matches_access_scope
@@ -423,7 +448,9 @@ def _refusal_request_validation(request: Any, documents: list[Any]) -> dict:
         )
         for document in documents
     )
-    allow_history = role_allows(request.user_roles, "document_history_reader")
+    allow_history = version_policy in {
+        "specific_version", "compare_versions", "include_archived", "version_history",
+    } and role_allows(request.user_roles, "document_history_reader")
     current_passed = bool(documents) and all(
         is_governed_sql_bom_document(document)
         or is_currently_servable(getattr(document, "metadata", None), require_current=True)
@@ -473,6 +500,7 @@ def _prepare_refusal(
         evidence_decision,
         evidence_quotes,
         documents,
+        version_policy=decision.intent_data.get("version_policy"),
     )
     state.refuse("evidence_gate")
     return PhaseTerminal(

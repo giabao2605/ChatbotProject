@@ -101,10 +101,10 @@ def test_shared_yes_no_confirmation_keeps_its_subjects_and_predicate(question):
     'Tóm tắt BOM, so sánh vật liệu, giải thích dung sai và kiểm tra hồ sơ đã được xác nhận và đang áp dụng không?',
     'Bảo trì đã được xác nhận không, hồ sơ nhân sự đã được xác nhận không, thanh toán đã được xác nhận không, quyền truy cập đã được xác nhận không?',
 ])
-def test_shared_confirmation_cannot_hide_four_independent_requests(question):
+def test_empty_planner_cannot_refuse_from_shared_confirmation_fragments(question):
     plan = compile_query_plan(question, {}, planner=lambda _: {})
-    assert plan.intent_overflow or plan.clarification_required
-    assert not plan.subqueries
+    assert not plan.intent_overflow and not plan.clarification_required
+    assert plan.subqueries == (question,)
 
 
 def test_semantic_split_retains_leave_topic_and_uses_existing_planner_once():
@@ -133,6 +133,7 @@ def test_dependent_questions_without_introduction_keep_their_shared_topic():
         'subqueries': ['Xin nghỉ phép thế nào?']})
     assert calls == [question]
     assert plan.used_fallback and plan.subqueries == (question,)
+    assert not plan.clarification_required and not plan.intent_overflow
 
 
 @pytest.mark.parametrize('prefix', ['', 'Theo nội quy công ty, '])
@@ -141,6 +142,7 @@ def test_semantic_branches_cannot_lose_shared_topic(prefix):
     plan = compile_query_plan(question, {}, planner=lambda _: {
         'subqueries': ['Xin nghỉ phép thế nào?', 'Cần báo ai?', 'Trước bao lâu?']})
     assert plan.used_fallback and plan.subqueries == (question,)
+    assert not plan.clarification_required and not plan.intent_overflow
 
 
 @pytest.mark.parametrize('question', [
@@ -157,7 +159,7 @@ def test_dependent_questions_keep_topic_across_punctuation_and_scope(question):
 def test_intro_does_not_hide_four_clear_requests_when_planner_unavailable():
     question = 'Mình cần hỗ trợ, tìm BOM, nêu vật liệu, kiểm tra dung sai và liệt kê bước hàn'
     plan = compile_query_plan(question, {})
-    assert plan.intent_overflow and not plan.subqueries and len(plan.intents) == 4
+    assert not plan.intent_overflow and plan.subqueries == (question,)
 
 
 @pytest.mark.parametrize('planner', [None, lambda _: {}, lambda q: {'subqueries': [q]},
@@ -166,9 +168,9 @@ def test_intro_does_not_hide_four_clear_requests_when_planner_unavailable():
 def test_unresolved_multi_subject_request_cannot_bypass_limit_as_one_query(planner):
     question = 'Nghỉ phép được bao lâu, mua hàng thực hiện thế nào, bảo trì do ai phụ trách, hỗ trợ hệ thống gửi ở đâu?'
     plan = compile_query_plan(question, {}, planner=planner)
-    assert plan.clarification_required and not plan.intent_overflow
-    assert not plan.subqueries
-    assert execute_plan(plan, lambda *_: pytest.fail('Unresolved requests must not retrieve'), {}) == []
+    assert not plan.intent_overflow
+    assert not plan.clarification_required
+    assert plan.subqueries == (question,) or plan.subqueries == ('Hãy cho biết ' + question,)
 
 
 def test_unbounded_planner_output_cannot_bypass_intent_limit():
@@ -201,12 +203,12 @@ def test_document_scope_is_shared_without_becoming_an_intent(question, expected)
 def test_shared_document_scope_does_not_hide_four_real_requests():
     question = "Theo MANUAL-A-41 và MANUAL-B-72, tìm BOM; tìm vật liệu; tìm dung sai; tìm hướng dẫn hàn"
     calls = []
-    plan = compile_query_plan(question, {}, planner=lambda _: calls.append("planner"))
+    plan = compile_query_plan(question, {}, planner=lambda _: calls.append("planner") or {"subqueries": ["tìm BOM", "tìm vật liệu", "tìm dung sai", "tìm hướng dẫn hàn"]})
     assert plan.intent_overflow is True
     assert len(plan.intents) == 4
     assert all("MANUAL-A-41 và MANUAL-B-72" in intent for intent in plan.intents)
     assert execute_plan(plan, lambda *_: calls.append("retrieval"), {}) == []
-    assert calls == []
+    assert calls == ["planner"]
 
 
 @pytest.mark.parametrize("body", [
@@ -255,18 +257,18 @@ def test_comparison_scope_operands_stay_together_without_hiding_other_intents(qu
     assert split_query_intents(question) == (expected, len(expected) > 3)
 
 
-def test_overflow_keeps_all_explicit_intents_and_never_calls_planner_or_retrieval():
+def test_confirmed_overflow_calls_planner_but_never_retrieval():
     question = "Tìm BOM; tìm vật liệu; tìm dung sai; tìm hướng dẫn hàn"
     expected = ("Tìm BOM", "tìm vật liệu", "tìm dung sai", "tìm hướng dẫn hàn")
     calls = []
     assert split_query_intents(question) == (expected, True)
-    plan = compile_query_plan(question, {}, planner=lambda _: calls.append("planner"))
+    plan = compile_query_plan(question, {}, planner=lambda _: calls.append("planner") or {"subqueries": expected})
     assert plan.intent_overflow is True
     assert plan.intents == expected
     assert plan.subqueries == ()
     assert plan.intent_coverage == (False,) * 4
     assert execute_plan(plan, lambda *_: calls.append("retrieval"), {}) == []
-    assert calls == []
+    assert calls == ["planner"]
 
 
 def test_execute_plan_checks_request_before_each_queued_branch():
@@ -274,7 +276,7 @@ def test_execute_plan_checks_request_before_each_queued_branch():
 
     calls = []
     cancelled = threading.Event()
-    plan = build_plan("BOM và vật liệu và dung sai")
+    plan = BranchPlan("BOM và vật liệu và dung sai", True, ("BOM", "vật liệu", "dung sai"))
 
     def checkpoint():
         if cancelled.is_set():
@@ -292,7 +294,7 @@ def test_execute_plan_checks_request_before_each_queued_branch():
 
 def test_execute_plan_does_not_start_retrieval_after_deadline():
     calls = []
-    plan = build_plan("BOM và vật liệu")
+    plan = BranchPlan("BOM và vật liệu", True, ("BOM", "vật liệu"))
     results = execute_plan(
         plan, lambda query, *_: calls.append(query), {},
         deadline_monotonic=time.monotonic() - 1,
@@ -304,7 +306,7 @@ def test_execute_plan_does_not_start_retrieval_after_deadline():
 
 def test_question_mark_separated_overflow_preserves_each_question():
     question = "BOM là gì? Vật liệu gì? Dung sai gì? Hàn thế nào?"
-    plan = build_plan(question)
+    plan = build_plan(question, planner=lambda _: {"subqueries": ["BOM là gì", "Vật liệu gì", "Dung sai gì", "Hàn thế nào"]})
     assert plan.intent_overflow is True
     assert plan.intents == ("BOM là gì", "Vật liệu gì", "Dung sai gì", "Hàn thế nào")
 
@@ -317,7 +319,7 @@ def test_terminal_branch_failure_propagates_without_waiting_for_slow_sibling(exc
     failure = ExternalAICallCancelled if exception_type == "cancel" else RequestBudgetExceeded
     release = threading.Event()
     entered = threading.Event()
-    plan = build_plan("BOM và vật liệu")
+    plan = BranchPlan("BOM và vật liệu", True, ("BOM", "vật liệu"))
 
     def retrieve(query, *_):
         if query == "BOM":
@@ -467,7 +469,7 @@ def test_complex_query_is_limited_to_three_subqueries_and_drops_invented_codes()
     assert all("ZZ-999" not in query for query in plan.subqueries)
 
 
-def test_compile_query_plan_falls_back_when_planner_repeats_whole_question():
+def test_compile_query_plan_accepts_complete_whole_question():
     question = (
         "Cho biết số lượng DEMO-PART-A, đồng thời nêu vật liệu DEMO-PART-B "
         "và quy trình bảo trì DEMO-PART-C?"
@@ -482,15 +484,15 @@ def test_compile_query_plan_falls_back_when_planner_repeats_whole_question():
     assert isinstance(plan, BranchPlan)
     assert plan.is_complex is True
     assert len(plan.intents) == 3
-    assert len(plan.subqueries) == 3
-    assert plan.used_fallback is True
+    assert plan.subqueries == (question,)
+    assert plan.used_fallback is False
     assert plan.intent_coverage == (True, True, True)
     assert set(code for query in plan.subqueries for code in codes_in_query(query)) == {
         "demo-part-a", "demo-part-b", "demo-part-c",
     }
 
 
-def test_compile_query_plan_fallback_keeps_three_comma_separated_intents():
+def test_compile_query_plan_keeps_full_planner_query_without_fragmenting():
     question = (
         "Cho biết giá trị CRAG-EVAL-NUM-001, chu kỳ mắt cú xanh "
         "và quy trình lắp CRAG-EVAL-PART-C?"
@@ -502,7 +504,7 @@ def test_compile_query_plan_fallback_keeps_three_comma_separated_intents():
         planner=lambda original: {"subqueries": [original]},
     )
 
-    assert len(plan.subqueries) == 3
+    assert plan.subqueries == (question,)
     assert plan.intent_coverage == (True, True, True)
 
 
@@ -525,9 +527,7 @@ def test_planner_fourth_branch_is_not_silently_discarded():
     question = 'Tìm BOM MA-100; tìm vật liệu MA-200; tìm hướng dẫn bảo trì MA-300'
     plan = compile_query_plan(question, {}, planner=lambda _: {'subqueries':[
         'BOM MA-100', 'vật liệu MA-200', 'hướng dẫn bảo trì MA-300', 'kiểm tra thêm BOM MA-100']})
-    assert plan.used_fallback is True
-    assert plan.subqueries == ('Tìm BOM MA-100', 'tìm vật liệu MA-200', 'tìm hướng dẫn bảo trì MA-300')
-    assert plan.intent_coverage == (True, True, True)
+    assert plan.intent_overflow and not plan.subqueries
 
 
 @pytest.mark.parametrize('proposed', [None, 3, 'BOM MA-100', {'BOM MA-100':'material'},
@@ -535,7 +535,7 @@ def test_planner_fourth_branch_is_not_silently_discarded():
 def test_malformed_planner_branches_keep_the_original_request(proposed):
     plan = compile_query_plan('Tìm BOM MA-100; tìm vật liệu MA-200', {},
                               planner=lambda _: {'subqueries':proposed})
-    assert plan.used_fallback and plan.subqueries == ('Tìm BOM MA-100', 'tìm vật liệu MA-200')
+    assert plan.used_fallback and plan.subqueries == ('Tìm BOM MA-100; tìm vật liệu MA-200',)
 
 
 def test_executor_rejects_oversized_handbuilt_plan_before_any_source_lookup():
@@ -686,14 +686,14 @@ def test_only_sufficient_branch_documents_reach_final_generation():
     assert selected == [sufficient, extra]
 
 
-def test_general_branch_limits_generation_to_top_evidence():
+def test_ranked_general_branch_preserves_selected_evidence():
     relevant = Document(page_content="relevant", metadata={"doc_id": 1, "trang_so": 1})
     unrelated = Document(page_content="unrelated", metadata={"doc_id": 2, "trang_so": 1})
     results = [
         BranchRetrievalResult(
             [relevant, unrelated],
             5,
-            "general:explicit_dense_bm25_rrf",
+            "general:explicit_dense_bm25_rrf+branch_ranked",
             1.0,
             None,
         ),
@@ -701,7 +701,7 @@ def test_general_branch_limits_generation_to_top_evidence():
 
     selected = sufficient_branch_documents(results, [{"outcome": "full_answer"}])
 
-    assert selected == [relevant]
+    assert selected == [relevant, unrelated]
 
 
 def test_grounded_negative_branch_documents_do_not_reach_final_generation():
@@ -750,10 +750,145 @@ def test_shared_prefix_is_not_evidence_that_planner_covered_both_requests():
     question = "Theo POLICY-A-41 và POLICY-B-72, thời hạn bao lâu và ai phê duyệt?"
     plan = compile_query_plan(question, {}, planner=lambda _: {
         "subqueries": ["thời hạn bao lâu", "hồ sơ lưu trữ"]})
-    assert plan.used_fallback is True
-    assert all("ai phê duyệt" in query for query in plan.subqueries[-1:])
+    assert plan.used_fallback and plan.subqueries == (question,)
+    assert not plan.clarification_required and not plan.intent_overflow
 
 
 def test_shared_scope_does_not_merge_four_short_commands():
     question = "Theo MANUAL-A-41, xem BOM và kiểm vật liệu và xem dung sai và kiểm mối hàn"
     assert split_query_intents(question)[1] is True
+
+
+# User questions only; no source-document excerpts.
+_GOLDEN_QUESTIONS = {22: 'Đường truyền đến khu công nghiệp cần đạt tốc độ tối thiểu bao nhiêu và nhà văn hóa khu dân cư có được cung cấp Wi-Fi miễn phí không?', 23: 'Với những việc bị chậm trong năm 2024, nhóm dữ liệu nào cần được ưu tiên hoàn tất và ai chịu trách nhiệm? Với nguồn đã hết kỳ, nêu rõ kỳ thực hiện theo nội dung văn bản.', 24: 'Trong năm 2026, các quy định về báo cáo quý có cùng hạn nộp và nơi nhận không?', 27: 'Tại Hà Nội, nếu vừa chuẩn bị kết nối mạng vừa số hóa công trình, các yêu cầu về khả năng liên thông và bảo vệ dữ liệu có gì chung?', 28: 'Ở cơ quan thanh tra Lai Châu năm 2026, chỉ tiêu về tài khoản định danh điện tử khác nhau thế nào giữa lần ban hành đầu và lần cập nhật? Khi trả lời, nêu cả hai văn bản nguồn và năm ban hành của từng văn bản.', 29: 'Ở cơ quan thanh tra Lai Châu năm 2026, tỷ lệ nhân sự cần được học kỹ năng công nghệ cơ bản có thay đổi giữa lần ban hành đầu và lần cập nhật không? Khi trả lời, nêu cả hai văn bản nguồn và năm ban hành của từng văn bản.', 30: 'Việc xem xét khen thưởng theo đợt giữa kỳ và cuối kỳ cho các hoạt động đổi mới công nghệ dự kiến vào thời điểm nào?'}
+
+@pytest.mark.parametrize('number', [23, 27, 28, 29])
+def test_golden_lexical_overflow_is_only_a_planner_hint(number):
+    question = _GOLDEN_QUESTIONS[number]
+    calls = []
+    plan = compile_query_plan(question, {}, planner=lambda q: calls.append(q) or {'subqueries': [q]})
+    assert calls == [question]
+    assert plan.subqueries == (question,)
+    assert not plan.intent_overflow and not plan.clarification_required
+    assert plan.original_query == question
+
+
+@pytest.mark.parametrize('number', [23, 27, 28, 29])
+@pytest.mark.parametrize('failure', [TimeoutError, RuntimeError])
+def test_golden_planner_failure_keeps_the_entire_original_question(number, failure):
+    question = _GOLDEN_QUESTIONS[number]
+    def planner(_):
+        raise failure('planner unavailable')
+    plan = compile_query_plan(question, {}, planner=planner)
+    assert plan.subqueries == (question,)
+    assert plan.used_fallback and not plan.intent_overflow and not plan.clarification_required
+
+
+@pytest.mark.parametrize('number', [24, 30])
+def test_golden_fragments_do_not_bypass_planner(number):
+    question = _GOLDEN_QUESTIONS[number]
+    plan = compile_query_plan(question, {})
+    assert plan.subqueries == (question,)
+    assert not plan.intent_overflow and not plan.clarification_required
+
+
+def test_golden_two_independent_requests_keep_deterministic_branches():
+    question = _GOLDEN_QUESTIONS[22]
+    assert len(compile_query_plan(question, {}).subqueries) == 2
+
+
+def test_only_planner_can_confirm_four_independent_requests():
+    question = 'Tìm BOM; tìm vật liệu; tìm dung sai; tìm hướng dẫn hàn'
+    fallback = compile_query_plan(question, {})
+    assert fallback.subqueries == (question,) and not fallback.intent_overflow
+    plan = compile_query_plan(question, {}, planner=lambda _: {'subqueries': [
+        'Tìm BOM', 'tìm vật liệu', 'tìm dung sai', 'tìm hướng dẫn hàn']})
+    assert plan.intent_overflow and not plan.subqueries
+
+
+@pytest.mark.parametrize('number, expected_calls', [(22, 0), (23, 1), (24, 1), (27, 1), (28, 1), (29, 1), (30, 1)])
+def test_golden_retrieval_compiler_calls_planner_only_for_nonindependent_fragments(number, expected_calls):
+    import json
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from mech_chatbot.rag.phases.retrieval import _compile_plan
+    question = _GOLDEN_QUESTIONS[number]
+    invoke = Mock(return_value=SimpleNamespace(content=json.dumps({'subqueries': [question]})))
+    state = SimpleNamespace(explicit_text_intents=(), retrieval_adapter=SimpleNamespace(),
+                            budget=SimpleNamespace(record=Mock()), checkpoint=Mock(), invoke_provider=invoke)
+    result = _compile_plan(SimpleNamespace(effective_question=question, trace_id='test'), state, {})
+    assert invoke.call_count == expected_calls
+    assert result.plan.original_query == question
+    if expected_calls:
+        prompt = invoke.call_args.args[0][0].content
+        assert 'Yeu cau trinh bay' in prompt and 'pham vi, thoi gian va dia diem' in prompt
+        assert invoke.call_args.kwargs['surface'] == 'query_decomposition'
+        assert result.plan.subqueries == (question,)
+    else:
+        assert len(result.plan.subqueries) == 2
+
+
+def test_policy_blocked_planner_falls_back_to_original_query():
+    from mech_chatbot.llm.external_ai import ExternalProcessingDenied
+    question = _GOLDEN_QUESTIONS[28]
+    def denied(_):
+        raise ExternalProcessingDenied('blocked')
+    plan = compile_query_plan(question, {}, planner=denied)
+    assert plan.subqueries == (question,)
+    assert plan.used_fallback and not plan.intent_overflow and not plan.clarification_required
+
+
+def test_legacy_fixed_task_guard_waits_for_semantic_planner():
+    from types import SimpleNamespace
+    from mech_chatbot.rag.query_decomposition import fixed_task_guard
+    state = SimpleNamespace(invocation=SimpleNamespace(task_routing_contract=None))
+    assert fixed_task_guard(state) is None
+
+
+def test_explicit_interpretation_branches_enable_existing_decomposition_path():
+    from types import SimpleNamespace
+    from mech_chatbot.rag.query_decomposition import query_decomposition_requested
+    state = SimpleNamespace(explicit_text_intents=('Nghỉ phép?', 'Nghỉ việc?'),
+                            request=SimpleNamespace(), retrieval_adapter=SimpleNamespace())
+    assert query_decomposition_requested(state)
+
+
+_GOLDEN_PARAPHRASED_PLANS = {
+    23: (
+        'Các công việc chậm năm 2024 cần ưu tiên hoàn thành nhóm dữ liệu nào?',
+        'Ai phụ trách hoàn tất các nhóm dữ liệu của công việc chậm năm 2024?',
+    ),
+    27: ('Những quy định chung về kết nối liên thông và bảo vệ dữ liệu khi chuẩn bị kết nối mạng, số hóa công trình ở Hà Nội là gì?',),
+    28: (
+        'Chỉ tiêu tài khoản định danh điện tử của cơ quan thanh tra Lai Châu năm 2026 ở bản đầu là gì?',
+        'Chỉ tiêu tài khoản định danh điện tử của cơ quan thanh tra Lai Châu năm 2026 ở bản cập nhật là gì?',
+    ),
+    29: (
+        'Tỷ lệ nhân sự cần học kỹ năng công nghệ cơ bản của cơ quan thanh tra Lai Châu năm 2026 ở bản đầu là bao nhiêu?',
+        'Tỷ lệ nhân sự cần học kỹ năng công nghệ cơ bản của cơ quan thanh tra Lai Châu năm 2026 ở bản cập nhật là bao nhiêu?',
+    ),
+}
+
+
+@pytest.mark.parametrize('number', [23, 27, 28, 29])
+def test_golden_paraphrase_without_presentation_clause_never_clarifies(number):
+    question = _GOLDEN_QUESTIONS[number]
+    proposed = _GOLDEN_PARAPHRASED_PLANS[number]
+    calls = []
+    plan = compile_query_plan(question, {}, planner=lambda q: calls.append(q) or {'subqueries': proposed})
+    assert calls == [question]
+    assert not plan.intent_overflow and not plan.clarification_required
+    assert plan.original_query == question
+    if plan.used_fallback:
+        assert plan.subqueries == plan.intents == (question,)
+        assert plan.intent_coverage == (True,)
+    else:
+        assert plan.subqueries == proposed
+        assert all(plan.intent_coverage)
+
+
+def test_incomplete_planner_coverage_falls_back_to_full_question():
+    question = 'Xin nghỉ phép thế nào, cần báo ai và trước bao lâu?'
+    plan = compile_query_plan(question, {}, planner=lambda _: {'subqueries': ['Xin nghỉ phép thế nào?']})
+    assert plan.used_fallback and plan.subqueries == (question,)
+    assert not plan.clarification_required and not plan.intent_overflow

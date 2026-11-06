@@ -235,11 +235,11 @@ def _missing_referent_terminal(
 
 
 def _exact_cache_terminal(
-    context: _PreparationContext,
+    context: PreparedRequest,
     hit: Mapping[str, Any],
     lookup_started: float,
 ) -> PreparationOutcome:
-    logger.info("Exact cache HIT -> tra loi truoc router/embedding.")
+    logger.info("Exact cache HIT -> tra loi sau intent, truoc embedding.")
     debug = {
         "retrieved_docs": hit.get("evidence_snapshot") or [],
         "citation_docs": hit.get("citation_snapshot") or [],
@@ -279,6 +279,8 @@ def _exact_cache_terminal(
 
 
 def _intent_overflow_terminal(context: _PreparationContext, state: Any) -> PreparationOutcome | None:
+    if not getattr(state.invocation, "task_routing_contract", None):
+        return None
     from mech_chatbot.rag.query_decomposition import query_decomposition_requested
     if not query_decomposition_requested(state):
         return None
@@ -313,9 +315,14 @@ def _intent_overflow_terminal(context: _PreparationContext, state: Any) -> Prepa
 
 
 def _lookup_exact_cache(
-    context: _PreparationContext,
+    context: PreparedRequest,
     state: Any,
+    intent_data: Mapping[str, Any],
 ) -> _CacheLookup:
+    from mech_chatbot.rag.semantic_cache import policy_allows_cache
+
+    if not policy_allows_cache(intent_data.get("version_policy"), intent_data.get("history_access_denied")):
+        return _CacheLookup(None, None)
     cache_scope = None
     lookup_started = time.time()
     if context.cache_eligible:
@@ -348,6 +355,8 @@ def _lookup_exact_cache(
                     cache_scope,
                     ttl=getattr(runtime, "semantic_cache_ttl_hours", 24.0),
                     actor=state.request.access,
+                    version_policy=intent_data.get("version_policy"),
+                    history_access_denied=intent_data.get("history_access_denied", False),
                 )
                 if hit:
                     return _CacheLookup(
@@ -442,16 +451,12 @@ def prepare(state: Any) -> PreparationOutcome:
     overflow_terminal = _intent_overflow_terminal(context, state)
     if overflow_terminal is not None:
         return overflow_terminal
-
-
     referent_terminal = _missing_referent_terminal(context, state)
     if referent_terminal is not None:
         return referent_terminal
-    cache_lookup = _lookup_exact_cache(context, state)
-    if cache_lookup.terminal is not None:
-        return cache_lookup.terminal
+    # Cache reads wait until routing has resolved the request version policy.
     return PreparationOutcome(
-        prepared=_complete_preparation(context, state, cache_lookup.scope)
+        prepared=_complete_preparation(context, state, None)
     )
 
 

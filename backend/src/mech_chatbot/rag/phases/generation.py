@@ -16,7 +16,7 @@ from mech_chatbot.rag.phases.diagnostics import (
     make_phase_diagnostics,
     make_source_snapshot,
 )
-from mech_chatbot.rag.phases.evidence import EvidenceOutcome
+from mech_chatbot.rag.phases.evidence import EvidenceOutcome, interpretation_instruction
 from mech_chatbot.rag.phases.retrieval import PrimaryRetrievalOutcome
 from mech_chatbot.rag.phases.retrieval_enrichment import EnrichmentOutcome
 from mech_chatbot.rag.phases.retrieval_rerank import RerankOutcome
@@ -144,7 +144,10 @@ def _generation_plan(
         evidence=GenerationEvidence(
             context_text=evidence.context_text,
             retrieved_docs=documents,
-            intent_data=dict(decision.intent_data),
+            intent_data={**decision.intent_data,
+                         "generation_original_question": bool(primary.decomposition_branches),
+                         "interpretation_branches": primary.decomposition_branches
+                         if decision.intent_data.get("interpretations_active") else ()},
             base_k=enrichment.base_k,
             retrieval_mode=enrichment.retrieval_mode,
             has_active_filter=enrichment.has_active_filter,
@@ -252,6 +255,17 @@ def _generation_debug(
     return debug_info
 
 
+AMBIGUITY_NOTICE = ("Câu hỏi có thể hiểu theo nhiều cách; nếu bạn hỏi trường hợp cụ thể, "
+                    "hãy nói rõ để mình trả lời chính xác hơn.")
+
+
+def _interpretation_stream(stream, state):
+    yield from stream
+    outcome = getattr(state, "generation_outcome", None)
+    if not getattr(outcome, "refusal_reason", None) and not getattr(state, "refusal_reason", None):
+        yield "\n\n" + AMBIGUITY_NOTICE
+
+
 def _decorate_generated_stream(
     stream: Any,
     decision: RouteDecision,
@@ -267,7 +281,11 @@ def _decorate_generated_stream(
     evidence_snapshot = make_source_snapshot(documents)
     debug_info["citation_docs"] = citation_snapshot
     if decomposition_branches:
-        stream = audit_decomposition_stream(stream, decomposition_branches)
+        visible_branches = ([branch for branch in decomposition_branches if branch.get("outcome") == "full_answer"]
+                            if decision.intent_data.get("interpretations_active") else decomposition_branches)
+        stream = audit_decomposition_stream(stream, visible_branches)
+        if decision.intent_data.get("interpretations_active") and visible_branches:
+            stream = _interpretation_stream(stream, state)
     stream = mark_demo_stream(stream, documents)
     _store_conversation_document_refs(
         debug_info,
@@ -436,6 +454,10 @@ def _wrap_semantic_cache(
                 getattr(runtime, "semantic_cache_enabled", True),
                 state.invocation.mode,
             )
+            and semantic_cache.policy_allows_cache(
+                decision.intent_data.get("version_policy"),
+                decision.intent_data.get("history_access_denied", False),
+            )
             and decision.cache_query_embedding is not None
             and documents
             and not any(is_demo_source(doc.metadata) for doc in documents)
@@ -461,6 +483,8 @@ def _wrap_semantic_cache(
                 model=get_llm_model_name(state.provider_adapter),
                 input_char_len=input_length,
                 reported_cost=reported_cost,
+                version_policy=decision.intent_data.get("version_policy"),
+                history_access_denied=decision.intent_data.get("history_access_denied", False),
                 citation_snapshot=citation_snapshot,
                 evidence_snapshot=evidence_snapshot,
                 cache_enabled=bool(

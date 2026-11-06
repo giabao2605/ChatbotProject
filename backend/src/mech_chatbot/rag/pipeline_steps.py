@@ -72,6 +72,21 @@ from mech_chatbot.rag.execution import (
     current_request_checkpoint,
 )
 
+def _unsupported_verification_schema(error):
+    status = getattr(error, "status_code", None)
+    if status is not None and status not in (400, 404, 422):
+        return False
+    if status is None and not isinstance(error, (TypeError, ValueError)):
+        return False
+    message = (str(error) + " " + str(getattr(error, "body", ""))).casefold()
+    schema_named = any(name in message for name in ("response_format", "json_schema", "structured output"))
+    rejected = any(reason in message for reason in (
+        "unsupported", "not support", "does not support", "unrecognized", "unknown parameter",
+        "unexpected keyword", "invalid parameter", "invalid schema"))
+    return (schema_named and rejected) or (
+        status == 404 and "no endpoints found" in message and "support" in message and "parameters" in message)
+
+
 _RETRIEVE_UNSET = object()
 _QDRANT_SEARCH_TIMEOUT_SECONDS = 10
 _BM25_SEARCH_TIMEOUT_SECONDS = _QDRANT_SEARCH_TIMEOUT_SECONDS
@@ -1114,6 +1129,9 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
         "question": (effective_question if ("effective_question" in locals() and effective_question) else user_question),
         "chat_history_str": chat_history_str
     }
+    if intent_data.get("generation_original_question"):
+        stream_input = {**stream_input, "question": stream_input["question"] +
+                        "\n\nCâu hỏi gốc đầy đủ (giữ yêu cầu trình bày): " + user_question}
     _external_doc_ids = [d.metadata.get("doc_id") for d in retrieved_docs]
     _external_doc_ids += [attribute['doc_id'] for attribute in plan.evidence.dependency_source_attributes]
     _external_security = [d.metadata.get("security_level") for d in retrieved_docs]
@@ -1151,7 +1169,10 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
     )
     _claim_verification_enabled = bool(
         getattr(retrieval_runtime, "claim_verification_enabled", False)
+        or intent_data.get("interpretations_active")
     )
+    if intent_data.get("interpretations_active"):
+        _strict_realtime = False
     if dependency_sources:
         # Locator provenance is not supported by the legacy repair validator.
         if _claim_repair_enabled:
@@ -1176,19 +1197,35 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
 
     def _verify_draft(draft):
         _raise_if_cancelled()
-        def adjudicate(prompt):
+        def adjudicate(prompt, *, response_format):
             invoke = getattr(provider_adapter, "invoke_once", None) or provider_adapter.invoke
-            response = invoke(
-                [HumanMessage(content=prompt)], surface="evidence_verification", trace_id=trace_id,
-                doc_ids=_external_doc_ids, security_levels=_external_security, policies=_external_policies,
-                retry_counter=budget, timeout_seconds=remaining_request_timeout(
-                    getattr(provider_adapter.settings, "timeout_seconds", 120.0),
-                    stage="claim verification", deadline_monotonic=plan.control.deadline_monotonic),
-            )
-            return getattr(response, "content", response)
+            for attempt, schema in enumerate((response_format, None), 1):
+                _raise_if_cancelled()
+                options = {"response_format": schema} if schema is not None else {}
+                try:
+                    timeout_seconds = remaining_request_timeout(
+                        getattr(provider_adapter.settings, "timeout_seconds", 120.0),
+                        stage="claim verification", deadline_monotonic=plan.control.deadline_monotonic)
+                    log_trace("claim_verification_call", trace_id, surface="evidence_verification",
+                              attempt=attempt, response_format_sent=schema is not None)
+                    response = invoke(
+                        [HumanMessage(content=prompt)], surface="evidence_verification", trace_id=trace_id,
+                        doc_ids=_external_doc_ids, security_levels=_external_security, policies=_external_policies,
+                        retry_counter=budget, timeout_seconds=timeout_seconds,
+                        **options,
+                    )
+                    return getattr(response, "content", response)
+                except Exception as error:
+                    if schema is None or not _unsupported_verification_schema(error):
+                        raise
+                    logger.warning("Claim verification response_format unsupported; retrying once without schema")
         checked = verify_answer_claims(draft, remaining_docs if grounded_prefix else retrieved_docs,
             question=effective_question or user_question, invoke=adjudicate, lang=response_language,
             require_complete_coverage=plan.evidence.retrieval_mode == 'comprehensive')
+        if intent_data.get("interpretations_active"):
+            from mech_chatbot.rag.interpretations import render_verified_interpretations
+            checked = render_verified_interpretations(draft, checked,
+                intent_data.get("interpretation_branches", ()), question=user_question, lang=response_language)
         _raise_if_cancelled()
         _recheck_dependencies()
         metrics["verification_status"] = checked.status
@@ -2221,13 +2258,19 @@ def _rewrite_and_anchor(*, user_question, chat_history, current_part_ids,
             getattr(runtime, "strict_site_filter", True)
         ),
     )
-    if ctx_result.get('clarification_required'):
+    if ctx_result.get('clarification_required') and any((
+        chat_history, _cc_in.get('active_doc_refs'), _cc_in.get('pending_candidates'),
+        _cc_in.get('history_summary'),
+    )):
         return (user_question, [], False, False, {'clarification_required': True},
                 rbac_filter, rbac_filter, rbac_filter, False)
     strict_filter, broad_filter, new_part_ids, is_inherited, is_bom_query, intent_data = extract_search_intent(
         effective_question, effective_part_ids, user_department, user_roles, allowed_departments, max_security_level, allowed_sites=allowed_sites, force_part_ids=_forced_sel, trace_id=trace_id, invoke_provider=invoke_provider,
         runtime=getattr(runtime, "intent_runtime", None),
+        provider_question=user_question,
     )
+    if ctx_result.get('clarification_required'):
+        intent_data = {**intent_data, 'clarification_required': True}
 
     log_trace("intent", trace_id,
               latency_ms=int((time.time() - t_intent)*1000),
@@ -2255,6 +2298,8 @@ def _disambiguate(*, retrieved_docs, user_question, new_part_ids, intent_data,
     'single' -> retrieved_docs duoc thu hep; 'pass'/khong disambig -> giu nguyen.
     Tach nguyen van tu chat_with_rag (P0 slice #7).
     """
+    if intent_data.get("interpretations_active"):
+        return None, retrieved_docs
     # Rule 3 (NANG CAP): khi co nhieu variant/base_code, KHONG voi tu choi.
     # Truoc tien thu DISAMBIGUATE bang rang buoc trong cau hoi (ten san pham,
     # vat lieu, kich thuoc). Chi hoi lai khi that su khong tach duoc.
@@ -2278,10 +2323,13 @@ def _disambiguate(*, retrieved_docs, user_question, new_part_ids, intent_data,
         }) == 1:
             # Enrichment can reintroduce sibling models after the explicit file was selected.
             return None, named
+        # A mechanical hit must not turn administrative evidence into model choices.
+        mechanical_docs = [doc for doc in retrieved_docs
+                           if (doc.metadata or {}).get("domain") == "mechanical"]
         # Tap hop cac "ho" tai lieu khac nhau (base_code + variant_code)
         distinct_families = set()
         unique_variants = set()
-        for doc in retrieved_docs:
+        for doc in mechanical_docs:
             _md = doc.metadata or {}
             _bc = (_md.get("base_code") or "").strip()
             _vc = (_md.get("variant_code") or "default").strip()
@@ -2323,7 +2371,7 @@ def _disambiguate(*, retrieved_docs, user_question, new_part_ids, intent_data,
         # only a single-candidate request may enter the model selector.
         _need_disambig = (
             query_scope not in {"general_policy", "compare_candidates"}
-            and _context_is_mechanical(retrieved_docs, new_part_ids)
+            and len(distinct_families) > 1
             and (
                 (len(unique_variants) > 1)
                 or (not new_part_ids and _strong_constraints and len(distinct_families) > 1)
@@ -2331,7 +2379,7 @@ def _disambiguate(*, retrieved_docs, user_question, new_part_ids, intent_data,
         )
 
         if _need_disambig:
-            resolution = resolve_candidates_from_docs(retrieved_docs, _constraints)
+            resolution = resolve_candidates_from_docs(mechanical_docs, _constraints)
             if resolution["decision"] == "single":
                 _sel = resolution["selected"]
                 logger.info(f"Disambiguation: chot 1 candidate {_sel.get('key')} tu rang buoc {_constraints}.")

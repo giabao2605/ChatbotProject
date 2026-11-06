@@ -1,4 +1,6 @@
 """P2.3 — Feedback/quality/regression service (L6). Pass-through toi db repositories."""
+import logging
+
 from mech_chatbot.db.repositories.feedback import (
     add_regression_question,
     cleanup_dangling_records,
@@ -13,21 +15,27 @@ from mech_chatbot.db.repositories.feedback import (
 from mech_chatbot.db.repositories.feedback_access import FeedbackSchemaUnavailable
 
 
+logger = logging.getLogger(__name__)
+
+
 class EvidenceCertificationError(PermissionError):
     """A knowledge source could not be certified before generation."""
 
 
-def pin_generation_evidence(documents, actor, *, checkpoint=None, deadline=None, image_analysis=None):
+def pin_generation_evidence(documents, actor, *, checkpoint=None, deadline=None, image_analysis=None, allow_history=False):
     from copy import copy
     from dataclasses import asdict
-    from mech_chatbot.db.repositories.feedback_access import access_transaction, pin_generation_sources
+    from mech_chatbot.db.repositories.feedback_access import access_transaction, generation_source_pinner
     from mech_chatbot.application.feedback_access import effective_actor
     if not actor.user_id or not actor.username:
         return documents
     with access_transaction(asdict(actor),schema=False,review=False,checkpoint=checkpoint,deadline=deadline) as (conn,current):
         effective = effective_actor(current,asdict(actor))
         result = []
+        certify = generation_source_pinner(conn, effective, allow_history=allow_history)
         for document in documents:
+            if checkpoint is not None:
+                checkpoint("evidence_certification")
             metadata = {key:value for key,value in document.metadata.items() if key != 'evidence_pin'}
             # Retrieval page numbers may be strings; pin and history must share the same integer locator.
             for key in ('trang', 'page_no', 'trang_so'):
@@ -41,16 +49,21 @@ def pin_generation_evidence(documents, actor, *, checkpoint=None, deadline=None,
                 result.append(copy(document))
                 continue
             try:
-                pinned = pin_generation_sources(conn,[{**metadata,'text':metadata.get('noi_dung_goc') or document.page_content}],effective)[0]
+                pinned = certify({**metadata,'text':metadata.get('noi_dung_goc') or document.page_content})
                 metadata = {**metadata,**({'evidence_pin':pinned['evidence_pin']} if 'evidence_pin' in pinned else {})}
             except PermissionError:
-                # Synthetic title metadata has no page proof; exclude it before generation.
-                if metadata.get('loai_du_lieu') == 'title_block':
-                    continue
-                raise EvidenceCertificationError('Source evidence could not be certified') from None
+                logger.warning(
+                    "Excluded uncertified evidence doc_id=%s trang=%s loai_du_lieu=%s",
+                    metadata.get("doc_id"),
+                    metadata.get("trang") or metadata.get("page_no") or metadata.get("trang_so"),
+                    metadata.get("loai_du_lieu"),
+                )
+                continue
             duplicate = copy(document)
             duplicate.metadata = metadata
             result.append(duplicate)
+        if not result:
+            raise EvidenceCertificationError("Source evidence could not be certified")
         return result
 
 __all__ = [

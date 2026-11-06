@@ -24,6 +24,7 @@ from mech_chatbot.config.settings import ExternalAiSettings
 
 ALL_EXTERNAL = "all_external"
 INTERNAL_ONLY = "internal_only"
+QUESTION_ONLY_EXCEPTION_REASON = "question-only payload, owner decision 2026-11-05"
 
 
 def compatible_provider_name(endpoint: str | None) -> str:
@@ -113,6 +114,7 @@ class ExternalCallSpec:
     policy_version: str | None = None
     retention_mode: str | None = None
     risk_acceptance_ref: str | None = None
+    policy_exception_reason: str | None = None
     input_chars: int | None = None
     input_bytes: int | None = None
     input_token_estimate: int | None = None
@@ -124,6 +126,9 @@ _TRACE_ID: ContextVar[str | None] = ContextVar("external_ai_trace_id", default=N
 _DOC_IDS: ContextVar[tuple[int, ...]] = ContextVar("external_ai_doc_ids", default=())
 _SECURITY_LEVELS: ContextVar[tuple[str, ...]] = ContextVar("external_ai_security_levels", default=())
 _POLICIES: ContextVar[tuple[str, ...]] = ContextVar("external_ai_policies", default=())
+_DOCUMENT_CONTEXT_ACTIVE: ContextVar[bool] = ContextVar("external_ai_document_context", default=False)
+_DOCUMENT_POLICY_DENIED: ContextVar[bool] = ContextVar("external_ai_document_policy_denied", default=False)
+_QUESTION_ONLY: ContextVar[bool] = ContextVar("external_ai_question_only", default=False)
 
 _LOCAL_DEVELOPMENT_FLAG = "EXTERNAL_AI_LOCAL_DEVELOPMENT"
 _APPLICATION_ENVIRONMENT_FLAG = "APP_ENV"
@@ -386,17 +391,39 @@ def external_processing_context(
 
 
 @contextmanager
+def question_only_processing_context():
+    """Mark a caller-validated question payload, never source-document content.
+
+    Only audited intent callers may enter this scope after constructing their
+    restricted payload. A surface name alone is not proof of payload safety.
+    Existing document context is deliberately preserved and takes precedence.
+    """
+    token = _QUESTION_ONLY.set(True)
+    try:
+        yield
+    finally:
+        _QUESTION_ONLY.reset(token)
+
+
+@contextmanager
 def external_document_context(doc_ids=None, security_levels=None, policies=None):
     """Attach source-document metadata without replacing actor/trace context."""
     doc_token = _DOC_IDS.set(_clean_doc_ids(doc_ids))
     security_token = _SECURITY_LEVELS.set(_clean_tokens(security_levels))
-    policy_token = _POLICIES.set(_clean_tokens(policies))
+    cleaned_policies = _clean_tokens(policies)
+    policy_token = _POLICIES.set(cleaned_policies)
+    context_token = _DOCUMENT_CONTEXT_ACTIVE.set(True)
+    denied_token = _DOCUMENT_POLICY_DENIED.set(
+        _DOCUMENT_POLICY_DENIED.get() or any(policy != ALL_EXTERNAL for policy in cleaned_policies)
+    )
     try:
         yield
     finally:
         _DOC_IDS.reset(doc_token)
         _SECURITY_LEVELS.reset(security_token)
         _POLICIES.reset(policy_token)
+        _DOCUMENT_CONTEXT_ACTIVE.reset(context_token)
+        _DOCUMENT_POLICY_DENIED.reset(denied_token)
 
 
 def _assert_profile_allows(
@@ -454,6 +481,10 @@ def make_external_call_spec(
 ):
     normalized_provider = str(provider or "").strip().lower()
     normalized_surface = str(surface or "unknown").strip()[:50]
+    # Marking a payload must never discard an enclosing document restriction,
+    # including one hidden by a nested context or explicit all_external input.
+    if _QUESTION_ONLY.get() and _DOCUMENT_POLICY_DENIED.get():
+        raise ExternalProcessingDenied("Question-only scope cannot override document policy")
     resolved_doc_ids = _clean_doc_ids(doc_ids) if doc_ids is not None else _DOC_IDS.get()
     resolved_security_levels = _clean_tokens(security_levels) if security_levels is not None else _SECURITY_LEVELS.get()
     normalized_policies = _clean_tokens(policies) if policies is not None else _POLICIES.get()
@@ -462,7 +493,16 @@ def make_external_call_spec(
             str(settings.processing_policy or ALL_EXTERNAL).strip() or ALL_EXTERNAL,
         )
     denied = [policy for policy in normalized_policies if policy != ALL_EXTERNAL]
-    if denied:
+    question_only_candidate = (
+        _QUESTION_ONLY.get()
+        and not _DOCUMENT_CONTEXT_ACTIVE.get()
+        and doc_ids is None and security_levels is None and policies is None
+        and not _DOC_IDS.get() and not _SECURITY_LEVELS.get() and not _POLICIES.get()
+        and normalized_policies == (INTERNAL_ONLY,)
+        and normalized_provider == "openrouter"
+        and normalized_surface in {"intent_routing", "query_disambiguation"}
+    )
+    if denied and not question_only_candidate:
         raise ExternalProcessingDenied("External processing bi chan boi policy: " + ", ".join(denied))
 
     resolved_profile = profile or get_external_ai_provider_profile(
@@ -473,6 +513,22 @@ def make_external_call_spec(
     if resolved_profile is None:
         raise ExternalProcessingDenied(f"Khong co ExternalAIProviderProfile cho provider '{normalized_provider}'")
     _assert_profile_allows(resolved_profile, normalized_surface, settings)
+    exception_reason = None
+    risk_acceptance_ref = resolved_profile.risk_acceptance_ref[:500] or None
+    if question_only_candidate:
+        if not (
+            resolved_profile.provider == "openrouter"
+            and resolved_profile.endpoint == "https://openrouter.ai/api/v1"
+            and (endpoint is None or endpoint == resolved_profile.endpoint)
+            and resolved_profile.review_expires_at is not None
+            and resolved_profile.approved_by.strip()
+            and resolved_profile.policy_version.strip()
+            and resolved_profile.risk_acceptance_ref.strip()
+        ):
+            raise ExternalProcessingDenied("Question-only exception requires an approved OpenRouter profile")
+        exception_reason = QUESTION_ONLY_EXCEPTION_REASON
+        suffix = "; " + exception_reason
+        risk_acceptance_ref = resolved_profile.risk_acceptance_ref[:500 - len(suffix)] + suffix
 
     chars = max(0, int(input_chars or 0))
     bytes_estimate = max(0, int(input_bytes if input_bytes is not None else chars))
@@ -495,7 +551,8 @@ def make_external_call_spec(
         policies=normalized_policies,
         policy_version=resolved_profile.policy_version[:100] or None,
         retention_mode=resolved_profile.retention_mode[:100] or None,
-        risk_acceptance_ref=resolved_profile.risk_acceptance_ref[:500] or None,
+        risk_acceptance_ref=risk_acceptance_ref,
+        policy_exception_reason=exception_reason,
         input_chars=chars,
         input_bytes=bytes_estimate,
         input_token_estimate=token_estimate,
@@ -593,6 +650,10 @@ def _record_external_call(
                     values,
                 )
             except Exception:
+                # Legacy audit schema cannot persist this owner decision. Do
+                # not permit exceptional egress without its durable reason.
+                if spec.policy_exception_reason is not None:
+                    raise
                 # Existing deployments can receive the code before V0021. Keep
                 # the original audit schema functional until migration startup.
                 conn.execute(
@@ -626,7 +687,7 @@ def _preflight_compliance_audit(
         written = False
     if written:
         return
-    if _is_explicit_local_development(settings):
+    if spec.policy_exception_reason is None and _is_explicit_local_development(settings):
         logger.warning(
             "External AI compliance audit unavailable; continuing only in explicit local development "
             "(%s=true and %s=%s)",

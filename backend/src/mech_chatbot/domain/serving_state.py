@@ -65,7 +65,7 @@ def is_currently_servable(
     return True
 
 
-def is_history_servable(metadata: dict[str, Any] | None) -> bool:
+def is_history_servable(metadata: dict[str, Any] | None, *, today: date | None = None) -> bool:
     """Return whether an old revision is safe to expose to an explicit reader.
 
     Historical access is limited to source revisions that were actually
@@ -73,17 +73,20 @@ def is_history_servable(metadata: dict[str, Any] | None) -> bool:
     lifecycle rows remain denied even when a caller has the history role.
     """
     meta = metadata or {}
+    current_day = today or date.today()
+    if _token(meta.get("effective_status")) in {"draft", "revoked"}:
+        return False
     if any(
         value not in (None, "") and _date(value) is date.min
         for value in (meta.get("effective_date"), meta.get("expiry_date"))
     ):
         return False
     effective_date = _date(meta.get("effective_date"))
-    if effective_date is not None and effective_date > date.today():
+    if effective_date is not None and effective_date > current_day:
         return False
     expired = _token(meta.get("effective_status")) == "expired"
     expiry = _date(meta.get("expiry_date"))
-    expired = expired or (expiry is not None and expiry < date.today())
+    expired = expired or (expiry is not None and expiry < current_day)
     return (
         _token(meta.get("publication_state")) == "published"
         and _token(meta.get("lifecycle_status")) in _HISTORY_LIFECYCLE_STATES
@@ -102,7 +105,7 @@ def filter_currently_servable(
         document
         for document in (documents or [])
         if is_currently_servable(getattr(document, "metadata", None), today=today)
-        or (allow_history and is_history_servable(getattr(document, "metadata", None)))
+        or (allow_history and is_history_servable(getattr(document, "metadata", None), today=today))
     ]
 
 

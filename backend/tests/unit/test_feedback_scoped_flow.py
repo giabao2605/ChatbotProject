@@ -584,3 +584,48 @@ def test_generation_accepts_only_current_request_attachment(scoped_db):
         assert pin_generation_evidence(docs,access,image_analysis='17 Nm')[0].page_content==docs[0].page_content
         with pytest.raises(PermissionError):
             pin_generation_evidence(docs,access,image_analysis='different image')
+
+
+@pytest.mark.parametrize('kind,content,valid', [
+    ('bang_ke_vat_tu', '| Name | Value |\n| :--- | ---: |\n| approved   content | 12 mm |', True),
+    ('bang_ke_vat_tu', '| Name | Value |\n| --- | --- |\n| fabricated | 12 mm |', False),
+    ('bang_ke_vat_tu', '| --- | --- |', False),
+    ('text', '| Name | Value |\n| --- | --- |\n| approved content | 12 mm |', False),
+])
+def test_table_page_certification(scoped_db, kind, content, valid):
+    engine, actor = scoped_db
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE DocumentPages SET TextExtract='Name Value approved content 12 mm' WHERE DocID=1"))
+    item = {'doc_id':1,'version_no':2,'trang':1,'loai_du_lieu':kind,'text':content}
+    with engine.connect() as conn:
+        if valid:
+            assert pin_generation_sources(conn,[item],actor)[0]['evidence_pin']['page_no'] == 1
+        else:
+            with pytest.raises(PermissionError):
+                pin_generation_sources(conn,[item],actor)
+
+
+@pytest.mark.parametrize('include_valid', [True, False])
+def test_generation_drops_uncertified_chunks(scoped_db, caplog, include_valid):
+    from langchain_core.documents import Document
+    from mech_chatbot.rag.execution import AccessScope
+    from mech_chatbot.services.feedback_service import pin_generation_evidence, EvidenceCertificationError
+    from mech_chatbot.config.repository_runtime import bind_repository_runtime
+    engine, actor = scoped_db
+    access = AccessScope(user_id=9,username='reviewer',roles=frozenset({'reviewer'}),
+        allowed_departments=frozenset({'ENG'}),allowed_sites=frozenset({'HN'}),max_security_level='internal')
+    good = Document(page_content='approved content',metadata={'doc_id':1,'version_no':2,'trang':1,'loai_du_lieu':'text'})
+    bad = Document(page_content='| fabricated |',metadata={'doc_id':1,'version_no':2,'trang':1,'loai_du_lieu':'bang_ke_vat_tu'})
+    docs = [bad, good] if include_valid else [bad]
+    with bind_repository_runtime(db_engine=engine):
+        if include_valid:
+            result = pin_generation_evidence(docs, access)
+            assert len(result) == 1
+            assert result[0].page_content == good.page_content
+            assert 'evidence_pin' in result[0].metadata
+            assert 'evidence_pin' not in good.metadata
+        else:
+            with pytest.raises(EvidenceCertificationError):
+                pin_generation_evidence(docs, access)
+    assert 'doc_id=1' in caplog.text and 'trang=1' in caplog.text and 'bang_ke_vat_tu' in caplog.text
+    assert 'fabricated' not in caplog.text
