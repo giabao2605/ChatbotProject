@@ -452,6 +452,24 @@ def _build_route_decision(
     )
 
 
+def _activate_interpretations(rewrite, state):
+    from mech_chatbot.rag.intent import validated_interpretations
+    from mech_chatbot.rag.entity_resolver import extract_no_code_constraints
+
+    data = rewrite.intent_data
+    queries = validated_interpretations(rewrite.effective_question, data.get("interpretations"))
+    constraints = extract_no_code_constraints(rewrite.effective_question)
+    mechanical = any(data.get(key) for key in ("product_names", "materials", "dimensions", "models"))
+    mechanical = mechanical or any(constraints.get(key) for key in ("quoted_names", "materials", "dimensions", "models"))
+    if (not queries or data.get("base_codes") or rewrite.new_part_ids or mechanical
+            or getattr(state, "explicit_text_intents", ())
+            or getattr(getattr(state, "invocation", None), "task_routing_contract", None)):
+        return rewrite
+    state.explicit_text_intents = tuple(queries)
+    return replace(rewrite, skip_hyde_anchor=True,
+                   intent_data={**data, "interpretations_active": True, "clarification_required": False})
+
+
 def route(prepared: PreparedRequest, state: Any) -> RoutingOutcome:
     """Select a terminal response or produce a typed retrieval decision."""
 
@@ -461,12 +479,15 @@ def route(prepared: PreparedRequest, state: Any) -> RoutingOutcome:
     rewrite = _rewrite_request(prepared, state)
     if rewrite.intent_data.get("history_access_denied"):
         return _history_access_denied_terminal(prepared, state)
-    if rewrite.intent_data.get("clarification_required"):
-        return _missing_version_terminal(prepared, state, missing_context=True)
     if _needs_version_clarification(rewrite):
         return _missing_version_terminal(prepared, state)
     if rewrite.intent_data.get("is_chitchat"):
         return _chitchat_terminal(prepared, setup.mock_stream)
+    rewrite = _activate_interpretations(rewrite, state)
+    if rewrite.intent_data.get("clarification_required"):
+        return _missing_version_terminal(prepared, state, missing_context=True)
+    if rewrite.intent_data.get("interpretations_active"):
+        prepared = replace(prepared, cache_eligible=False)
     exact = _lookup_exact_cache(prepared, state, rewrite.intent_data)
     if exact.terminal is not None:
         return RoutingOutcome(terminal=exact.terminal.terminal, reason_code="exact_cache_hit")

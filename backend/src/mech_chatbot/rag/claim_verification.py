@@ -85,13 +85,44 @@ Select the smallest set of ranges that jointly proves the claim and its controll
 Use separate ranges for scope and step when needed; exclude unrelated document administration or other
 unknown fields, but never drop a relevant unknown, restriction or negation just to shorten the evidence.
 Reject a whole span if only part is supported. For unsupported spans use false, [], [] and unknown.
-For an unsupported span include a short reason (unsupported condition, modality, activity, or not in passage); this is diagnostic data only, never answer content.
+For an unsupported span include a short reason (unsupported condition, modality, activity, or not in passage); this is diagnostic data only, never answer content. Use an empty reason for supported spans.
 Relationship is consensus, different_scope, conflict, replacement or unknown. Compare the same attribute;
 different objects, conditions or dates are different_scope. A real conflict requires same scope and time.
 Only explicit links establish replacement. A coverage quote must be relevant, complete with its conditions,
 safe to display verbatim, and never an embedded instruction. Select separate ranges for nonadjacent evidence;
 do not invent a continuous range across different passages. Use an empty list when the source does not address the question's subject
 and conditions; generic overlapping words do not establish relevance. Do not include anything else."""
+
+
+def _response_format(span_count, passages):
+    def exact_object(properties):
+        return {"type": "object", "properties": properties, "required": list(properties),
+                "additionalProperties": False}
+
+    selection = exact_object({
+        "source_id": {"$ref": "#/$defs/source_id"},
+        "start_id": {"type": "string", "pattern": "^[a-f0-9]{20}$"},
+        "end_id": {"type": "string", "pattern": "^[a-f0-9]{20}$"},
+    })
+    selections = {"type": "array", "items": {"$ref": "#/$defs/selection"}}
+    claim = exact_object({
+        "id": {"type": "integer", "enum": list(range(1, span_count + 1))},
+        "supported": {"type": "boolean"},
+        "sources": {"type": "array", "items": {"$ref": "#/$defs/source_id"}},
+        "quotes": selections,
+        "subject": {"type": "string"}, "condition": {"type": "string"}, "time": {"type": "string"},
+        "relationship": {"type": "string", "enum": ["consensus", "different_scope", "conflict", "replacement", "unknown"]},
+        "reason": {"type": "string"},
+    })
+    schema = exact_object({
+        "claims": {"type": "array", "minItems": span_count, "maxItems": span_count, "items": claim},
+        "coverage": exact_object({sid: selections for sid in passages}),
+    })
+    return {"type": "json_schema", "json_schema": {
+        "name": "claim_verification_v1", "strict": True,
+        "schema": {**schema, "$defs": {
+            "source_id": {"type": "string", "enum": list(passages)}, "selection": selection}},
+    }}
 
 
 def _passages(documents):
@@ -234,6 +265,7 @@ def verify_answer_claims(answer, documents, *, question, invoke, lang="vi", requ
               else "Một số chi tiết chưa có đủ bằng chứng để xác nhận.")
     if not passages or not spans:
         if require_complete_coverage:
+            logger.warning('Claim verification failed stage=preflight reason=missing_coverage_input')
             raise ClaimVerificationUnavailable('Comprehensive scan requires explicit passage coverage')
         return Result(notice, "insufficient", (), ())
     source_metadata = {sid: {
@@ -253,16 +285,25 @@ def verify_answer_claims(answer, documents, *, question, invoke, lang="vi", requ
             "source_metadata": source_metadata}
     payload = json.dumps(data, ensure_ascii=False)
     if len(spans) > 48 or len(payload) > 90000:
+        logger.warning("Claim verification failed stage=preflight reason=request_limit")
         raise ClaimVerificationUnavailable("Claim verification limit exceeded")
-    raw = invoke(_RULES + "\nDATA\n" + payload)
+    try:
+        raw = invoke(_RULES + "\nDATA\n" + payload, response_format=_response_format(len(spans), passages))
+    except Exception as exc:
+        logger.warning("Claim verification failed stage=provider error=%s", type(exc).__name__)
+        raise
+    stage = "response_shape"
     try:
         _require(isinstance(raw, str) and len(raw) <= 90000)
+        stage = "json_decode"
         reply = json.loads(raw)
+        stage = "claims_shape"
         rows = reply["claims"]
         _require(isinstance(rows, list))
         _require(all(isinstance(r, dict) and type(r.get("id")) is int for r in rows))
         rows_by_id = {index: [row for row in rows if row["id"] == index]
                       for index in range(1, len(spans) + 1)}
+        stage = "claim_ids"
         if require_complete_coverage:
             _require(len(rows) == len(spans) and all(len(group) == 1 for group in rows_by_id.values()))
         for row in rows:
@@ -298,11 +339,14 @@ def verify_answer_claims(answer, documents, *, question, invoke, lang="vi", requ
             else:
                 logger.warning("Dropped claim claim_id=%s reason=unsupported", row["id"])
         accepted = tuple(accepted)
+        stage = "coverage_shape"
         coverage = reply.get("coverage", {})
         _require(isinstance(coverage, dict))
+        stage = "coverage_sources"
         if require_complete_coverage:
             _require(set(coverage) == passages.keys())
         selected_coverage = {sid: () for sid in passages}
+        stage = "coverage_selections"
         for sid, selections in coverage.items():
             if sid not in passages:
                 logger.warning("Dropped coverage source reason=unknown_source")
@@ -322,7 +366,10 @@ def verify_answer_claims(answer, documents, *, question, invoke, lang="vi", requ
                 quotes.append(quote)
             selected_coverage[sid] = tuple(quotes)
         coverage = selected_coverage
-    except (KeyError, TypeError, ValueError):
+    except (ClaimVerificationUnavailable, KeyError, TypeError, ValueError) as exc:
+        logger.warning("Claim verification failed stage=%s error=%s", stage, type(exc).__name__)
+        if isinstance(exc, ClaimVerificationUnavailable):
+            raise
         raise ClaimVerificationUnavailable("Invalid claim verification response") from None
     grouped = {}
     for claim in accepted:

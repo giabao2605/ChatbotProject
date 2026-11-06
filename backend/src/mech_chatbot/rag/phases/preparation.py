@@ -279,6 +279,8 @@ def _exact_cache_terminal(
 
 
 def _intent_overflow_terminal(context: _PreparationContext, state: Any) -> PreparationOutcome | None:
+    if not getattr(state.invocation, "task_routing_contract", None):
+        return None
     from mech_chatbot.rag.query_decomposition import query_decomposition_requested
     if not query_decomposition_requested(state):
         return None
@@ -449,8 +451,6 @@ def prepare(state: Any) -> PreparationOutcome:
     overflow_terminal = _intent_overflow_terminal(context, state)
     if overflow_terminal is not None:
         return overflow_terminal
-
-
     referent_terminal = _missing_referent_terminal(context, state)
     if referent_terminal is not None:
         return referent_terminal

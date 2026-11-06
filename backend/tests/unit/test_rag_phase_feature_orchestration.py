@@ -241,19 +241,17 @@ def test_executor_runs_complex_decomposition_with_typed_branch_handoffs(monkeypa
         "Tổng BOM P-1": True,
         "phiên bản P-2": False,
     }
-    assert provider_calls == []
+    assert [call["surface"] for call in provider_calls] == ["query_decomposition"]
     assert len(outcome.decomposition_branches) == 2
-    assert outcome.decomposition_used_fallback is True
+    assert outcome.decomposition_used_fallback is False
     assert outcome.documents
     assert outcome.reason_code == "retrieved"
     usage = outcome.decomposition_usage
     assert usage["schema"] == "rag-decomposition-usage-v1"
-    assert usage["planner"] == {
-        "calls": 0,
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "estimated_cost": 0.0,
-    }
+    assert usage["planner"]["calls"] == 1
+    assert usage["planner"]["input_tokens"] > 0
+    assert usage["planner"]["output_tokens"] > 0
+    assert usage["planner"]["estimated_cost"] > 0
     assert [branch["branch_id"] for branch in usage["branches"]] == [
         "branch-1",
         "branch-2",
@@ -379,7 +377,7 @@ def test_query_decomposition_batches_shared_qdrant_reads(monkeypatch):
     )
 
 
-@pytest.mark.parametrize('provider_result', ['{}', 'invalid JSON', 'timeout', 'overflow'])
+@pytest.mark.parametrize('provider_result', ['overflow'])
 def test_unresolved_intents_stop_after_one_planner_without_retrieval_or_enrichment(monkeypatch, provider_result):
     from mech_chatbot.rag import pipeline
     from mech_chatbot.rag.phases import retrieval as retrieval_phase, retrieval_enrichment
@@ -407,7 +405,7 @@ def test_unresolved_intents_stop_after_one_planner_without_retrieval_or_enrichme
     assert outcome.prepared.diagnostics['decomposition_intent_overflow'] is (provider_result == 'overflow')
 
 
-def test_query_overflow_has_no_planner_retrieval_hyde_or_fictitious_branches():
+def test_query_overflow_requires_planner_but_no_retrieval_hyde_or_fictitious_branches():
     from mech_chatbot.rag.phases import retrieval as retrieval_phase
 
     request = _prepared_request(question="Tìm BOM; tìm vật liệu; tìm dung sai; tìm bước hàn")
@@ -420,9 +418,11 @@ def test_query_overflow_has_no_planner_retrieval_hyde_or_fictitious_branches():
             query_decomposition_enabled=True,
             hyde_enabled=True,
         ),
-        provider=SimpleNamespace(invoke=lambda *_args, **_: calls.append("provider")),
+        provider=SimpleNamespace(invoke=lambda *_args, **_: (
+            calls.append("provider") or SimpleNamespace(content=json.dumps({
+                "subqueries": ["Tìm BOM", "tìm vật liệu", "tìm dung sai", "tìm bước hàn"]})))),
     )
-    assert calls == []
+    assert calls == ["provider"]
     assert outcome.reason_code == "intent_overflow"
     assert outcome.decomposition_intent_overflow is True
     assert len(outcome.decomposition_intents) == 4
@@ -430,6 +430,30 @@ def test_query_overflow_has_no_planner_retrieval_hyde_or_fictitious_branches():
     assert outcome.documents == ()
     assert outcome.lookup_documents == ()
     assert "tối đa ba ý" in outcome.decomposition_notice
+
+
+@pytest.mark.parametrize('provider_result', ['{}', 'invalid JSON', 'timeout'])
+def test_planner_unavailable_retrieves_the_whole_original_question(monkeypatch, provider_result):
+    from mech_chatbot.rag.phases import retrieval as retrieval_phase
+
+    question = 'Nghỉ phép được bao lâu, mua hàng thực hiện thế nào, bảo trì do ai phụ trách, hỗ trợ hệ thống gửi ở đâu?'
+    decision = _route_decision(_prepared_request(question=question), part_ids=())
+    calls, queries = [], []
+    def invoke(*_args, **kwargs):
+        calls.append(kwargs['surface'])
+        if provider_result == 'timeout':
+            raise TimeoutError('planner unavailable')
+        return SimpleNamespace(content=provider_result)
+    monkeypatch.setattr(retrieval_phase, 'tokenize_cached', lambda value: value)
+    outcome = _run_phase(lambda state: retrieval_phase.retrieve_primary(decision, state),
+        retrieval=_retrieval_adapter(retrieve=lambda **kwargs: (
+            queries.append(kwargs['query_to_search']) or ([], 5, 'general', time.time(), None)),
+            query_decomposition_enabled=True), provider=SimpleNamespace(invoke=invoke))
+    assert calls == ['query_decomposition']
+    assert queries == [question]
+    assert not outcome.decomposition_intent_overflow
+    assert outcome.reason_code == 'retrieved'
+    assert outcome.decomposition_used_fallback
 
 
 def test_decomposition_scopes_only_router_validated_branch_codes(
@@ -507,7 +531,7 @@ def test_decomposition_scopes_only_router_validated_branch_codes(
         provider=SimpleNamespace(
             invoke=lambda *_args, **_kwargs: SimpleNamespace(
                 content=(
-                    '{"subqueries":["Giá trị CRAG-EVAL-NUM-001",'
+                    '{"subqueries":["Giá trị CRAG-EVAL-NUM-001 là bao nhiêu",'
                     '"mắt cú xanh kiểm tra theo chu kỳ nào",'
                     '"quy trình lắp CRAG-EVAL-PART-C"]}'
                 )
@@ -604,7 +628,7 @@ def test_decomposition_branch_filter_preserves_rbac_when_part_filter_is_not_last
         ),
         provider=SimpleNamespace(
             invoke=lambda *_args, **_kwargs: SimpleNamespace(
-                content='{"subqueries":["mắt cú xanh","CRAG-EVAL-NUM-001"]}'
+                content='{"subqueries":["Mắt cú xanh","CRAG-EVAL-NUM-001"]}'
             )
         ),
     )

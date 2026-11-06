@@ -78,7 +78,7 @@ def build_intent_runtime(
     """Create an explicit process-lifecycle dependency."""
     owned = executor is None
     active_executor = (
-        executor if executor is not None else ThreadPoolExecutor(max_workers=max_workers)
+        executor if executor is not None else ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="rag_intent")
     )
     return IntentRuntime(
         executor=active_executor,
@@ -215,6 +215,39 @@ def deterministic_business_document_intent(question):
     }
 
 
+def validated_interpretations(question, values):
+    """Keep bounded paraphrases without new identifiers or scoped constraints."""
+    from mech_chatbot.rag.query_decomposition import codes_in_query
+
+    if not isinstance(values, (list, tuple)):
+        return []
+    original = _fold_text(question)
+    allowed_codes = set(codes_in_query(question))
+    allowed_numbers = set(re.findall(r"\d+(?:[.,]\d+)*", original))
+    scope = re.compile(r"\b(?:phong ban|bo phan|phong|department|site|chi nhanh|nha may|co so|"
+                       r"phien ban|version|revision|rev)\s+[^,;?.]+")
+    original_words = set(re.findall(r"\w+", original))
+    accepted = []
+    for value in values:
+        if (not isinstance(value, str) or not value.strip() or len(value) > 500
+                or "\n" in value or "\r" in value):
+            continue
+        query = value.strip()
+        folded = _fold_text(query)
+        if (not set(codes_in_query(query)).issubset(allowed_codes)
+                or not set(re.findall(r"\d+(?:[.,]\d+)*", folded)).issubset(allowed_numbers)
+                or any(part not in original for part in scope.findall(folded))
+                or any(_fold_text(word) not in original_words
+                       for word in re.findall(r"\w+", query)[1:] if word[0].isupper())
+                or not _rewrite_preserves_request_constraints(question, query)):
+            continue
+        if folded not in {_fold_text(item) for item in accepted}:
+            accepted.append(query)
+        if len(accepted) == 3:
+            break
+    return accepted if len(accepted) >= 2 else []
+
+
 def extract_search_intent(question, current_part_ids=None, user_department=None, user_roles=None, allowed_departments=None, max_security_level=None, allowed_sites=None, force_part_ids=False, trace_id=None, invoke_provider=None, runtime=None, provider_question=None):
     """Phan tich cau hoi de lay danh sach ma doi tuong va intent versioning bang LLM (co timeout)."""
     if current_part_ids is None:
@@ -246,6 +279,13 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
     9. "models": Mang model/variant neu user nhac (vd: ["Model7"]). Neu khong co, tra ve [].
     10. "query_scope": mot trong "single_candidate" (hoi 1 san pham cu the), "compare_candidates" (hoi nhieu/so sanh/tat ca model), "general_policy" (hoi quy trinh/tieu chuan chung khong gan tai lieu cu the).
     11. "need_disambiguation": true neu can hoi lai de chon dung tai lieu, nguoc lai false.
+    12. "interpretations": [] neu cau hoi ro nghia; neu that su co nhieu cach hieu,
+    tra 2-3 truy van ngan dien giai nhung cach hieu chinh. Vi du "nghi" co the la
+    nghi phep nam, nghi viec rieng, thoi viec; "thiet bi nay" khong co doi tuong
+    ro rang co the hoi ve su dung hoac bao tri thiet bi noi chung. Khong tu chon
+    mot cach hieu. Chi dien giai cau goc, giu dieu kien va yeu cau trinh bay;
+    khong them ma tai lieu, phien ban, phong ban, site, dia diem hay con so.
+    Khong tao interpretations de chon model co khi hoac thay doi version_policy.
 
     Quy tac quan trong: Neu user KHONG dua ma ban ve nhung co ten san pham, vat lieu,
     hoac kich thuoc, hay trich xuat vao product_names/materials/dimensions/models.
@@ -255,6 +295,7 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
     """
  
     intent_data = {
+        "interpretations": [],
         "base_codes": [],
         "detected_versions": [],
         "variant_codes": [],
@@ -300,6 +341,7 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
                               "include_archived", "version_history", "all_current_variants"):
                 raise ValueError("invalid version policy")
             candidate = dict(intent_data)
+            candidate["interpretations"] = validated_interpretations(prompt_question, parsed.get("interpretations", []))
             candidate["base_codes"] = [str(c) for c in parsed.get("base_codes", []) if c]
             
             # Xy ly parse int an toan

@@ -518,8 +518,8 @@ def test_technical_route_exposes_one_request_local_embedding_cache(
     assert calls == ["same query"]
 
 
-def test_unresolved_reference_stops_before_search_intent(steps, monkeypatch):
-    monkeypatch.setattr(steps, 'extract_search_intent', lambda *_a, **_kw: pytest.fail('No search for unresolved reference'))
+def test_unresolved_reference_clarifies_when_intent_has_no_interpretations(steps, monkeypatch):
+    monkeypatch.setattr(steps, 'extract_search_intent', lambda *_a, **_kw: (None, None, [], False, False, {}))
     result = steps._rewrite_and_anchor(
         user_question='Quy trình đó thế nào?', chat_history=[], current_part_ids=[],
         conversation_context=None, user_department='HR', user_roles=['viewer'],
@@ -910,3 +910,44 @@ def test_batch_retrieval_honors_request_cancellation_before_qdrant(
             (request,), vectorstore=vectorstore, client=client, collection_name="fixture",
         )
     assert calls == (["dense_embedding"] if cancel_after_embedding else [])
+
+
+@pytest.mark.parametrize('history,context', [
+    ([{'role':'user','content':'Tôi muốn hỏi tài liệu trước.'}], None),
+    ([], {'active_doc_refs':['P-1']}),
+    ([], {'pending_candidates':[{'key':'candidate-one'}]}),
+    ([], {'history_summary':'Chủ đề trước đó'}),
+])
+def test_contextful_clarification_stops_before_search_intent(steps, monkeypatch, history, context):
+    monkeypatch.setattr(steps, 'analyze_context', lambda *args, **kwargs:
+        {'context_action':'continue', 'standalone_question':'Quy trình đó thế nào?',
+         'llm_resolved':False, 'clarification_required':True})
+    monkeypatch.setattr(steps, 'extract_search_intent', lambda *args, **kwargs:
+        pytest.fail('Context clarification must not be overridden by question-only intent'))
+    result = steps._rewrite_and_anchor(
+        user_question='Quy trình đó thế nào?', chat_history=history, current_part_ids=[],
+        conversation_context=context, user_department='HR', user_roles=['viewer'],
+        allowed_departments=['HR'], max_security_level='internal', allowed_sites=[],
+        trace_id='context-clarification', t_intent=time.time(),
+        runtime=SimpleNamespace(conversation_state_enabled=False, strict_site_filter=True, intent_runtime=None))
+    assert result[4] == {'clarification_required':True}
+
+
+def test_context_free_clarification_still_allows_intent_interpretations(steps, monkeypatch):
+    queries = ['Quy trình tiếp nhận thế nào?', 'Quy trình xử lý thế nào?']
+    calls = []
+    monkeypatch.setattr(steps, 'analyze_context', lambda *args, **kwargs:
+        {'context_action':'continue', 'standalone_question':'Quy trình thế nào?',
+         'llm_resolved':False, 'clarification_required':True})
+    def extract(*args, **kwargs):
+        calls.append(args[0])
+        return None, None, [], False, False, {'interpretations':queries}
+    monkeypatch.setattr(steps, 'extract_search_intent', extract)
+    result = steps._rewrite_and_anchor(
+        user_question='Quy trình thế nào?', chat_history=[], current_part_ids=[],
+        conversation_context=None, user_department='HR', user_roles=['viewer'],
+        allowed_departments=['HR'], max_security_level='internal', allowed_sites=[],
+        trace_id='context-free-interpretation', t_intent=time.time(),
+        runtime=SimpleNamespace(conversation_state_enabled=False, strict_site_filter=True, intent_runtime=None))
+    assert calls == ['Quy trình thế nào?']
+    assert result[4]['interpretations'] == queries

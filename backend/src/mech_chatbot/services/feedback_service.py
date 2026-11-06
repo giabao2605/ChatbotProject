@@ -25,14 +25,17 @@ class EvidenceCertificationError(PermissionError):
 def pin_generation_evidence(documents, actor, *, checkpoint=None, deadline=None, image_analysis=None, allow_history=False):
     from copy import copy
     from dataclasses import asdict
-    from mech_chatbot.db.repositories.feedback_access import access_transaction, pin_generation_sources
+    from mech_chatbot.db.repositories.feedback_access import access_transaction, generation_source_pinner
     from mech_chatbot.application.feedback_access import effective_actor
     if not actor.user_id or not actor.username:
         return documents
     with access_transaction(asdict(actor),schema=False,review=False,checkpoint=checkpoint,deadline=deadline) as (conn,current):
         effective = effective_actor(current,asdict(actor))
         result = []
+        certify = generation_source_pinner(conn, effective, allow_history=allow_history)
         for document in documents:
+            if checkpoint is not None:
+                checkpoint("evidence_certification")
             metadata = {key:value for key,value in document.metadata.items() if key != 'evidence_pin'}
             # Retrieval page numbers may be strings; pin and history must share the same integer locator.
             for key in ('trang', 'page_no', 'trang_so'):
@@ -46,8 +49,7 @@ def pin_generation_evidence(documents, actor, *, checkpoint=None, deadline=None,
                 result.append(copy(document))
                 continue
             try:
-                pinned = pin_generation_sources(conn,[{**metadata,'text':metadata.get('noi_dung_goc') or document.page_content}],effective,
-                    allow_history=allow_history)[0]
+                pinned = certify({**metadata,'text':metadata.get('noi_dung_goc') or document.page_content})
                 metadata = {**metadata,**({'evidence_pin':pinned['evidence_pin']} if 'evidence_pin' in pinned else {})}
             except PermissionError:
                 logger.warning(

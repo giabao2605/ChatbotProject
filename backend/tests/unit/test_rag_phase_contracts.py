@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from mech_chatbot.rag.execution import AccessScope
 
 from langchain_core.documents import Document
 
@@ -53,6 +54,7 @@ def test_rerank_phase_passes_bootstrap_client_to_late_interaction(monkeypatch):
         user_department="Technical",
         user_roles=("viewer",),
         started_at=0.0,
+        image_analysis=None,
     )
     decision = SimpleNamespace(
         request=request,
@@ -71,6 +73,9 @@ def test_rerank_phase_passes_bootstrap_client_to_late_interaction(monkeypatch):
     )
 
     state = SimpleNamespace(
+        checkpoint=lambda _stage: None,
+        request=SimpleNamespace(access=AccessScope()),
+        budget=SimpleNamespace(deadline_monotonic=None),
         retrieval_adapter=SimpleNamespace(
             client=client,
             collection_name="test-knowledge",
@@ -114,6 +119,7 @@ def test_rerank_empty_context_keeps_typed_terminal_with_active_filter(monkeypatc
         user_department="Technical",
         user_roles=("viewer",),
         started_at=0.0,
+        image_analysis=None,
     )
     decision = SimpleNamespace(
         request=request,
@@ -133,6 +139,9 @@ def test_rerank_empty_context_keeps_typed_terminal_with_active_filter(monkeypatc
     )
     refused = []
     state = SimpleNamespace(
+        checkpoint=lambda _stage: None,
+        request=SimpleNamespace(access=AccessScope()),
+        budget=SimpleNamespace(deadline_monotonic=None),
         refuse=refused.append,
         prepared=lambda values: values,
         retrieval_adapter=SimpleNamespace(

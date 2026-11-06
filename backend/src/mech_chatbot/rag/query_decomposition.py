@@ -344,8 +344,7 @@ def _fixed_task_guard(state):
         from mech_chatbot.rag.candidate_task_routing import candidate_task_guard
         return candidate_task_guard(state)
     if not state.invocation.task_routing_contract:
-        plan = compile_query_plan(state.request.question, {})
-        reason = 'intent_overflow' if plan.intent_overflow else 'task_clarification' if plan.clarification_required else None
+        return None
     else:
         reason = None
         origin, disposition, slots, tasks = 'prevalidation', 'invalid', (), ()
@@ -384,8 +383,6 @@ def _fixed_task_guard(state):
     if reason:
         state.refuse(reason)
         notice = intent_overflow_notice(split_query_intents(state.request.question)[0]) if reason == 'intent_overflow' else TASK_CLARIFICATION
-        if not state.invocation.task_routing_contract and reason == 'task_clarification':
-            notice = intent_overflow_notice(plan.intents, uncertain=True)
         diagnostics = {'answer_outcome': 'refused'}
         if not state.invocation.task_routing_contract and state.request.scope_comparison:
             diagnostics['decomposition_intent_overflow'] = reason == 'intent_overflow'
@@ -401,7 +398,8 @@ def fixed_task_outputs(state):
 
 
 def query_decomposition_requested(state):
-    return bool(getattr(state.request,'text_query',False)
+    return bool(getattr(state, 'explicit_text_intents', ())
+                or getattr(state.request,'text_query',False)
                 or getattr(state.retrieval_adapter,'query_decomposition_enabled',False))
 
 
@@ -593,17 +591,6 @@ def intent_overflow_notice(intents=(), *, uncertain=False) -> str:
         f"{index}. {intent}" for index, intent in enumerate(intents, 1)) if intents else "")
 
 
-def _unresolved_intent_candidates(question):
-    scoped = _DOCUMENT_SCOPE_PREFIX.match(question)
-    body = scoped.group('body') if scoped else question
-    parts = tuple(part.strip() for part in _INTENT_SEPARATOR.split(body) if part.strip())
-    if parts and _CONTEXT_PREFIX.match(parts[0]) and not _INDEPENDENT_REQUEST.search(parts[0]):
-        parts = parts[1:]
-    if _SHARED_CONFIRMATION.search(body) and not any(_INDEPENDENT_REQUEST.search(part) for part in parts[:-1]):
-        return (question,)
-    return parts
-
-
 def _semantic_requirements_covered(question, queries):
     scoped = _DOCUMENT_SCOPE_PREFIX.match(question)
     body = scoped.group('body') if scoped else question
@@ -655,6 +642,14 @@ def codes_in_query(question: str) -> tuple[str, ...]:
     )))
 
 
+def independent_query_intents(intents: tuple[str, ...]) -> bool:
+    """Only complete bounded requests can bypass the semantic planner."""
+    def independent(query):
+        scoped = _DOCUMENT_SCOPE_PREFIX.match(query)
+        return bool(_INDEPENDENT_REQUEST.search(scoped.group("body") if scoped else query))
+    return 1 < len(intents) <= 3 and all(independent(query) for query in intents)
+
+
 def compile_query_plan(
     question: str,
     access_context,
@@ -666,20 +661,17 @@ def compile_query_plan(
     original = str(question or "").strip()
     if not is_complex_query(original):
         return BranchPlan(original, False, (), planner_version)
-    intents, overflow = split_query_intents(original)
-    if overflow:
-        return BranchPlan(
-            original, True, (), planner_version, intents,
-            (False,) * len(intents), False, True,
-        )
-    payload = {}
-    if planner is not None:
-        try:
-            payload = planner(original) or {}
-        except (ExternalAICallCancelled, RequestBudgetExceeded):
-            raise
-        except Exception:
-            payload = {}
+    intents, _ = split_query_intents(original)
+    if planner is None:
+        queries = intents if independent_query_intents(intents) else (original,)
+        return BranchPlan(original, True, queries, planner_version, queries,
+                          (True,) * len(queries), True)
+    try:
+        payload = planner(original) or {}
+    except (ExternalAICallCancelled, RequestBudgetExceeded):
+        raise
+    except Exception:
+        payload = {}
     proposed = payload.get("subqueries", ()) if isinstance(payload, dict) else ()
     if not isinstance(proposed, (list, tuple)):
         proposed = ()
@@ -707,33 +699,25 @@ def compile_query_plan(
             return BranchPlan(original, True, (), planner_version,
                               (original,), (False,), False, True)
     proposed_queries = tuple(accepted)
-    if len(proposed_queries) > 3 and intents == (original,):
+    if len(proposed_queries) > 3:
         return BranchPlan(original, True, (), planner_version, proposed_queries,
                           (False,) * len(proposed_queries), False, True)
     proposed_coverage = _coverage(intents, proposed_queries)
     planner_complete = bool(
         proposed_queries
         and len(proposed_queries) <= 3
-        and len(proposed_queries) >= len(intents)
         and all(proposed_coverage)
         and (intents != (original,) or _semantic_requirements_covered(original, proposed_queries))
     )
-    candidates = _unresolved_intent_candidates(original) if intents == (original,) else ()
-    proposed_count = sum(len(_unresolved_intent_candidates(query)) for query in proposed_queries)
-    if len(candidates) > 3 and (not planner_complete or proposed_count > 3):
-        return BranchPlan(original, True, (), planner_version, candidates,
-                          (False,) * len(candidates), True, False, clarification_required=True)
-    final_queries = proposed_queries if planner_complete else intents
-    final_coverage = _coverage(intents, final_queries)
+    final_queries = proposed_queries if planner_complete else (original,)
     return BranchPlan(
         original_query=original,
         is_complex=True,
         subqueries=final_queries,
         planner_version=planner_version,
-        intents=intents,
-        intent_coverage=final_coverage,
+        intents=intents if planner_complete else (original,),
+        intent_coverage=proposed_coverage if planner_complete else (True,),
         used_fallback=not planner_complete,
-        intent_overflow=overflow,
     )
 
 

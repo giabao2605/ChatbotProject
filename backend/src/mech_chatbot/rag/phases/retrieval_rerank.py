@@ -458,6 +458,24 @@ def rerank_retrieval(
     community_docs = refresh_applicable_sources(community_docs, user_question)
 
     if retrieved_docs:
+        from mech_chatbot.services.feedback_service import pin_generation_evidence, EvidenceCertificationError
+        from mech_chatbot.auth.authorization import role_allows
+        allow_history = intent_data.get("version_policy") in {
+            "specific_version", "compare_versions", "include_archived", "version_history",
+        } and role_allows(request.user_roles, "document_history_reader")
+        state.checkpoint("pre_rerank_certification")
+        started = time.perf_counter()
+        input_count = len(retrieved_docs)
+        try:
+            retrieved_docs = pin_generation_evidence(retrieved_docs, state.request.access,
+                checkpoint=state.checkpoint, deadline=state.budget.deadline_monotonic,
+                image_analysis=request.image_analysis, allow_history=allow_history)
+        except EvidenceCertificationError:
+            retrieved_docs = []
+        log_trace("pre_rerank_certification", trace_id, input_docs=input_count,
+                  output_docs=len(retrieved_docs), latency_ms=round((time.perf_counter()-started)*1000, 2))
+        if not retrieved_docs:
+            return _empty_context_terminal(decision, enrichment, state, new_part_ids)
         fake_docs, real_docs = _prepare_candidates(
             retrieved_docs,
             intent_data,

@@ -153,7 +153,7 @@ def _allow_history(context: _RetrievalContext) -> bool:
 
 
 def _compile_plan(context: _RetrievalContext, state: Any, access_context: Any) -> _PlannerResult:
-    from mech_chatbot.rag.query_decomposition import BranchPlan, compile_query_plan
+    from mech_chatbot.rag.query_decomposition import BranchPlan, compile_query_plan, independent_query_intents
 
     if state.explicit_text_intents:
         intents=state.explicit_text_intents
@@ -171,10 +171,8 @@ def _compile_plan(context: _RetrievalContext, state: Any, access_context: Any) -
         ),
     )
     if (
-        deterministic_plan.intent_overflow
-        or (len(deterministic_plan.subqueries) > 1
-        and not deterministic_plan.intent_overflow
-        and all(deterministic_plan.intent_coverage))
+        independent_query_intents(deterministic_plan.subqueries)
+        and all(deterministic_plan.intent_coverage)
     ):
         return _PlannerResult(deterministic_plan, 0, 0, 0.0)
 
@@ -189,6 +187,8 @@ def _compile_plan(context: _RetrievalContext, state: Any, access_context: Any) -
         prompt = (
             "Tach cau hoi noi bo thanh cac yeu cau doc lap, toi da 8 de nhan dien vuot gioi han. "
             "Khong dem loi gioi thieu, dieu kien hay danh sach cung mot vi ngu thanh yeu cau rieng. "
+            "Yeu cau trinh bay (neu nguon, nam ban hanh, ky thuc hien) khong phai yeu cau rieng. "
+            "Loi mo dau ve pham vi, thoi gian va dia diem phai giu trong moi truy van con. "
             "Moi truy van phai giu chu de va dieu kien chung cua cau goc. Khong bo bat ky yeu cau nao; "
             "neu khong tach chac chan, tra mot truy van giu nguyen toan bo cau hoi. "
             "Giu nguyen thu tu cac y trong cau hoi goc. "
