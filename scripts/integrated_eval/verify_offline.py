@@ -29,10 +29,10 @@ def verify(matrix_path, output):
     ).strip()
     command = [
         sys.executable, "-m", "pytest",
-        "backend/tests/unit/test_integrated_hardening.py",
-        "backend/tests/unit/test_semantic_cache_stream_lifecycle.py",
-        "backend/tests/unit/test_strict_stream_guard.py",
-        "backend/tests/unit/test_rollout_guardrails.py", "-q",
+        "backend/tests/unit/evaluation/test_integrated_hardening.py",
+        "backend/tests/unit/rag/test_semantic_cache_stream_lifecycle.py",
+        "backend/tests/unit/rag/test_strict_stream_guard.py",
+        "backend/tests/unit/governance/test_rollout_guardrails.py", "-q",
     ]
     result = subprocess.run(
         command, cwd=ROOT, check=False, capture_output=True, text=True

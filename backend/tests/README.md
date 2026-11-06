@@ -31,20 +31,29 @@ pytest -m unit --cov=mech_chatbot --cov-report=term-missing
 ## Cau truc
 ```
 backend/tests/
-  conftest.py                 # them repo, backend va backend/src vao path, fixtures, skip theo env
-  _helpers/rbac_matrix.py      # ma tran phan quyen KY VONG (nguon su that)
-  unit/                        # logic thuan, chay nhanh
-    test_sensitive_scanner.py  #  CHAY NGAY (chi dung re)
-    test_text_utils.py         #  CHAY NGAY (chi dung unicodedata)
-    test_security_filter.py    #  importorskip qdrant_client
-    test_rbac_filter.py        #  importorskip qdrant_client
-  integration/                 # can SQL Server / Qdrant that
-    test_db_repository.py
-    test_sql_qdrant_consistency.py
-  eval/                        # can RAG server
-    test_golden_questions.py
-  golden_questions.json        # (san co) bo cau hoi vang
+  conftest.py            # them repo, backend va backend/src vao path, fixtures, skip theo env
+  _helpers/              # ma tran phan quyen KY VONG (nguon su that)
+  architecture/          # kiem quy tac phu thuoc giua cac tang
+  fixtures/              # stub va script ho tro dung chung
+  diagnostics/           # cong cu do baseline information-first (khong phai test)
+  unit/                  # logic thuan, chay nhanh, chia theo module duoc test
+    rag/                 #  mech_chatbot.rag, llm: truy hoi, sinh, xac minh
+    db/                  #  repository, SQL, lich su chat
+    api/                 #  app/rag server, auth, file duoc bao ve
+    ingestion/           #  PDF, xlsx, chunking, worker nap file
+    services/            #  domain, application, adapters, services
+    governance/          #  kich hoat tinh nang, rollout theo dot phong ban
+    evaluation/          #  bo danh gia, gate pilot, scripts/eval
+    ops/                 #  scripts/ops, Windows service, backup/restore, migration
+    runtime/             #  config, composition, worker runtime
+  integration/           # can SQL Server / Qdrant that
+  eval/                  # can RAG server
+  golden_questions.json  # bo cau hoi vang
 ```
+
+Them test moi vao thu muc con cua module ma no kiem. Dat ten theo tinh nang,
+khong theo dot lam viec (khong dung tien to `wave`/`gd`/`phase`). Import helper
+tu file test khac bang duong dan tuyet doi, vd `from tests.unit.db.test_x import y`.
 
 ## Quy uoc marker
 | Marker | Y nghia | Khi nao chay |

@@ -41,11 +41,11 @@ Bàn giao từ Codex ngày 2026-11-03. Nguồn: `~/.codex/memories_v2/`, phiên 
 ## Việc khác còn treo
 
 - (Đã phát hành 03/11 trong `1c0a353`) Public-web QA 31/10: 12 lỗi, bản sửa ở worktree `.codex\worktrees\public-web-qa-fixes` (nhánh `codex/public-web-qa-fixes`), chưa commit/deploy. Còn kiểm tessdata dưới identity worker thật.
-- Nhiều worktree cũ dưới `.codex\worktrees\` và `.local\worktrees\`; chỉ dọn khi người dùng yêu cầu.
+- Worktree cũ dưới `.codex\worktrees\`: chỉ dọn khi người dùng yêu cầu. Bộ phát hành dùng file trong `repo-restructure` và `repo-safe-cleanup`, không được xóa. `.local\worktrees\` đã dọn ngày 06/11; worktree mới đặt dưới `.codex\worktrees\`.
 
 ## Lệnh
 
-- Python env: `chat_env\Scripts\python.exe` (Windows). Test focused: `chat_env/Scripts/pytest.exe -q backend/tests/unit/<file>.py`.
+- Python env: `chat_env\Scripts\python.exe` (Windows). Test focused: `chat_env/Scripts/pytest.exe -q backend/tests/unit/<nhom>/<file>.py` (nhóm: rag, db, api, ingestion, services, governance, evaluation, ops, runtime).
 - Frontend (`frontend/`): `npm test`, `npm run build` (vue-tsc + Vite).
 - Launcher: `run_server.py` (RAG API), `run_worker.py` (ingestion worker). Vận hành service: `docs/windows-service-operations.md`.
 - Layout: `backend/src/mech_chatbot` (rag/, api/, db/), `backend/tests`, `frontend/` (Vue), `database/migrations` (V00xx), `scripts/`.

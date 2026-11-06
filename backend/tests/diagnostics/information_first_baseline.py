@@ -23,7 +23,7 @@ import pytest
 from langchain_core.documents import Document
 from langchain_core.runnables import RunnableLambda
 
-from tests.unit.test_rag_pipeline_public_characterization import (
+from tests.unit.rag.test_rag_pipeline_public_characterization import (
     offline_pipeline, _run, _answer, _trace_events,
 )
 

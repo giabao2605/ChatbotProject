@@ -1,0 +1,948 @@
+from contextlib import contextmanager
+from decimal import Decimal
+import importlib.util
+import json
+from pathlib import Path
+import sys
+import threading
+import time
+from types import ModuleType, SimpleNamespace
+
+import pytest
+
+from mech_chatbot.llm.external_ai import ExternalAICallCancelled, ExternalProcessingDenied
+from mech_chatbot.rag.grounded_math import (
+    CalculationPlan,
+    GroundedFact,
+    derive_claim,
+    make_calculation_provenance,
+)
+from mech_chatbot.rag.execution import (
+    AccessScope,
+    DefaultRagExecutor,
+    RagCompleted,
+    RagInvocation,
+    RagRequest,
+    RagToken,
+    RequestBudgetExceeded,
+    RequestBudgetLedger,
+    RequestBudgetLimits,
+)
+
+
+pytestmark = pytest.mark.unit
+
+
+PIPELINE_STEPS = Path(__file__).resolve().parents[4] / "backend" / "src" / "mech_chatbot" / "rag" / "pipeline_steps.py"
+_MISSING = object()
+
+
+def _load_pipeline_steps_without_rag_bootstrap(monkeypatch):
+    """Load the generation function with a tiny bootstrap stub, not real models."""
+    bootstrap = ModuleType("mech_chatbot.rag.bootstrap")
+    bootstrap.STRICT_ANSWER_MODE = True
+    bootstrap.vectorstore = object()
+    monkeypatch.setitem(sys.modules, "mech_chatbot.rag.bootstrap", bootstrap)
+    spec = importlib.util.spec_from_file_location("strict_stream_guard_module", PIPELINE_STEPS)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+class _FakeChain:
+    def __init__(self, chunks, before_yield=None):
+        self.chunks = chunks
+        self.before_yield = before_yield
+
+    def __or__(self, _other):
+        return self
+
+    def stream(self, _payload):
+        for chunk in self.chunks:
+            if self.before_yield:
+                self.before_yield()
+            yield chunk
+
+
+def _runtime(*, client=None, invoke_provider=None, **retrieval_overrides):
+    retrieval_fields = {
+        "strict_answer_mode": True,
+        "strict_realtime_streaming": False,
+        "claim_repair_enabled": False,
+        "grounded_math_enabled": False,
+        "auto_source_cards": True,
+        "stream_max_attempts": 3,
+    }
+    retrieval_fields.update(retrieval_overrides)
+    provider = SimpleNamespace(
+        client=client if client is not None else object(),
+        settings=SimpleNamespace(
+            model_name="test-model",
+            base_url="https://example.invalid/v1",
+        ),
+        invoke=(
+            invoke_provider
+            if invoke_provider is not None
+            else lambda *_args, **_kwargs: pytest.fail(
+                "provider invoke was not expected"
+            )
+        ),
+    )
+    return SimpleNamespace(
+        retrieval_adapter=SimpleNamespace(**retrieval_fields),
+        provider_adapter=provider,
+    )
+
+
+@contextmanager
+def _no_network_audit(**_kwargs):
+    yield None
+
+
+def _run_generation(
+    module,
+    *,
+    cancel_event=None,
+    question="Gia tri la bao nhieu?",
+    docs=None,
+    **overrides,
+):
+    metrics = overrides.pop("metrics", None)
+    docs = docs or [SimpleNamespace(metadata={"doc_id": 7, "security_level": "internal"})]
+    plan_fields = {
+        "context_text": "Tai lieu chi ghi gia tri 10.",
+        "user_question": question,
+        "chat_history_str": "",
+        "retrieved_docs": docs,
+        "new_part_ids": [],
+        "response_language": "vi",
+        "trace_id": "strict-stream-test",
+        "started_at": time.time(),
+        "user_department": "Technical",
+        "user_roles": ["viewer"],
+        "effective_question": question,
+        "intent_data": {},
+        "base_k": 5,
+        "retrieval_mode": "general:explicit_dense_bm25_rrf",
+        "runtime": _runtime(),
+    }
+    plan_fields.update(overrides)
+    return module.generate_answer(
+        module.GenerationPlan(
+            turn=module.GenerationTurn(
+                user_question=plan_fields["user_question"],
+                effective_question=plan_fields["effective_question"],
+                chat_history_str=plan_fields["chat_history_str"],
+                new_part_ids=plan_fields["new_part_ids"],
+                response_language=plan_fields["response_language"],
+                user_department=plan_fields["user_department"],
+                user_roles=plan_fields["user_roles"],
+            ),
+            evidence=module.GenerationEvidence(
+                context_text=plan_fields["context_text"],
+                retrieved_docs=plan_fields["retrieved_docs"],
+                intent_data=plan_fields["intent_data"],
+                base_k=plan_fields["base_k"],
+                retrieval_mode=plan_fields["retrieval_mode"],
+                has_active_filter=plan_fields.get("has_active_filter", False),
+                active_filter=plan_fields.get("active_filter"),
+            ),
+            control=module.GenerationControl(
+                trace_id=plan_fields["trace_id"],
+                started_at=plan_fields["started_at"],
+                budget=plan_fields.get("budget"),
+                outcome=plan_fields.get("outcome", module.GenerationOutcome()),
+            ),
+            runtime=plan_fields["runtime"],
+        ),
+        cancel_event=cancel_event,
+        metrics=metrics,
+    )
+
+
+def _run_through_executor(monkeypatch, module, **generation_kwargs):
+    rag_package = sys.modules["mech_chatbot.rag"]
+    module_names = (
+        "mech_chatbot.rag.pipeline",
+        "mech_chatbot.rag.pipeline_steps",
+    )
+    previous_modules = {
+        name: sys.modules.get(name, _MISSING) for name in module_names
+    }
+    previous_attributes = {
+        name.rsplit(".", 1)[-1]: getattr(
+            rag_package, name.rsplit(".", 1)[-1], _MISSING
+        )
+        for name in module_names
+    }
+    outcome = module.GenerationOutcome()
+
+    def scripted_pipeline(state):
+        state.bind_generation(outcome)
+        stream = _run_generation(
+            module,
+            budget=state.budget,
+            outcome=outcome,
+            **generation_kwargs,
+        )
+        return state.prepared((stream, "", [], [], {}))
+
+    try:
+        return list(
+            DefaultRagExecutor(execute_pipeline=scripted_pipeline).run(
+                RagRequest("generation contract", AccessScope()),
+                RagInvocation(trace_id="strict-generation-contract", mode="test"),
+            )
+        )
+    finally:
+        for name, previous in previous_modules.items():
+            if previous is _MISSING:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = previous
+        for attribute, previous in previous_attributes.items():
+            if previous is _MISSING:
+                if hasattr(rag_package, attribute):
+                    delattr(rag_package, attribute)
+            else:
+                setattr(rag_package, attribute, previous)
+
+
+def _prepare(module, monkeypatch, chain, *, real_verification=False, **retrieval_overrides):
+    # These transport tests isolate pre-existing guards. Verifier integration tests use the real seam.
+    if not real_verification:
+        monkeypatch.setattr(module, "verify_answer_claims", lambda draft, *a, **k:
+                            SimpleNamespace(answer=draft, status="verified"))
+    else:
+        retrieval_overrides["claim_verification_enabled"] = True
+    monkeypatch.setattr(module, "_build_prompt_template", lambda *_args, **_kwargs: chain)
+    monkeypatch.setattr(module, "StrOutputParser", lambda: object())
+    monkeypatch.setattr(module, "audited_external_call", _no_network_audit)
+    monkeypatch.setattr(module, "_context_is_mechanical", lambda *_args: False)
+    monkeypatch.setattr(module, "has_unsupported_numbers", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(module, "make_insufficient_evidence_message", lambda *_args, **_kwargs: "REFUSAL")
+    return _runtime(client=chain, **retrieval_overrides)
+
+
+def test_semantic_verifier_failure_emits_no_draft_through_executor(monkeypatch):
+    from mech_chatbot.rag.execution import RagFailed
+
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    draft = "Employees receive one paid leave day. [SRC:D7P1]"
+    runtime = _prepare(module, monkeypatch, _FakeChain([draft]), real_verification=True)
+    monkeypatch.setattr(module, "has_unsupported_numbers", lambda *a, **k: False)
+    calls = []
+
+    def unavailable(*args, **kwargs):
+        calls.append(kwargs)
+        raise RuntimeError("verification service unavailable")
+
+    runtime.provider_adapter.invoke_once = unavailable
+    documents = [SimpleNamespace(page_content="Employees receive one paid leave day.",
+        metadata={"doc_id": 7, "trang_so": 1, "version_no": 1,
+                  "security_level": "internal", "external_processing_policy": "all_external"})]
+    events = _run_through_executor(monkeypatch, module, runtime=runtime, docs=documents,
+                                  question="What is the leave policy?")
+    assert not any(isinstance(event, RagToken) for event in events)
+    assert isinstance(events[-1], RagFailed)
+    assert len(calls) == 1
+    assert calls[0]["surface"] == "evidence_verification"
+
+
+@pytest.mark.parametrize("realtime", [False, True])
+def test_question_supplied_false_number_is_not_streamed(monkeypatch, realtime):
+    from mech_chatbot.rag.evidence_gate import has_unsupported_numbers
+
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    chain = _FakeChain(["Có ", "999 nhân viên."])
+    runtime = _prepare(module, monkeypatch, chain, strict_realtime_streaming=realtime)
+    monkeypatch.setattr(module, "has_unsupported_numbers", has_unsupported_numbers)
+    chunks = list(_run_generation(
+        module, question="Có phải 999 nhân viên không?",
+        context_text="Có 120 nhân viên.", runtime=runtime,
+    ))
+    assert "999" not in "".join(chunks)
+    assert "REFUSAL" in "".join(chunks)
+
+
+def test_strict_buffered_stream_never_yields_unsupported_factual_token(monkeypatch):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    runtime = _prepare(module, monkeypatch, _FakeChain(["Gia tri la 999."]))
+    events = _run_through_executor(monkeypatch, module, runtime=runtime)
+    emitted = [event.text for event in events if isinstance(event, RagToken)]
+
+    assert emitted == ["REFUSAL"]
+    assert "999" not in "".join(emitted)
+    assert isinstance(events[-1], RagCompleted)
+    assert events[-1].outcome == "refused"
+    assert events[-1].refusal_reason == "post_check_numbers"
+
+
+def test_strict_buffered_stream_never_yields_self_contradictory_missing_claim(
+    monkeypatch,
+):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    contradictory = (
+        "Tài liệu xác nhận có mô tả quy trình lắp, nhưng không nêu các bước "
+        "cụ thể.\n\nTài liệu nội bộ hiện có không đề cập đến thông tin này."
+    )
+    runtime = _prepare(module, monkeypatch, _FakeChain([contradictory]))
+    monkeypatch.setattr(
+        module, "has_unsupported_numbers", lambda *_args, **_kwargs: False
+    )
+
+    events = _run_through_executor(monkeypatch, module, runtime=runtime)
+    emitted = [event.text for event in events if isinstance(event, RagToken)]
+
+    assert emitted == ["REFUSAL"]
+    assert contradictory not in emitted
+    assert events[-1].outcome == "refused"
+    assert events[-1].refusal_reason == "post_check_self_contradiction"
+
+
+def test_strict_buffered_stream_keeps_separate_multi_part_coverage_claims(monkeypatch):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    separate_topics = (
+        "- Tài liệu mô tả quy trình lắp PART-A nhưng không nêu các bước cụ thể.\n\n"
+        "- Tài liệu nội bộ hiện có không đề cập đến thông tin này cho PART-B."
+    )
+    separate_topics = separate_topics + " [SRC:D7P3]"
+    runtime = _prepare(module, monkeypatch, _FakeChain([separate_topics]))
+    monkeypatch.setattr(
+        module, "has_unsupported_numbers", lambda *_args, **_kwargs: False
+    )
+
+    events = _run_through_executor(
+        monkeypatch, module, runtime=runtime,
+        docs=[SimpleNamespace(metadata={"doc_id": 7, "trang_so": 3, "version_no": 1, "security_level": "internal"})],
+    )
+    emitted = [event.text for event in events if isinstance(event, RagToken)]
+
+    assert emitted == [separate_topics]
+    assert events[-1].outcome == "answered"
+
+
+def test_strict_buffered_stream_keeps_scoped_missing_detail_answer(monkeypatch):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    scoped_limitation = (
+        "Tài liệu mô tả quy trình lắp nhưng không nêu các bước cụ thể."
+    )
+    scoped_limitation = scoped_limitation + " [SRC:D7P3]"
+    runtime = _prepare(module, monkeypatch, _FakeChain([scoped_limitation]))
+    monkeypatch.setattr(
+        module, "has_unsupported_numbers", lambda *_args, **_kwargs: False
+    )
+
+    events = _run_through_executor(
+        monkeypatch, module, runtime=runtime,
+        docs=[SimpleNamespace(metadata={"doc_id": 7, "trang_so": 3, "version_no": 1, "security_level": "internal"})],
+    )
+    emitted = [event.text for event in events if isinstance(event, RagToken)]
+
+    assert emitted == [scoped_limitation]
+    assert events[-1].outcome == "answered"
+
+
+def test_strict_buffered_stream_keeps_scoped_access_denied_partial_answer(
+    monkeypatch,
+):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    partial_answer = (
+        "Giá trị được phép xem là 1,500.\n\n"
+        "Tài liệu nội bộ hiện có không đề cập đến thông tin này.\n"
+        "Phần bị chặn chưa thể trả lời do không có nguồn được phép truy cập."
+    )
+    partial_answer = partial_answer + " [SRC:D7P3]"
+    runtime = _prepare(module, monkeypatch, _FakeChain([partial_answer]))
+    monkeypatch.setattr(
+        module, "has_unsupported_numbers", lambda *_args, **_kwargs: False
+    )
+
+    events = _run_through_executor(
+        monkeypatch, module, runtime=runtime,
+        docs=[SimpleNamespace(metadata={"doc_id": 7, "trang_so": 3, "version_no": 1, "security_level": "internal"})],
+    )
+    emitted = [event.text for event in events if isinstance(event, RagToken)]
+
+    assert emitted == [partial_answer]
+    assert events[-1].outcome == "answered"
+
+
+@pytest.mark.parametrize("citation, reason, recognized_ids", [
+    ("", "missing_id", []),
+    ("SourceID D999P1", "invalid_binding", ["D999P1"]),
+    ("SourceID D7P1 [SRC:bad]", "malformed_src", ["D7P1"]),
+])
+def test_citation_refusal_explains_the_guard_without_exposing_draft(
+    monkeypatch, citation, reason, recognized_ids,
+):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    draft = "Ghi nhận chênh lệch. " + citation
+    runtime = _prepare(module, monkeypatch, _FakeChain([draft]))
+    monkeypatch.setattr(module, "has_unsupported_numbers", lambda *_args, **_kwargs: False)
+    traces = []
+    monkeypatch.setattr(module, "log_trace", lambda event, trace_id, **fields: traces.append((event, fields)))
+    metrics = {}
+    outcome = module.GenerationOutcome()
+    chunks = list(_run_generation(
+        module, question="Ghi nhận chênh lệch thế nào?", runtime=runtime,
+        docs=[SimpleNamespace(metadata={"doc_id": 7, "trang_so": 1, "security_level": "internal"})],
+        metrics=metrics, outcome=outcome,
+    ))
+
+    assert chunks == ["REFUSAL"]
+    assert metrics["citation_validation"] == {
+        "reason": reason,
+        "recognized_source_ids": recognized_ids,
+        "evidence_source_ids": ["D7P1"],
+    }
+    assert metrics["final_refusal_reason"] == outcome.refusal_reason == "citation_" + reason
+    assert traces[-1][0] == "rag_end"
+    assert traces[-1][1]["refusal"] is True
+    assert traces[-1][1]["refusal_reason"] == "citation_" + reason
+    assert draft not in json.dumps({"metrics": metrics, "traces": traces}, ensure_ascii=False)
+
+
+def test_claim_repair_removes_unsupported_code_before_serving(monkeypatch):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    repair_calls = []
+    runtime = _prepare(
+        module,
+        monkeypatch,
+        _FakeChain(["Dùng FAKE-999 để lắp."]),
+        claim_repair_enabled=True,
+        invoke_provider=lambda messages, **_kwargs: (
+            repair_calls.append(messages)
+            or SimpleNamespace(content="Tài liệu không cung cấp mã dụng cụ lắp.")
+        ),
+    )
+    monkeypatch.setattr(module, "_context_is_mechanical", lambda *_args: True)
+    monkeypatch.setattr(
+        module, "has_unsupported_numbers", lambda *_args, **_kwargs: False
+    )
+
+    events = _run_through_executor(monkeypatch, module, runtime=runtime)
+    emitted = [event.text for event in events if isinstance(event, RagToken)]
+
+    assert emitted == ["Tài liệu không cung cấp mã dụng cụ lắp."]
+    assert len(repair_calls) == 1
+    assert events[-1].outcome == "answered"
+
+
+def test_cancelled_stream_raises_before_any_provider_chunk_is_emitted(monkeypatch):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    cancelled = threading.Event()
+    runtime = _prepare(
+        module,
+        monkeypatch,
+        _FakeChain(["Gia tri la 999."], before_yield=cancelled.set),
+    )
+
+    with pytest.raises(ExternalAICallCancelled):
+        list(_run_generation(module, cancel_event=cancelled, runtime=runtime))
+
+
+def test_normal_policy_question_does_not_apply_global_numeric_holdback(monkeypatch):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    seen_strict_values = []
+    runtime = _prepare(module, monkeypatch, _FakeChain(["Quy định là 20. [SRC:D7P3]"]))
+    monkeypatch.setattr(
+        module,
+        "has_unsupported_numbers",
+        lambda *_args, **kwargs: seen_strict_values.append(kwargs.get("strict_mode")) or False,
+    )
+
+    assert list(
+        _run_generation(
+            module,
+            question="Quy định hiện hành là gì?",
+            docs=[SimpleNamespace(metadata={"doc_id": 7, "trang_so": 3})],
+            runtime=runtime,
+        )
+    ) == ["Quy định là 20. [SRC:D7P3]"]
+    assert seen_strict_values == [False]
+
+
+@pytest.mark.parametrize("suffix, accepted", [("", False), (" [SRC:D999P1]", False),
+    (" [SRC:D7P3] [SRC:FAKE]", False), (" [SRC:D7P3]", True)])
+def test_source_cards_require_valid_attribution_before_emitting_answer(monkeypatch, suffix, accepted):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    answer = "The approved policy requires review." + suffix
+    runtime = _prepare(module, monkeypatch, _FakeChain([answer]))
+    monkeypatch.setattr(module, "has_unsupported_numbers", lambda *_a, **_k: False)
+    docs = [SimpleNamespace(metadata={"doc_id": 7, "trang_so": 3, "version_no": 1})]
+    result = list(_run_generation(module, question="What is the approved policy?", docs=docs, runtime=runtime))
+    assert result == ([answer] if accepted else ["REFUSAL"])
+
+
+def test_golden_answer_must_be_supported_by_its_selected_source(monkeypatch):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    from mech_chatbot.db.repositories import feedback
+    monkeypatch.setattr(module, "build_common_metadata_context", lambda _docs: "")
+    monkeypatch.setattr(module, "build_structured_attributes_context", lambda _docs: "")
+    calls = []
+    def golden(_question, *, admitted_doc_ids,actor=None):
+        calls.append(admitted_doc_ids)
+        return {"answer": "OUTDATED_UNSUPPORTED_ANSWER", "source_doc_id": 7}
+    monkeypatch.setattr(feedback, "find_golden_answer", golden)
+    docs = [SimpleNamespace(page_content="Current approved evidence", metadata={"doc_id": 7, "trang_so": 3})]
+    rendered = module._assemble_context(docs, "What is approved?")
+    assert calls == [[7]]
+    assert "OUTDATED_UNSUPPORTED_ANSWER" not in rendered
+
+
+@pytest.mark.parametrize("policy", ["internal_only", None])
+def test_claim_repair_forwards_document_policy_and_fails_closed(monkeypatch, policy):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    metadata = {
+        "doc_id": 7,
+        "trang_so": 3,
+        "version_no": 1,
+        "security_level": "confidential",
+    }
+    if policy is not None:
+        metadata["external_processing_policy"] = policy
+    document = SimpleNamespace(
+        metadata=metadata
+    )
+
+    def deny_internal_policy(_messages, **kwargs):
+        assert kwargs["policies"] == ["internal_only"]
+        raise ExternalProcessingDenied("internal_only")
+
+    with pytest.raises(ExternalProcessingDenied, match="internal_only"):
+        module._attempt_claim_repair(
+            "Chi phí 2500 USD.",
+            context_text="Chi phí 1500 USD. Chi phí 1700 USD.",
+            user_question="Chi phí bao nhiêu?",
+            retrieved_docs=[document],
+            trace_id="claim-repair-policy-test",
+            enabled=True,
+            invoke_provider=deny_internal_policy,
+        )
+
+
+def test_grounded_math_generation_streams_verified_answer_without_llm(monkeypatch):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    runtime = _runtime(grounded_math_enabled=True)
+    plan = CalculationPlan(
+        "add",
+        (
+            GroundedFact(Decimal("2"), "cái", 41, 3, 12, "BOM-1", "PART-A"),
+            GroundedFact(Decimal("5"), "cái", 41, 4, 12, "BOM-2", "PART-B"),
+        ),
+    )
+    docs = [
+        SimpleNamespace(metadata={
+            "doc_id": 41,
+            "trang_so": 3,
+            "version_no": 12,
+            "file_goc": "bom-v12.pdf",
+            "security_level": "internal",
+            "calculation_provenance": make_calculation_provenance(plan, derive_claim(plan)),
+        }),
+        SimpleNamespace(metadata={
+            "doc_id": 41,
+            "trang_so": 4,
+            "version_no": 12,
+            "file_goc": "bom-v12.pdf",
+            "security_level": "internal",
+        }),
+        SimpleNamespace(metadata={
+            "doc_id": 99,
+            "trang_so": 1,
+            "version_no": 1,
+            "file_goc": "unrelated.pdf",
+            "security_level": "internal",
+        }),
+    ]
+
+    metrics = {}
+    events = _run_through_executor(
+        monkeypatch,
+        module,
+        question="Cộng PART-A và PART-B",
+        docs=docs,
+        runtime=runtime,
+        effective_question="",
+        metrics=metrics,
+    )
+    emitted = [event.text for event in events if isinstance(event, RagToken)]
+
+    assert emitted == [
+        "Kết quả tính có kiểm soát: 7 cái; công thức: 2 + 5 = 7 cái. "
+        "[Nguồn: bom-v12.pdf, Trang 3, Version 12, SourceID D41P3] "
+        "[Nguồn: bom-v12.pdf, Trang 4, Version 12, SourceID D41P4]"
+    ]
+    assert events[-1].outcome == "answered"
+    assert events[-1].diagnostics.budget.final_generations == 0
+    assert metrics["citation_structure_passed"] is True
+    assert metrics["provenance_passed"] is True
+    assert metrics["calculation_result_status"] == "valid"
+
+    cancelled = threading.Event()
+    cancelled.set()
+    with pytest.raises(ExternalAICallCancelled):
+        list(_run_generation(
+            module,
+            question="Cộng PART-A và PART-B",
+            docs=docs,
+            cancel_event=cancelled,
+            runtime=runtime,
+            effective_question="",
+        ))
+
+
+def test_grounded_math_generation_marks_partial_claim_non_valid(monkeypatch):
+    from mech_chatbot.config import logging as trace_logging
+
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    runtime = _runtime(grounded_math_enabled=True)
+    plan = CalculationPlan(
+        "add",
+        (
+            GroundedFact(Decimal("2"), "kg", 41, 3, 12, "BOM-1", "PART-A"),
+            GroundedFact(Decimal("5"), "m", 41, 3, 12, "BOM-2", "PART-B"),
+        ),
+    )
+    docs = [SimpleNamespace(metadata={
+        "doc_id": 41,
+        "trang_so": 3,
+        "version_no": 12,
+        "file_goc": "bom-v12.pdf",
+        "security_level": "internal",
+        "calculation_provenance": make_calculation_provenance(
+            plan, derive_claim(plan)
+        ),
+    })]
+    metrics = {}
+    trace_messages = []
+    monkeypatch.setattr(trace_logging.trace_logger, "info", trace_messages.append)
+
+    answer = "".join(_run_generation(
+        module,
+        question="Cộng PART-A và PART-B",
+        docs=docs,
+        runtime=runtime,
+        effective_question="",
+        metrics=metrics,
+    ))
+
+    assert answer.startswith("Tôi trả lời được một phần:")
+    assert metrics["calculation_result_status"] == "invalid"
+    generated = [
+        json.loads(message) for message in trace_messages
+        if json.loads(message)["event"] == "grounded_math_generation"
+    ]
+    assert generated[0]["calculation_result_status"] == "invalid"
+
+
+def test_generation_debug_validates_served_calculation_documents_for_pilot():
+    from langchain_core.documents import Document
+
+    from mech_chatbot.rag.phases.generation import _generation_debug
+    from mech_chatbot.rag.phases.retrieval_enrichment_support import (
+        _build_bom_documents,
+    )
+
+    document = _build_bom_documents(
+        {(41, 3): {
+            "file_goc": "bom-v12.pdf",
+            "version_no": 12,
+            "security_level": "internal",
+            "site": "HCM",
+            "external_processing_policy": "internal_only",
+            "lines": ["- Mã: PART-A, SL: 2 cái"],
+        }},
+        {},
+    )[0]
+    value = lambda item: SimpleNamespace(value=item)
+    arguments = (
+        SimpleNamespace(request=SimpleNamespace(
+            user_department="Technical",
+            user_roles=("viewer",),
+            allowed_departments=("Technical",),
+            max_security_level="internal",
+            allowed_sites=("HCM",),
+        )),
+        SimpleNamespace(
+            decomposition_branches=(),
+            decomposition_intents=(),
+            decomposition_intent_coverage=(),
+            decomposition_used_fallback=False,
+            decomposition_intent_overflow=False,
+        ),
+        SimpleNamespace(
+            community_summary_used=False,
+            community_summary_count=0,
+            community_documents=(),
+            community_fallback_reason="disabled",
+            graph_routed=False,
+            graph_edge_count=0,
+            graph_max_hops=0,
+        ),
+        SimpleNamespace(served_graph_documents=()),
+        SimpleNamespace(
+            answer_policy=SimpleNamespace(
+                evidence_state=value("sufficient"),
+                outcome=value("full_answer"),
+                correction_allowed=False,
+            ),
+            evidence_decision=SimpleNamespace(stage="retrieval"),
+            evidence_quotes=(),
+        ),
+        SimpleNamespace(budget=SimpleNamespace(
+            corrections=0,
+            planners=0,
+            subqueries=0,
+            final_generations=0,
+            deadline_exceeded=False,
+        )),
+        [document],
+        {
+            "citation_structure_passed": True,
+            "decomposition_usage": {},
+            "provenance_passed": True,
+            "decomposition_usage": {},
+        },
+    )
+    debug = _generation_debug(*arguments)
+
+    assert debug["pilot_request_validation"] == {
+        "access_scope_passed": True,
+        "citation_structure_passed": True,
+        "provenance_passed": True,
+        "leakage_passed": True,
+    }
+
+    forged = Document(page_content=document.page_content, metadata={
+        **document.metadata,
+        "access_scope_serving_predicates_applied": True,
+        "version_policy_serving_predicates_applied": True,
+    })
+    blocked = _generation_debug(
+        *arguments[:-2],
+        [forged],
+        arguments[-1],
+    )["pilot_request_validation"]
+    assert blocked["access_scope_passed"] is False
+    assert blocked["leakage_passed"] is False
+
+
+def test_grounded_math_generation_keeps_the_other_decomposition_answer(monkeypatch):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    chain = _FakeChain([
+        "Phiên bản hiện hành của CRAG-EVAL-NUM-001 là 12. "
+        "[Nguồn: numbers.md, Trang 1, Version 12, SourceID D70P1]"
+    ])
+    runtime = _prepare(
+        module,
+        monkeypatch,
+        chain,
+        grounded_math_enabled=True,
+    )
+    monkeypatch.setattr(
+        module,
+        "has_unsupported_numbers",
+        lambda *_args, **_kwargs: False,
+    )
+    plan = CalculationPlan(
+        "sum",
+        (
+            GroundedFact(Decimal("2"), "cái", 43, 1, 1, "BOM-1", "PART-A"),
+            GroundedFact(Decimal("3"), "cái", 43, 1, 1, "BOM-2", "PART-B"),
+        ),
+    )
+    docs = [
+        SimpleNamespace(
+            page_content="BOM rows",
+            metadata={
+                "doc_id": 43,
+                "trang_so": 1,
+                "version_no": 1,
+                "file_goc": "bom.md",
+                "security_level": "internal",
+                "calculation_provenance": make_calculation_provenance(
+                    plan,
+                    derive_claim(plan),
+                ),
+            },
+        ),
+        SimpleNamespace(
+            page_content="Phiên bản hiện hành là 12.",
+            metadata={
+                "doc_id": 70,
+                "trang_so": 1,
+                "version_no": 12,
+                "file_goc": "numbers.md",
+                "security_level": "internal",
+            },
+        ),
+    ]
+
+    budget = RequestBudgetLedger(RequestBudgetLimits(), started_monotonic=0.0)
+    emitted = list(_run_generation(
+        module,
+        question=(
+            "Tổng BOM CRAG-EVAL-BOM-001 là bao nhiêu và phiên bản "
+            "hiện hành của CRAG-EVAL-NUM-001 là gì?"
+        ),
+        context_text="BOM rows\nPhiên bản hiện hành là 12.",
+        docs=docs,
+        runtime=runtime,
+        budget=budget,
+    ))
+
+    assert emitted == [
+        "Kết quả tính có kiểm soát: 5 cái; công thức: 2 + 3 = 5 cái. "
+        "[Nguồn: bom.md, Trang 1, Version 1, SourceID D43P1]\n"
+        "Phiên bản hiện hành của CRAG-EVAL-NUM-001 là 12. "
+        "[Nguồn: numbers.md, Trang 1, Version 12, SourceID D70P1]"
+    ]
+    assert budget.final_generations == 1
+
+
+def test_grounded_math_disabled_uses_normal_generation_path(monkeypatch):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    runtime = _prepare(
+        module,
+        monkeypatch,
+        _FakeChain(["Normal generation path. [SRC:D41P3]"]),
+        grounded_math_enabled=False,
+    )
+    monkeypatch.setattr(
+        module,
+        "has_unsupported_numbers",
+        lambda *_args, **_kwargs: False,
+    )
+    plan = CalculationPlan(
+        "sum",
+        (GroundedFact(Decimal("2"), "cái", 41, 3, 12, "BOM-1", "PART-A"),),
+    )
+    docs = [SimpleNamespace(metadata={
+        "doc_id": 41,
+        "trang_so": 3,
+        "version_no": 12,
+        "file_goc": "bom-v12.pdf",
+        "security_level": "internal",
+        "calculation_provenance": make_calculation_provenance(plan, derive_claim(plan)),
+    })]
+
+    emitted = list(_run_generation(
+        module,
+        question="Tổng BOM là bao nhiêu?",
+        docs=docs,
+        runtime=runtime,
+    ))
+
+    assert emitted == ["Normal generation path. [SRC:D41P3]"]
+
+
+def test_vision_retries_share_the_request_wide_provider_budget(monkeypatch):
+    from tenacity import wait_none
+
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    attempts = []
+
+    class FailingVision:
+        def generate_content(self, _payload):
+            attempts.append("call")
+            raise RuntimeError("temporary vision failure")
+
+    budget = RequestBudgetLedger(RequestBudgetLimits(), started_monotonic=0.0)
+    monkeypatch.setattr(module.Image, "open", lambda _path: object())
+    monkeypatch.setattr(module, "is_retryable_error", lambda _error: True)
+    monkeypatch.setattr(module, "wait_exponential", lambda **_kwargs: wait_none())
+
+    with pytest.raises(RequestBudgetExceeded, match="provider_retries"):
+        module._analyze_image(
+            "image.png",
+            "what is this?",
+            "vision-budget-test",
+            retry_budget=budget,
+            vision_model=FailingVision(),
+        )
+    assert len(attempts) == 3
+    assert budget.provider_retries == 2
+
+
+@pytest.mark.parametrize('rejection', [None, 'request', 'model', 'endpoints', 'always', 'unrelated'])
+def test_verifier_schema_fallback_is_one_time_and_only_for_unsupported_schema(monkeypatch, rejection):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    draft = 'Employees receive paid leave. [SRC:D7P1]'
+    runtime = _prepare(module, monkeypatch, _FakeChain([draft]), real_verification=True)
+    monkeypatch.setattr(module, 'has_unsupported_numbers', lambda *a, **k: False)
+    calls, warnings, trace_events = [], [], []
+    monkeypatch.setattr(module, 'log_trace', lambda event, trace_id, **metadata: trace_events.append((event, trace_id, metadata)))
+    monkeypatch.setattr(module.logger, 'warning', lambda message, *a, **k: warnings.append(message))
+    def invoke(messages, **kwargs):
+        calls.append(kwargs)
+        if rejection == 'unrelated':
+            raise RuntimeError('upstream unavailable')
+        if rejection == 'always' or (len(calls) == 1 and rejection):
+            messages_by_kind = {
+                'request': "Unsupported parameter: response_format",
+                'model': "response_format of type json_schema is not supported with this model",
+                'endpoints': "No endpoints found that support the requested parameters",
+                'always': "Unsupported response_format",
+            }
+            error = ValueError(messages_by_kind[rejection])
+            error.status_code = 404 if rejection == 'endpoints' else 400
+            raise error
+        prompt = messages[0].content
+        data = json.loads(prompt.split('\nDATA\n')[1])
+        line_id = next(iter(data['passages']['D7P1'][0]['lines']))
+        selection = {'source_id': 'D7P1', 'start_id': line_id, 'end_id': line_id}
+        row = {'id': 1, 'supported': True, 'sources': ['D7P1'], 'quotes': [selection],
+               'subject': 'unknown', 'condition': 'unknown', 'time': 'unknown', 'relationship': 'unknown', 'reason': ''}
+        return SimpleNamespace(content=json.dumps({'claims': [row], 'coverage': {'D7P1': [selection]}}))
+    runtime.provider_adapter.invoke_once = invoke
+    docs = [SimpleNamespace(page_content='Employees receive paid leave.', metadata={
+        'doc_id': 7, 'trang_so': 1, 'version_no': 1, 'security_level': 'internal',
+        'external_processing_policy': 'all_external'})]
+    emitted = []
+    if rejection in {'always', 'unrelated'}:
+        with pytest.raises((ValueError, RuntimeError)):
+            emitted.extend(_run_generation(module, runtime=runtime, docs=docs, question='What is the leave policy?'))
+    else:
+        emitted.extend(_run_generation(module, runtime=runtime, docs=docs, question='What is the leave policy?'))
+    rendered = ''.join(emitted)
+    fallback = rejection in {'request', 'model', 'endpoints', 'always'}
+    assert len(calls) == (2 if fallback else 1)
+    assert calls[0]['response_format']['type'] == 'json_schema'
+    assert calls[0]['surface'] == 'evidence_verification'
+    verifier_events = [item for item in trace_events if item[0] == 'claim_verification_call']
+    assert len(verifier_events) == len(calls)
+    for attempt, (event, call) in enumerate(zip(verifier_events, calls), 1):
+        assert event[1] == call['trace_id']
+        assert event[2] == {'surface': 'evidence_verification', 'attempt': attempt,
+                            'response_format_sent': 'response_format' in call}
+    if fallback:
+        assert 'response_format' not in calls[1]
+        assert {k:v for k,v in calls[0].items() if k not in {'response_format', 'timeout_seconds'}} == {
+            k:v for k,v in calls[1].items() if k != 'timeout_seconds'}
+        assert warnings.count('Claim verification response_format unsupported; retrying once without schema') == 1
+    if rejection not in {'always', 'unrelated'}:
+        assert 'Employees receive paid leave.' in rendered
+    else:
+        assert 'Employees receive paid leave.' not in rendered
+
+
+@pytest.mark.parametrize('status, message, expected', [
+    (400, 'Unsupported response_format', True),
+    (422, 'Invalid parameter response_format', True),
+    (400, 'Model does not support structured outputs', True),
+    (None, "got an unexpected keyword argument 'response_format'", True),
+    (401, 'Unsupported response_format', False),
+    (403, 'Unsupported response_format', False),
+    (429, 'Unsupported response_format', False),
+    (500, 'Unsupported response_format', False),
+    (400, 'Invalid model', False),
+    (None, 'timeout', False),
+])
+def test_schema_fallback_distinguishes_unsupported_format_from_other_errors(monkeypatch, status, message, expected):
+    module = _load_pipeline_steps_without_rag_bootstrap(monkeypatch)
+    error = ValueError(message)
+    error.status_code = status
+    assert module._unsupported_verification_schema(error) is expected

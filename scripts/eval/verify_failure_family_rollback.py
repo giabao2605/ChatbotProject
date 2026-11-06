@@ -15,33 +15,33 @@ ROOT = Path(__file__).resolve().parents[2]
 ROLLBACK_TEST_PROFILES = {
     frozenset({"RAG_CRAG_ENABLED", "RAG_CLAIM_REPAIR_ENABLED"}): (
         "-m", "pytest",
-        "backend/tests/unit/test_corrective_retrieval.py::test_crag_rollback_flag_disables_correction_runtime",
-        "backend/tests/unit/test_claim_repair.py::test_claim_repair_rollback_flag_disables_runtime",
+        "backend/tests/unit/rag/test_corrective_retrieval.py::test_crag_rollback_flag_disables_correction_runtime",
+        "backend/tests/unit/rag/test_claim_repair.py::test_claim_repair_rollback_flag_disables_runtime",
         "-q",
     ),
     frozenset({"RAG_GROUNDED_MATH_ENABLED"}): (
         "-m", "pytest",
-        "backend/tests/unit/test_strict_stream_guard.py::test_grounded_math_disabled_uses_normal_generation_path",
-        "backend/tests/unit/test_grounded_math_eval_fixture.py::test_grounded_math_rollout_toggles_only_math_between_arms",
+        "backend/tests/unit/rag/test_strict_stream_guard.py::test_grounded_math_disabled_uses_normal_generation_path",
+        "backend/tests/unit/evaluation/test_grounded_math_eval_fixture.py::test_grounded_math_rollout_toggles_only_math_between_arms",
         "-q",
     ),
     frozenset({"RAG_QUERY_DECOMPOSITION_ENABLED"}): (
-        "-m", "pytest", "backend/tests/unit/test_query_decomposition.py",
-        "backend/tests/unit/test_decomposition_evaluation.py", "-q",
+        "-m", "pytest", "backend/tests/unit/rag/test_query_decomposition.py",
+        "backend/tests/unit/evaluation/test_decomposition_evaluation.py", "-q",
     ),
     frozenset({"RAG_GRAPH_RETRIEVAL_ENABLED"}): (
-        "-m", "pytest", "backend/tests/unit/test_graph_rag.py",
-        "backend/tests/unit/test_graph_evaluation.py", "-q",
+        "-m", "pytest", "backend/tests/unit/rag/test_graph_rag.py",
+        "backend/tests/unit/db/test_graph_evaluation.py", "-q",
     ),
     frozenset({"RAG_GRAPH_COMMUNITY_SUMMARIES_ENABLED"}): (
-        "-m", "pytest", "backend/tests/unit/test_community_summaries.py", "-q",
+        "-m", "pytest", "backend/tests/unit/rag/test_community_summaries.py", "-q",
     ),
 }
 
 MATH_QUERY_ROLLBACK_PROFILE = {
     frozenset({"RAG_GROUNDED_MATH_ENABLED", "RAG_QUERY_DECOMPOSITION_ENABLED"}): (
         "-m", "pytest",
-        "backend/tests/unit/test_rag_pipeline_public_characterization.py::test_math_query_flags_do_not_retain_decomposition_after_disable",
+        "backend/tests/unit/rag/test_rag_pipeline_public_characterization.py::test_math_query_flags_do_not_retain_decomposition_after_disable",
         "-q",
     ),
 }

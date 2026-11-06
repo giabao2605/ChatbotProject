@@ -28,8 +28,8 @@ from scripts.eval.semantic_task_routing import (
     grade_candidate_task_observation, _verify_source_capture, _source_paths,
 )
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'backend'))
-from tests.unit.test_rag_bom_chat import FixtureEngine
-from tests.unit.test_graph_v2_repository import SqliteConnection
+from tests.unit.rag.test_rag_bom_chat import FixtureEngine
+from tests.unit.db.test_graph_v2_repository import SqliteConnection
 
 __all__ = ['run_assay']
 _PROVIDER = {'provider':'openrouter','endpoint':'https://openrouter.ai/api/v1','model':'openai/gpt-5.6-luna'}
@@ -37,7 +37,7 @@ _REQUIRED = {'scripts/eval/run_semantic_task_assay.py','src/mech_chatbot/llm/llm
     'src/mech_chatbot/llm/external_ai.py','src/mech_chatbot/db/repositories/external_ai.py',
     'src/mech_chatbot/config/repository_runtime.py','src/mech_chatbot/db/engine.py',
     'src/mech_chatbot/db/evidence_snapshot.py','src/mech_chatbot/auth/core.py',
-    'tests/unit/test_graph_v2_repository.py','tests/unit/test_rag_bom_chat.py'}
+    'tests/unit/db/test_graph_v2_repository.py','tests/unit/rag/test_rag_bom_chat.py'}
 
 
 class _StopAssay(RuntimeError):
