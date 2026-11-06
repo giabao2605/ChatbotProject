@@ -96,7 +96,7 @@ def test_qdrant_runtime_bounds_http_keepalive_reuse():
 
     limits = client_calls[0]["limits"]
     assert limits.max_keepalive_connections == 1
-    assert limits.keepalive_expiry == 5
+    assert limits.keepalive_expiry == 30
 
 
 @pytest.mark.parametrize("exists", [False, True])

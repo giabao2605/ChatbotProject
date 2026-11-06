@@ -541,3 +541,89 @@ def test_retrieve_many_preserves_single_retrieval_policy(
     ]
     assert batched[1:3] == direct[1:3]
     assert batched[4] == direct[4]
+
+
+def _three_requests():
+    return tuple(
+        {
+            "new_part_ids": [f"PART-{index}"],
+            "strict_filter": models.Filter(),
+            "broad_filter": models.Filter(),
+            "is_bom_query": False,
+            "query_to_search": f"query {index}",
+            "rbac_filter": models.Filter(),
+            "trace_id": "retry-trace",
+        }
+        for index in range(1, 4)
+    )
+
+
+def _vectorstore():
+    return SimpleNamespace(
+        embeddings=_DenseEmbeddings(),
+        sparse_embeddings=_SparseEmbeddings(),
+        vector_name="",
+        sparse_vector_name="sparse",
+        content_payload_key="page_content",
+        metadata_payload_key="metadata",
+    )
+
+
+@pytest.mark.parametrize("failing_call", [1, 2])
+def test_retrieve_many_is_rescued_by_one_retry_and_logs_it(monkeypatch, failing_call):
+    import httpx
+
+    import mech_chatbot.rag.retrieval as retrieval_module
+
+    class _FlakyClient(_BatchClient):
+        def query_batch_points(self, **kwargs):
+            response = super().query_batch_points(**kwargs)
+            if len(self.calls) == failing_call:
+                raise ResponseHandlingException(httpx.ReadTimeout("read timed out"))
+            return response
+
+    trace_events = []
+
+    def _record(event, trace_id, **fields):
+        trace_events.append({"event": event, "trace_id": trace_id, **fields})
+
+    monkeypatch.setattr(pipeline_steps, "log_trace", _record)
+    monkeypatch.setattr(retrieval_module, "log_trace", _record)
+    client = _FlakyClient()
+
+    results = _retrieve_many(
+        _three_requests(), vectorstore=_vectorstore(), client=client,
+        collection_name="test-knowledge",
+    )
+
+    assert len(client.calls) == 3
+    assert all(call["timeout"] == 10 for call in client.calls[:2])
+    assert [r[2] for r in results] == ["strict_exact:explicit_dense_bm25_rrf"] * 3
+    retried = [
+        e for e in trace_events
+        if e["event"] == "retrieval_step" and e.get("retry_attempted")
+    ]
+    assert len(retried) == 1
+    assert retried[0]["status"] == "completed"
+    assert retried[0]["retry_error_type"] is None
+    assert isinstance(retried[0]["retry_latency_ms"], int)
+    assert not any(e["event"] == "retrieval_batch" for e in trace_events)
+
+
+def test_retrieve_many_does_not_retry_http_errors():
+    from qdrant_client.http.exceptions import UnexpectedResponse
+
+    class _ServerErrorClient:
+        calls = 0
+
+        def query_batch_points(self, **_kwargs):
+            type(self).calls += 1
+            raise UnexpectedResponse(503, "unavailable", b"", {})
+
+    with pytest.raises(UnexpectedResponse):
+        _retrieve_many(
+            _three_requests(), vectorstore=_vectorstore(), client=_ServerErrorClient(),
+            collection_name="test-knowledge",
+        )
+
+    assert _ServerErrorClient.calls == 1

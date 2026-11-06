@@ -3,6 +3,7 @@
 
 from mech_chatbot.config.logging import logger, log_trace
 from time import perf_counter
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from qdrant_client import models
 from mech_chatbot.rag.rbac import (
@@ -13,8 +14,66 @@ from mech_chatbot.rag.rbac import (
 )
 from mech_chatbot.rag.execution import (
     RequestDeadlineExceeded,
+    remaining_request_timeout,
     remaining_request_timeout_int,
 )
+
+# Production log 05-06/11: a Qdrant read that timed out on one connection
+# succeeded on the next one in 12 of 13 cases, so one bounded retry is enough.
+QDRANT_RETRY_MIN_REMAINING_SECONDS = 5.0
+_RETRY_INFO = ContextVar("qdrant_retry_info", default=None)
+
+
+def _is_transient_transport_error(exc):
+    import httpx
+
+    return isinstance(
+        getattr(exc, "source", None), (httpx.TimeoutException, httpx.ConnectError)
+    )
+
+
+def call_with_qdrant_retry(call, *, timeout, stage, deadline_monotonic=None):
+    """Run ``call(timeout_seconds)``; retry once on a timeout or connect error.
+
+    Only ``ResponseHandlingException`` wrapping an httpx timeout/connect error
+    is retried, and only when the request deadline still leaves at least
+    ``QDRANT_RETRY_MIN_REMAINING_SECONDS``; the retry timeout is
+    ``min(timeout, remaining)``.  HTTP 4xx/5xx, cancellation and deadline errors
+    propagate untouched.  The retry outcome is reported to the enclosing
+    ``run_retrieval_step`` and a failed retry is marked on the exception.
+    """
+    from qdrant_client.http.exceptions import ResponseHandlingException
+
+    try:
+        return call(timeout)
+    except ResponseHandlingException as first_error:
+        if not _is_transient_transport_error(first_error):
+            raise
+        try:
+            remaining = remaining_request_timeout(
+                timeout, stage=stage, deadline_monotonic=deadline_monotonic,
+            )
+        except RequestDeadlineExceeded:
+            remaining = 0.0
+        if remaining < QDRANT_RETRY_MIN_REMAINING_SECONDS:
+            raise
+        info = _RETRY_INFO.get()
+        started = perf_counter()
+        retry_error_type = None
+        try:
+            return call(max(1, int(remaining)))
+        except BaseException as retry_error:
+            retry_error_type = type(retry_error).__name__
+            if isinstance(retry_error, ResponseHandlingException):
+                retry_error.qdrant_retry_attempted = True
+            raise
+        finally:
+            if info is not None:
+                info.update(
+                    retry_attempted=True,
+                    retry_error_type=retry_error_type,
+                    retry_latency_ms=int((perf_counter() - started) * 1000),
+                )
 
 
 def run_retrieval_step(operation, *, trace_id, step, phase, checkpoint=None):
@@ -22,11 +81,16 @@ def run_retrieval_step(operation, *, trace_id, step, phase, checkpoint=None):
     started = perf_counter()
     from mech_chatbot.rag.execution import current_execution_context
     attempted = False
+    retry_info = {}
     try:
         if checkpoint:
             checkpoint(step)
         attempted = True
-        result = operation()
+        token = _RETRY_INFO.set(retry_info)
+        try:
+            result = operation()
+        finally:
+            _RETRY_INFO.reset(token)
         if checkpoint:
             checkpoint(step)
     except BaseException as exc:
@@ -34,12 +98,13 @@ def run_retrieval_step(operation, *, trace_id, step, phase, checkpoint=None):
             log_trace('retrieval_step', trace_id, step=step, phase=phase, status='failed',
                       execution_context=current_execution_context(),
                       attempted=attempted, latency_ms=int((perf_counter()-started)*1000),
-                      error_type=type(exc).__name__)
+                      error_type=type(exc).__name__, **retry_info)
         raise
     if trace_id:
         log_trace('retrieval_step', trace_id, step=step, phase=phase, status='completed',
                   execution_context=current_execution_context(),
-                  attempted=attempted, latency_ms=int((perf_counter()-started)*1000))
+                  attempted=attempted, latency_ms=int((perf_counter()-started)*1000),
+                  **retry_info)
     return result
 
 
@@ -58,7 +123,14 @@ class TracedRetrievalDependency:
         if name != self.method:
             return attribute
         def invoke(*args, **kwargs):
-            return run_retrieval_step(lambda: attribute(*args, **kwargs), trace_id=self.trace_id,
+            def attempt():
+                if self.method != "query_points" or "timeout" not in kwargs:
+                    return attribute(*args, **kwargs)
+                return call_with_qdrant_retry(
+                    lambda timeout: attribute(*args, **{**kwargs, "timeout": timeout}),
+                    timeout=kwargs["timeout"], stage=f"Qdrant {self.phase} retry",
+                )
+            return run_retrieval_step(attempt, trace_id=self.trace_id,
                                       step=self.step, phase=self.phase, checkpoint=self.checkpoint)
         return invoke
 

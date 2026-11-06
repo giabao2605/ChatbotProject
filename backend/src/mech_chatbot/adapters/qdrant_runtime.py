@@ -16,7 +16,7 @@ from mech_chatbot.config.settings import QdrantSettings
 def _retrieval_http_limits():
     from httpx import Limits
 
-    return Limits(max_keepalive_connections=1, keepalive_expiry=5)
+    return Limits(max_keepalive_connections=1, keepalive_expiry=30)
 
 
 def _validate(settings: QdrantSettings) -> None:
