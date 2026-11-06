@@ -52,7 +52,9 @@ from mech_chatbot.rag.intent import serialize_qdrant_filter
 from mech_chatbot.rag.context_builders import _context_is_mechanical, _context_domain
 
 
-from mech_chatbot.rag.retrieval import current_published_filter, run_retrieval_step, TracedRetrievalDependency
+from mech_chatbot.rag.retrieval import (
+    call_with_qdrant_retry, current_published_filter, run_retrieval_step, TracedRetrievalDependency,
+)
 
 # P0 slices #4/#5/#7: cac helper _route / _rewrite_and_anchor / _disambiguate
 from mech_chatbot.rag.prompt import _t_rag
@@ -372,6 +374,13 @@ def _explicit_hybrid_rrf_batch(
     batch_stage = "setup"
     checkpoint = current_request_checkpoint()
     effective_timeout_seconds = None
+
+    def _batch_read(call):
+        return call_with_qdrant_retry(
+            call, timeout=effective_timeout_seconds, stage="Qdrant batch retry",
+            deadline_monotonic=deadline_monotonic,
+        )
+
     try:
         from qdrant_client import models
 
@@ -398,7 +407,7 @@ def _explicit_hybrid_rrf_batch(
             qdrant_timeout_seconds,
             deadline_monotonic,
         )
-        dense_responses = run_retrieval_step(lambda: client.query_batch_points(
+        dense_responses = run_retrieval_step(lambda: _batch_read(lambda timeout: client.query_batch_points(
             collection_name=collection_name,
             requests=[
                 models.QueryRequest(
@@ -411,8 +420,8 @@ def _explicit_hybrid_rrf_batch(
                 )
                 for request, vector in zip(requests, dense_vectors, strict=True)
             ],
-            timeout=effective_timeout_seconds,
-        ), trace_id=requests[0].trace_id, step="dense_query", phase="batch", checkpoint=checkpoint)
+            timeout=timeout,
+        )), trace_id=requests[0].trace_id, step="dense_query", phase="batch", checkpoint=checkpoint)
         dense_ms = int((time.perf_counter() - dense_started) * 1000)
         if len(dense_responses) != len(requests):
             raise RuntimeError("Qdrant dense batch result count mismatch")
@@ -439,7 +448,7 @@ def _explicit_hybrid_rrf_batch(
                 qdrant_timeout_seconds,
                 deadline_monotonic,
             )
-            sparse_responses = run_retrieval_step(lambda: client.query_batch_points(
+            sparse_responses = run_retrieval_step(lambda: _batch_read(lambda timeout: client.query_batch_points(
                 collection_name=collection_name,
                 requests=[
                     models.QueryRequest(
@@ -459,8 +468,8 @@ def _explicit_hybrid_rrf_batch(
                         strict=True,
                     )
                 ],
-                timeout=effective_timeout_seconds,
-            ), trace_id=requests[0].trace_id, step="sparse_query", phase="batch", checkpoint=checkpoint)
+                timeout=timeout,
+            )), trace_id=requests[0].trace_id, step="sparse_query", phase="batch", checkpoint=checkpoint)
             if len(sparse_responses) != len(requests):
                 raise RuntimeError("Qdrant sparse batch result count mismatch")
             batch_stage = "sparse_decode"
@@ -525,7 +534,7 @@ def _explicit_hybrid_rrf_batch(
                     batch_stage=batch_stage,
                     timeout_seconds=effective_timeout_seconds,
                     batch_size=len(requests),
-                    retry_attempted=False,
+                    retry_attempted=bool(getattr(exc, "qdrant_retry_attempted", False)),
                 )
         raise
 
@@ -644,7 +653,7 @@ def _explicit_hybrid_rrf(
                 bm25_fields.update(
                     error=type(sparse_error).__name__,
                     fallback="dense",
-                    retry_attempted=False,
+                    retry_attempted=bool(getattr(sparse_error, "qdrant_retry_attempted", False)),
                 )
             log_trace("bm25_retrieval", trace_id, **bm25_fields)
             log_trace(
