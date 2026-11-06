@@ -69,14 +69,10 @@ rag_trace.jsonl
 
 # ===== Generated Reports =====
 reports/
-# Refactor evidence is deterministic, sanitized, and reviewed as a repository
-# contract. Raw captures remain local and must never be committed.
+# Only the frozen GD1 pack below is tracked; every other report stays local.
+# Refactor phase 0-6 evidence (closed 2026-07-24) lives in git history only.
 !reports/
 reports/*
-!reports/refactor/
-!reports/refactor/**
-reports/refactor/**/raw/
-reports/refactor/**/coverage-*.json
 # Sanitized, frozen GD1 diagnostics only; raw captures remain local.
 !reports/rag-information-first-gd1/
 reports/rag-information-first-gd1/*
