@@ -117,7 +117,47 @@ def _run_retrieval(
     )
     if isinstance(reranked, PhaseTerminal):
         return _text_branch_terminal(reranked,primary,state)
+    primary = _reconcile_branch_evidence(primary, route_decision, state, reranked.documents)
     return _RetrievalResult(primary, enrichment, reranked)
+
+
+def _reconcile_branch_evidence(primary, decision, state, documents):
+    if "+branch_ranked" not in primary.retrieval_mode or not primary.decomposition_documents:
+        return primary
+    from mech_chatbot.domain.evidence_identity import evidence_key
+    from mech_chatbot.rag.phases.retrieval import _make_context, _branch_answer_policy
+    from mech_chatbot.rag.phases.diagnostics import make_source_snapshot
+    from mech_chatbot.rag.query_decomposition import build_decomposition_instruction
+    from mech_chatbot.rag.query_dependencies import branch_dependencies
+
+    available = {evidence_key(document): document for document in documents}
+    context = _make_context(decision, state)
+    branches, retained = [], []
+    for index, (branch, selected) in enumerate(zip(
+            primary.decomposition_branches, primary.decomposition_documents, strict=True), 1):
+        surviving = tuple(available[key] for document in selected
+                          if (key := evidence_key(document)) in available)
+        retained.append(surviving)
+        if len(surviving) == len(selected) or branch.get("outcome") != "full_answer":
+            branches.append(branch)
+            continue
+        _, policy = _branch_answer_policy(context, branch["subquery"], list(surviving),
+                                         retrieval_can_improve=False)
+        citations = []
+        if policy.outcome.value == "full_answer":
+            citations = make_source_snapshot(surviving) + [card
+                for dependency in branch_dependencies(context.dependencies, branch["subquery"])
+                for card in dependency.sources]
+        branches.append({**branch, "outcome": policy.outcome.value,
+                         "evaluator_state": policy.evidence_state.value, "citations": citations})
+        log_trace("branch_evidence_reconciled", context.trace_id, branch_index=index,
+                  input_docs=len(selected), output_docs=len(surviving), outcome=policy.outcome.value)
+    if tuple(branches) == primary.decomposition_branches:
+        return primary
+    return replace(primary, decomposition_branches=tuple(branches),
+                   decomposition_documents=tuple(retained),
+                   decomposition_states=tuple(branch["evaluator_state"] for branch in branches),
+                   decomposition_notice=build_decomposition_instruction(branches))
 
 
 def _reconcile_grounded_math(primary, enrichment):

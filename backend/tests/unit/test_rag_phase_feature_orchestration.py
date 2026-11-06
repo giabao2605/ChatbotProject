@@ -170,6 +170,84 @@ def _run_phase(callback, *, retrieval, provider, invocation=None):
     return observed["outcome"]
 
 
+def test_branch_candidates_enrich_using_own_question_before_ranking(monkeypatch):
+    from mech_chatbot.rag.phases import retrieval_enrichment as enrichment
+
+    decision = _route_decision(_prepared_request(question="whole request", image_analysis="synthetic image"))
+    documents = [Document(page_content="synthetic branch evidence")]
+    observed = []
+    def inject(context, docs, part_ids, state, *, lookup_documents):
+        observed.append((context.user_question, context.decision.effective_question,
+                         tuple(part_ids), lookup_documents))
+        return tuple(docs), False
+    monkeypatch.setattr(enrichment, "_inject_bom", inject)
+    monkeypatch.setattr(enrichment, "_prepend_image", lambda docs, image: (
+        *docs, Document(page_content=image)))
+    state = SimpleNamespace(retrieval_adapter=_retrieval_adapter())
+
+    result = enrichment.enrich_branch_candidates(decision, state, "branch question", ["P-2"], documents)
+
+    assert observed == [("branch question", "branch question", ("P-2",), documents)]
+    assert [doc.page_content for doc in result] == ["synthetic branch evidence", "synthetic image"]
+    assert decision.request.user_question == "whole request"
+
+
+def test_ranked_branch_enrichment_preserves_membership_and_disambiguation(monkeypatch):
+    from mech_chatbot.rag.phases import retrieval_enrichment as enrichment
+    from .test_rag_phase_policy_branches import _primary
+
+    decision = _route_decision(_prepared_request(question="branch request"), part_ids=())
+    documents = [Document(page_content="selected evidence")]
+    primary = replace(_primary(), documents=tuple(documents), retrieval_mode="decomposed_general+branch_ranked")
+    for helper in ("_enrich_graph", "_enrich_community", "_inject_bom", "_prepend_image", "_apply_crag", "_handle_exact_code_miss"):
+        monkeypatch.setattr(enrichment, helper, lambda *_args, **_kwargs: pytest.fail("No global expansion after branch ranking"))
+    checked = []
+    monkeypatch.setattr(enrichment, "_disambiguate_documents", lambda context, state, docs, *args: (
+        checked.append(tuple(docs)) or (tuple(docs), None)))
+    outcome = _run_phase(lambda state: enrichment.enrich_retrieval(decision, primary, state),
+                         retrieval=_retrieval_adapter(), provider=SimpleNamespace())
+
+    assert checked == [tuple(documents)]
+    assert outcome.documents == tuple(documents)
+    assert not outcome.graph_documents and not outcome.community_documents
+
+
+@pytest.mark.parametrize("mode", ["decomposed_general+branch_ranked", "decomposed_general"])
+def test_final_narrowing_rechecks_exact_branch_chunks_and_removes_stale_citations(monkeypatch, mode):
+    from mech_chatbot.rag import pipeline
+    from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
+    from mech_chatbot.rag.phases import retrieval
+    from .test_rag_phase_policy_branches import _primary
+
+    first = Document(page_content="first synthetic chunk", metadata={"doc_id": 1, "trang_so": 1, "chunk_index": 0})
+    second = Document(page_content="second synthetic chunk", metadata={"doc_id": 1, "trang_so": 1, "chunk_index": 1})
+    branches = tuple({"branch_id": f"branch-{index}", "subquery": query, "outcome": "full_answer",
+                      "evaluator_state": "SUFFICIENT", "citations": [{"source_id": "D1P1"}]}
+                     for index, query in enumerate(("first question", "second question"), 1))
+    primary = replace(_primary(branches=branches), documents=(first, second),
+                      retrieval_mode=mode,
+                      decomposition_documents=((first,), (second,)))
+    seen = []
+    def answerability(query, _context, *, docs, **_kwargs):
+        seen.append((query, tuple(docs)))
+        return EvidenceDecision(EvidenceState.SUFFICIENT if docs else EvidenceState.INSUFFICIENT, reason="synthetic")
+    monkeypatch.setattr(retrieval, "evaluate_answerability", answerability)
+    decision = _route_decision(_prepared_request(question="both questions"), part_ids=())
+    result = _run_phase(lambda state: pipeline._reconcile_branch_evidence(primary, decision, state, (first,)),
+                        retrieval=_retrieval_adapter(), provider=SimpleNamespace())
+
+    if "+branch_ranked" not in mode:
+        assert result is primary and seen == []
+        return
+    assert seen == [("second question", ())]
+    assert result.decomposition_branches[0] == branches[0]
+    assert result.decomposition_branches[1]["outcome"] == "insufficient_evidence"
+    assert result.decomposition_branches[1]["citations"] == []
+    assert result.decomposition_documents == ((first,), ())
+    assert "1 nhánh" in result.decomposition_notice
+    assert primary.decomposition_branches[1]["outcome"] == "full_answer"
+
+
 def test_executor_runs_complex_decomposition_with_typed_branch_handoffs(monkeypatch):
     from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
     from mech_chatbot.rag.phases import retrieval as retrieval_phase
@@ -717,7 +795,7 @@ def test_decomposition_missing_branch_does_not_publish_citations(monkeypatch):
     ] == [1, 2]
 
 
-def test_general_branch_publishes_only_its_served_top_source(monkeypatch):
+def test_general_branch_publishes_all_its_served_ranked_sources(monkeypatch):
     from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
     from mech_chatbot.rag.phases import retrieval as retrieval_phase
 
@@ -791,14 +869,14 @@ def test_general_branch_publishes_only_its_served_top_source(monkeypatch):
     assert [
         citation["doc_id"]
         for citation in outcome.decomposition_branches[0]["citations"]
-    ] == [1]
-    assert [document.metadata["doc_id"] for document in outcome.documents] == [1, 3]
+    ] == [1, 2]
+    assert [document.metadata["doc_id"] for document in outcome.documents] == [1, 2, 3]
     assert outcome.decomposition_usage["branches"][0]["retrieval"][
         "document_count"
     ] == 2
 
 
-def test_general_branch_answerability_uses_only_its_served_top_source(monkeypatch):
+def test_general_branch_answerability_uses_all_its_served_ranked_sources(monkeypatch):
     from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
     from mech_chatbot.rag.phases import retrieval as retrieval_phase
 
@@ -873,17 +951,17 @@ def test_general_branch_answerability_uses_only_its_served_top_source(monkeypatc
     )
 
     assert [branch["outcome"] for branch in outcome.decomposition_branches] == [
-        "insufficient_evidence",
+        "full_answer",
         "full_answer",
     ]
-    assert outcome.decomposition_branches[0]["citations"] == []
-    assert [document.metadata["doc_id"] for document in outcome.documents] == [3]
+    assert [citation["doc_id"] for citation in outcome.decomposition_branches[0]["citations"]] == [1, 2]
+    assert [document.metadata["doc_id"] for document in outcome.documents] == [1, 2, 3]
     assert outcome.decomposition_usage["branches"][0]["retrieval"][
         "document_count"
     ] == 2
 
 
-def test_general_branch_serves_corrected_top_source_and_keeps_raw_count(monkeypatch):
+def test_general_branch_serves_corrected_ranked_sources_and_keeps_raw_count(monkeypatch):
     from mech_chatbot.rag.evidence_gate import EvidenceDecision, EvidenceState
     from mech_chatbot.rag.phases import retrieval as retrieval_phase
 
@@ -972,8 +1050,8 @@ def test_general_branch_serves_corrected_top_source_and_keeps_raw_count(monkeypa
     assert [
         citation["doc_id"]
         for citation in outcome.decomposition_branches[0]["citations"]
-    ] == [4]
-    assert [document.metadata["doc_id"] for document in outcome.documents] == [4, 3]
+    ] == [4, 1, 2]
+    assert [document.metadata["doc_id"] for document in outcome.documents] == [4, 1, 2, 3]
     assert outcome.decomposition_usage["branches"][0]["retrieval"][
         "document_count"
     ] == 2

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from langchain_core.messages import HumanMessage
@@ -932,11 +932,55 @@ def _apply_crag(
     return _correct_retrieval(context, state, documents, part_ids, decision)
 
 
+def enrich_branch_candidates(decision, state, subquery, part_ids, documents):
+    branch_decision = replace(
+        decision, request=replace(decision.request, user_question=subquery),
+        effective_question=subquery, new_part_ids=tuple(part_ids),
+        is_bom_query=is_bom_lookup(subquery),
+    )
+    context = _make_context(branch_decision, state)
+    enriched, _ = _inject_bom(context, documents, part_ids, state, lookup_documents=documents)
+    return _prepend_image(enriched, decision.request.image_analysis)
+
+
+def _enrich_ranked_branches(decision, primary, state):
+    from mech_chatbot.rag.demo_sources import DEMO_MISSING_NOTICE, refresh_applicable_sources
+
+    context = _make_context(decision, state)
+    part_ids = tuple(decision.new_part_ids)
+    documents = refresh_applicable_sources(primary.documents, context.user_question)
+    if not documents:
+        return _empty_documents_terminal(context, state, part_ids,
+            DEMO_MISSING_NOTICE if primary.documents else None)
+    state.transition("retrieval")
+    documents, terminal = _disambiguate_documents(
+        context, state, documents, part_ids, primary, primary.retrieval_mode,
+    )
+    if terminal is not None:
+        return terminal
+    # Branch policy already admitted this set; global expansion would bypass its cap and gate.
+    return EnrichmentOutcome(
+        documents=tuple(documents), new_part_ids=part_ids,
+        base_k=primary.base_k, retrieval_mode=primary.retrieval_mode,
+        active_filter=primary.active_filter, has_active_filter=primary.has_active_filter,
+        served_graph_documents=(), graph_documents=(), graph_routed=False,
+        graph_edge_count=0, graph_max_hops=0, community_documents=(),
+        community_summary_used=False, community_summary_count=0,
+        community_fallback_reason="branch_ranked",
+        grounded_math_enabled=bool(getattr(state.retrieval_adapter, "grounded_math_enabled", False)),
+        auxiliary_input_tokens=primary.auxiliary_input_tokens,
+        auxiliary_output_tokens=primary.auxiliary_output_tokens,
+        correction_estimated_cost=primary.correction_estimated_cost,
+    )
+
+
 def enrich_retrieval(
     decision: RouteDecision,
     primary: PrimaryRetrievalOutcome,
     state: Any,
 ) -> EnrichmentOutcome | PhaseTerminal:
+    if "+branch_ranked" in primary.retrieval_mode:
+        return _enrich_ranked_branches(decision, primary, state)
     context = _make_context(decision, state)
     graph = _enrich_graph(context, primary.documents, state)
     community = _enrich_community(context, graph, state)

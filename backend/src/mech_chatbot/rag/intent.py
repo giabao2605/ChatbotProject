@@ -13,7 +13,7 @@ import unicodedata
 from langchain_core.messages import HumanMessage
 from qdrant_client import models
 
-from mech_chatbot.config.logging import logger
+from mech_chatbot.config.logging import log_trace, logger
 from mech_chatbot.llm.external_ai import ExternalAICallCancelled, question_only_processing_context
 from mech_chatbot.llm.llm_client import cohere_invoke
 from mech_chatbot.rag.chitchat import is_chitchat
@@ -312,6 +312,8 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
         "document_references": [],
     }
 
+    raw_interpretations_count = 0
+    interpretations_extraction_status = "not_run"
     regex_codes = extract_mechanical_codes(question)
     if is_chitchat(question):
         intent_data["is_chitchat"] = True
@@ -336,12 +338,14 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
             parsed = json.loads(clean_json)
             if not isinstance(parsed, dict):
                 raise ValueError("intent response must be an object")
+            raw_interpretations = parsed.get("interpretations")
+            raw_interpretations_count = len(raw_interpretations) if isinstance(raw_interpretations, list) else 0
             policy = parsed.get("version_policy", "current_only")
             if policy not in ("current_only", "specific_version", "compare_versions",
                               "include_archived", "version_history", "all_current_variants"):
                 raise ValueError("invalid version policy")
             candidate = dict(intent_data)
-            candidate["interpretations"] = validated_interpretations(prompt_question, parsed.get("interpretations", []))
+            candidate["interpretations"] = validated_interpretations(prompt_question, raw_interpretations)
             candidate["base_codes"] = [str(c) for c in parsed.get("base_codes", []) if c]
             
             # Xy ly parse int an toan
@@ -366,18 +370,26 @@ def extract_search_intent(question, current_part_ids=None, user_department=None,
                 if _m and _m not in candidate["variant_codes"]:
                     candidate["variant_codes"].append(_m)
             intent_data = candidate
+            interpretations_extraction_status = ("parsed" if isinstance(raw_interpretations, list) else
+                                                "invalid_field" if "interpretations" in parsed else "missing_field")
         except concurrent.futures.TimeoutError:
+            interpretations_extraction_status = "timeout"
             if future is not None:
                 future.cancel()
             logger.warning(f"LLM Intent Extraction bi timeout. Fallback ve Regex.")
         except (ExternalAICallCancelled, RequestBudgetExceeded):
             raise
         except Exception as e:
+            interpretations_extraction_status = "error"
             logger.warning(f"Loi LLM Intent Extraction: {e}. Fallback ve Regex.")
         finally:
             if owns_runtime:
                 call_runtime.close()
 
+    log_trace("intent_interpretations", trace_id,
+              raw_interpretations_count=raw_interpretations_count,
+              validated_interpretations_count=len(intent_data["interpretations"]),
+              interpretations_extraction_status=interpretations_extraction_status)
     seen_codes = {
         str(code).strip().casefold()
         for code in intent_data["base_codes"]

@@ -464,8 +464,12 @@ def _activate_interpretations(rewrite, state):
     if (not queries or data.get("base_codes") or rewrite.new_part_ids or mechanical
             or getattr(state, "explicit_text_intents", ())
             or getattr(getattr(state, "invocation", None), "task_routing_contract", None)):
+        log_trace("interpretation_activation", getattr(state, "trace_id", None),
+                  validated_interpretations_count=len(queries), interpretations_active=False)
         return rewrite
     state.explicit_text_intents = tuple(queries)
+    log_trace("interpretation_activation", getattr(state, "trace_id", None),
+              validated_interpretations_count=len(queries), interpretations_active=True)
     return replace(rewrite, skip_hyde_anchor=True,
                    intent_data={**data, "interpretations_active": True, "clarification_required": False})
 
@@ -475,13 +479,24 @@ def route(prepared: PreparedRequest, state: Any) -> RoutingOutcome:
 
     setup = _enter_route(prepared, state)
     if isinstance(setup, RoutingOutcome):
+        log_trace("intent_interpretations", getattr(state, "trace_id", None), raw_interpretations_count=0,
+                  validated_interpretations_count=0, interpretations_extraction_status="not_run")
+        log_trace("interpretation_activation", getattr(state, "trace_id", None),
+                  validated_interpretations_count=0, interpretations_active=False)
         return setup
     rewrite = _rewrite_request(prepared, state)
-    if rewrite.intent_data.get("history_access_denied"):
+    history_denied = rewrite.intent_data.get("history_access_denied")
+    missing_version = not history_denied and _needs_version_clarification(rewrite)
+    chitchat = rewrite.intent_data.get("is_chitchat")
+    if history_denied or missing_version or chitchat:
+        log_trace("interpretation_activation", getattr(state, "trace_id", None),
+                  validated_interpretations_count=len(rewrite.intent_data.get("interpretations", ())),
+                  interpretations_active=False)
+    if history_denied:
         return _history_access_denied_terminal(prepared, state)
-    if _needs_version_clarification(rewrite):
+    if missing_version:
         return _missing_version_terminal(prepared, state)
-    if rewrite.intent_data.get("is_chitchat"):
+    if chitchat:
         return _chitchat_terminal(prepared, setup.mock_stream)
     rewrite = _activate_interpretations(rewrite, state)
     if rewrite.intent_data.get("clarification_required"):

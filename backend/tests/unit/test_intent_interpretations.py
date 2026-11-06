@@ -59,7 +59,7 @@ def _rewrite(**data):
 def test_interpretations_reuse_explicit_branch_plan():
     state = SimpleNamespace(explicit_text_intents=(), invocation=SimpleNamespace(task_routing_contract=None))
     result = _activate_interpretations(_rewrite(), state)
-    plan = _compile_plan(SimpleNamespace(effective_question=result.effective_question), state, {}).plan
+    plan = _compile_plan(SimpleNamespace(effective_question=result.effective_question, trace_id='explicit-intent-test'), state, {}).plan
     assert result.intent_data['interpretations_active']
     assert plan.subqueries == tuple(result.intent_data['interpretations'])
     assert plan.is_complex and len(plan.subqueries) == 2
@@ -277,3 +277,96 @@ def test_default_preparation_preserves_baseline_missing_referent_scope(question,
         assert refused == ['clarification_required']
     else:
         assert result is None and refused == []
+
+
+@pytest.mark.parametrize('values,raw_count,validated_count', [
+    (['Nghỉ phép năm?', 'Nghỉ việc riêng?'], 2, 2),
+    (['Nghỉ phép năm?', 'Nghỉ việc riêng?', 'Nghỉ theo HR-123?'], 3, 2),
+    ([], 0, 0),
+    ('PRIVATE_INVALID_VALUE', 0, 0),
+])
+def test_interpretation_count_trace_contains_only_metadata(monkeypatch, values, raw_count, validated_count):
+    events = []
+    monkeypatch.setattr(intent, 'log_trace', lambda *args, **kwargs: events.append((args, kwargs)), raising=False)
+    result = intent.extract_search_intent('Nghỉ?', trace_id='intent-count-test',
+        invoke_provider=lambda *a, **k: SimpleNamespace(content=json.dumps({'interpretations': values}, ensure_ascii=False)))[-1]
+    assert len(result['interpretations']) == validated_count
+    assert events == [(('intent_interpretations', 'intent-count-test'), {
+        'raw_interpretations_count': raw_count,
+        'validated_interpretations_count': validated_count,
+        'interpretations_extraction_status': 'parsed' if isinstance(values, list) else 'invalid_field',
+    })]
+
+
+def test_interpretation_count_trace_does_not_treat_provider_failure_as_empty_response(monkeypatch):
+    events = []
+    monkeypatch.setattr(intent, 'log_trace', lambda *args, **kwargs: events.append((args, kwargs)), raising=False)
+    def unavailable(*args, **kwargs):
+        raise TimeoutError('synthetic timeout')
+    intent.extract_search_intent('Nghỉ?', trace_id='intent-timeout-test', invoke_provider=unavailable)
+    assert events == [(('intent_interpretations', 'intent-timeout-test'), {
+        'raw_interpretations_count': 0, 'validated_interpretations_count': 0,
+        'interpretations_extraction_status': 'timeout',
+    })]
+
+
+@pytest.mark.parametrize('data,part_ids,explicit,contract,expected', [
+    ({}, (), (), None, True),
+    ({'base_codes': ['PRIVATE-CODE']}, (), (), None, False),
+    ({'models': ['PRIVATE-MODEL']}, (), (), None, False),
+    ({'interpretations': []}, (), (), None, False),
+    ({}, ('PRIVATE-INHERITED',), (), None, False),
+    ({}, (), ('PRIVATE-EXPLICIT',), None, False),
+    ({}, (), (), 'semantic-text-task-routing-v1', False),
+])
+def test_interpretation_activation_trace_respects_routing_guards(monkeypatch, data, part_ids, explicit, contract, expected):
+    from mech_chatbot.rag.phases import routing
+    events = []
+    monkeypatch.setattr(routing, 'log_trace', lambda *args, **kwargs: events.append((args, kwargs)))
+    state = SimpleNamespace(trace_id='activation-test', explicit_text_intents=explicit,
+                            invocation=SimpleNamespace(task_routing_contract=contract))
+    rewrite = replace(_rewrite(**data), new_part_ids=part_ids)
+    result = routing._activate_interpretations(rewrite, state)
+    assert bool(result.intent_data.get('interpretations_active')) is expected
+    assert events == [(('interpretation_activation', 'activation-test'), {
+        'validated_interpretations_count': 0 if data.get('interpretations') == [] else 2,
+        'interpretations_active': expected,
+    })]
+
+
+@pytest.mark.parametrize('payload,status', [({}, 'missing_field'), ([], 'error')])
+def test_interpretation_missing_or_invalid_response_logs_zero_with_status(monkeypatch, payload, status):
+    events = []
+    monkeypatch.setattr(intent, 'log_trace', lambda *args, **kwargs: events.append((args, kwargs)))
+    intent.extract_search_intent('Nghỉ?', trace_id='count-status',
+        invoke_provider=lambda *a, **k: SimpleNamespace(content=json.dumps(payload)))
+    assert events == [(('intent_interpretations', 'count-status'), {
+        'raw_interpretations_count': 0, 'validated_interpretations_count': 0,
+        'interpretations_extraction_status': status,
+    })]
+
+
+@pytest.mark.parametrize('reason', ['setup', 'history', 'version', 'chitchat'])
+def test_early_routing_terminal_logs_inactive_interpretations_once(monkeypatch, reason):
+    from mech_chatbot.rag.phases import routing
+    events = []
+    terminal = routing.RoutingOutcome(terminal=object(), reason_code='chitchat')
+    state = SimpleNamespace(trace_id='early-terminal')
+    monkeypatch.setattr(routing, 'log_trace', lambda *args, **kwargs: events.append((args, kwargs)))
+    monkeypatch.setattr(routing, '_enter_route', lambda *a: terminal if reason == 'setup' else SimpleNamespace(mock_stream=None))
+    monkeypatch.setattr(routing, '_rewrite_request', lambda *a: _rewrite(history_access_denied=reason == 'history', is_chitchat=reason == 'chitchat'))
+    monkeypatch.setattr(routing, '_needs_version_clarification', lambda *a: reason == 'version')
+    monkeypatch.setattr(routing, '_history_access_denied_terminal', lambda *a: terminal)
+    monkeypatch.setattr(routing, '_missing_version_terminal', lambda *a: terminal)
+    monkeypatch.setattr(routing, '_chitchat_terminal', lambda *a: terminal)
+    assert routing.route(object(), state) is terminal
+    activation = [event for event in events if event[0][0] == 'interpretation_activation']
+    assert activation == [(('interpretation_activation', 'early-terminal'), {
+        'validated_interpretations_count': 0 if reason == 'setup' else 2,
+        'interpretations_active': False,
+    })]
+    if reason == 'setup':
+        assert events[0] == (('intent_interpretations', 'early-terminal'), {
+            'raw_interpretations_count': 0, 'validated_interpretations_count': 0,
+            'interpretations_extraction_status': 'not_run',
+        })

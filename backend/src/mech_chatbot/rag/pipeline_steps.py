@@ -1199,16 +1199,19 @@ def generate_answer(plan: GenerationPlan, *, cancel_event=None, metrics=None):
         _raise_if_cancelled()
         def adjudicate(prompt, *, response_format):
             invoke = getattr(provider_adapter, "invoke_once", None) or provider_adapter.invoke
-            for schema in (response_format, None):
+            for attempt, schema in enumerate((response_format, None), 1):
                 _raise_if_cancelled()
                 options = {"response_format": schema} if schema is not None else {}
                 try:
+                    timeout_seconds = remaining_request_timeout(
+                        getattr(provider_adapter.settings, "timeout_seconds", 120.0),
+                        stage="claim verification", deadline_monotonic=plan.control.deadline_monotonic)
+                    log_trace("claim_verification_call", trace_id, surface="evidence_verification",
+                              attempt=attempt, response_format_sent=schema is not None)
                     response = invoke(
                         [HumanMessage(content=prompt)], surface="evidence_verification", trace_id=trace_id,
                         doc_ids=_external_doc_ids, security_levels=_external_security, policies=_external_policies,
-                        retry_counter=budget, timeout_seconds=remaining_request_timeout(
-                            getattr(provider_adapter.settings, "timeout_seconds", 120.0),
-                            stage="claim verification", deadline_monotonic=plan.control.deadline_monotonic),
+                        retry_counter=budget, timeout_seconds=timeout_seconds,
                         **options,
                     )
                     return getattr(response, "content", response)

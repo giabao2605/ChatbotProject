@@ -476,6 +476,11 @@ def rerank_retrieval(
                   output_docs=len(retrieved_docs), latency_ms=round((time.perf_counter()-started)*1000, 2))
         if not retrieved_docs:
             return _empty_context_terminal(decision, enrichment, state, new_part_ids)
+        if '+branch_ranked' in str(enrichment.retrieval_mode):
+            log_trace('rerank', trace_id, input_docs=len(retrieved_docs), output_docs=len(retrieved_docs),
+                      backend='branch_rank', status='skipped', fallback=False,
+                      reason='decomposition_already_ranked')
+            return RerankOutcome(tuple(retrieved_docs), tuple(served_graph_docs))
         fake_docs, real_docs = _prepare_candidates(
             retrieved_docs,
             intent_data,

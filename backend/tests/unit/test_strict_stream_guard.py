@@ -873,7 +873,8 @@ def test_verifier_schema_fallback_is_one_time_and_only_for_unsupported_schema(mo
     draft = 'Employees receive paid leave. [SRC:D7P1]'
     runtime = _prepare(module, monkeypatch, _FakeChain([draft]), real_verification=True)
     monkeypatch.setattr(module, 'has_unsupported_numbers', lambda *a, **k: False)
-    calls, warnings = [], []
+    calls, warnings, trace_events = [], [], []
+    monkeypatch.setattr(module, 'log_trace', lambda event, trace_id, **metadata: trace_events.append((event, trace_id, metadata)))
     monkeypatch.setattr(module.logger, 'warning', lambda message, *a, **k: warnings.append(message))
     def invoke(messages, **kwargs):
         calls.append(kwargs)
@@ -911,6 +912,12 @@ def test_verifier_schema_fallback_is_one_time_and_only_for_unsupported_schema(mo
     assert len(calls) == (2 if fallback else 1)
     assert calls[0]['response_format']['type'] == 'json_schema'
     assert calls[0]['surface'] == 'evidence_verification'
+    verifier_events = [item for item in trace_events if item[0] == 'claim_verification_call']
+    assert len(verifier_events) == len(calls)
+    for attempt, (event, call) in enumerate(zip(verifier_events, calls), 1):
+        assert event[1] == call['trace_id']
+        assert event[2] == {'surface': 'evidence_verification', 'attempt': attempt,
+                            'response_format_sent': 'response_format' in call}
     if fallback:
         assert 'response_format' not in calls[1]
         assert {k:v for k,v in calls[0].items() if k not in {'response_format', 'timeout_seconds'}} == {

@@ -858,7 +858,7 @@ def merge_branch_documents(branches):
 def served_branch_documents(documents, retrieval_mode):
     """Return the branch evidence that is eligible for final generation."""
     selected = list(documents or ())
-    if str(retrieval_mode).startswith("general"):
+    if str(retrieval_mode).startswith("general") and "+branch_ranked" not in str(retrieval_mode):
         return selected[:1]
     return selected
 
