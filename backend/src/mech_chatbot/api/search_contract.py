@@ -27,4 +27,6 @@ class SearchRequest(BaseModel):
         if mode == 'comprehensive' and (typed_action or values.get('image_path') or values.get('image_token')):
             raise ValueError('Comprehensive search requires a standalone text request')
         validate_continuation(mode, values.get("continuation_cursor"))
+        if "search_mode" not in values and mode == "quick":
+            return values  # keep the default out of model_fields_set; signed pilot replays hash only sent fields
         return {**values, "search_mode": mode}

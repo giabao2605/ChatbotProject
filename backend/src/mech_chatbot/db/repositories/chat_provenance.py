@@ -32,7 +32,10 @@ def provenance_record(item):
 def _decode(payload):
     if not isinstance(payload,str) or len(payload)>16384:
         raise ValueError('Invalid provenance')
-    return provenance_record(json.loads(payload))
+    item = json.loads(payload)
+    if isinstance(item, dict) and item.get('schema') == 'source-reference-v1':
+        return None  # ordinary page evidence (GD2 identity); its access is rechecked with TaiLieu, not here
+    return provenance_record(item)
 
 
 def source_provenance_current(conn, item, profile):
@@ -87,11 +90,11 @@ def load_structured_history(conn, chat_id, profile):
                             {'chat':chat_id}).fetchall()
     pins, scopes, graphs = {}, {}, {}
     for doc_id, source_ref, payload in evidence:
-        if payload is None:
+        record = None if payload is None else _decode(payload)
+        if record is None:
             if re.fullmatch(r'D\d+L[0-9A-Fa-f]{16}',source_ref or ''):
                 raise PermissionError('History evidence unavailable')
             continue
-        record = _decode(payload)
         if record['doc_id'] != doc_id or record['source_id'] != source_ref:
             raise PermissionError('History evidence unavailable')
         if record.get('graph_context'):
@@ -131,9 +134,9 @@ def load_structured_history(conn, chat_id, profile):
                         {'chat':chat_id}).fetchall()
     cards = []
     for doc_id, payload in rows:
-        if payload is None:
+        record = None if payload is None else _decode(payload)
+        if record is None:
             continue
-        record = _decode(payload)
         if record['doc_id'] != doc_id or record != pins.get(record['source_id']):
             raise PermissionError('History evidence unavailable')
         cards.append(structured_citation(record,page_has_vision=lambda *_:False))

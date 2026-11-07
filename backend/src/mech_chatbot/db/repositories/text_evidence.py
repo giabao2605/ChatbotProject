@@ -222,12 +222,24 @@ def _sequence_rows(conn, doc_id, profile, *, review=False):
     return snapshot, tuple(_bound_fact(row) for row in rows)
 
 
+_ABSENT = object()
+_UNSET_CONTEXT = {'subject': '', 'attributes': [], 'applicability': [], 'activity_status': 'unconfirmed',
+                  'valid_from': None, 'valid_until': None}
+
+
+def _attested(fact):
+    # GD4 business context in its default state and the approval time are not attested content,
+    # so sequences attested before GD4 keep their fingerprint.
+    return {k: v for k, v in json.loads(_json(fact)).items()
+            if k != 'confirmed_at' and _UNSET_CONTEXT.get(k, _ABSENT) != v}
+
+
 def _sequence_manifest(snapshot, facts):
     facts = tuple(f for f in facts if not f.linked_bom_fact_id)
     ordered = sorted((f for f in facts if f.kind == 'assembly_step'), key=lambda fact: (fact.sequence_number or 0, fact.fact_id))
-    notes = tuple(json.loads(_json(f)) for f in sorted(facts, key=lambda f: f.fact_id) if f.kind == 'drawing_note')
+    notes = tuple(_attested(f) for f in sorted(facts, key=lambda f: f.fact_id) if f.kind == 'drawing_note')
     # Keep existing attestations valid when a document has no drawing notes.
-    steps = tuple({k: v for k, v in json.loads(_json(fact)).items() if k != 'linked_step_fact_id'} for fact in ordered)
+    steps = tuple({k: v for k, v in _attested(fact).items() if k != 'linked_step_fact_id'} for fact in ordered)
     canonical = {'steps': steps, 'notes': notes} if notes else steps
     fingerprint = hashlib.sha256(json.dumps(canonical, sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()
     approved = tuple(note for note in notes if note['review_status'] == 'approved')
