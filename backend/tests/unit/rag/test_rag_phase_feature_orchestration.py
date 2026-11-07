@@ -1884,7 +1884,8 @@ def test_executor_runs_one_governed_correction_across_decomposition_branches(mon
             return SimpleNamespace(
                 content='{"subqueries":["So sánh P-1","P-2"]}'
             )
-        return SimpleNamespace(content="rewritten branch")
+        # The guarded corrective rewrite (GD3) rejects rewrites that drop the branch code.
+        return SimpleNamespace(content="rewritten branch P-1")
 
     outcome = _run_phase(
         lambda state: retrieval_phase.retrieve_primary(decision, state),
@@ -1896,7 +1897,7 @@ def test_executor_runs_one_governed_correction_across_decomposition_branches(mon
                         metadata={"doc_id": 21, "trang_so": 1},
                     )
                 ]
-                if kwargs["query_to_search"] == "rewritten branch"
+                if kwargs["query_to_search"] == "rewritten branch P-1"
                 else [],
                 5,
                 "hybrid",
@@ -1909,7 +1910,7 @@ def test_executor_runs_one_governed_correction_across_decomposition_branches(mon
     )
 
     assert sum(
-        call["query_to_search"] == "rewritten branch"
+        call["query_to_search"] == "rewritten branch P-1"
         for call in retrieval_calls
     ) == 1
     assert outcome.correction_estimated_cost > 0

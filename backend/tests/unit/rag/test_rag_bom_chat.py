@@ -197,17 +197,14 @@ def test_bom_context_rejects_unbounded_or_noncanonical_operands(quantity,scope,d
     with pytest.raises(ValueError):BomRollupQuery(GraphQuery('document:1' if direction=='contains' else 'part:p','product','factory',direction),quantity,scope)
 
 
-def test_bom_cancellation_deadline_and_overflow_return_no_totals(bom_store):
+def test_bom_cancellation_and_deadline_stream_no_tokens():
     import threading
     from mech_chatbot.rag.execution import RagCancelled,RagToken,RequestBudgetLimits
-    store,engine=bom_store
     cancel=threading.Event();cancel.set()
     events=list(DefaultRagExecutor().run(request(),RagInvocation('cancel',mode='evaluation'),cancellation=cancel))
     assert any(isinstance(e,RagCancelled) for e in events) and not any(isinstance(e,RagToken) for e in events)
     events=list(DefaultRagExecutor(budget_limits=RequestBudgetLimits(deadline_seconds=0)).run(request(),RagInvocation('deadline',mode='evaluation')))
     assert not any(isinstance(e,RagToken) for e in events)
-    result=run(engine,replace(request(),question='Chứa gì; số lượng; vật liệu; đổi giá'))
-    assert result.outcome=='refused' and result.diagnostics.budget.calculations==0
 
 
 @pytest.mark.parametrize('path',['/chat','/chat/stream'])

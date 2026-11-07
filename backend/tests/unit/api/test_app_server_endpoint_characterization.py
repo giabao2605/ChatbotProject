@@ -885,7 +885,8 @@ def test_chat_stream_serializes_incomplete_runner_error_after_visible_delta(
     assert response.headers["x-accel-buffering"] == "no"
     events = _sse_events(response.text)
     assert [event for event, _payload in events] == ["thinking", "delta", "error"]
-    assert events[-1][1] == {"message": "RAG stream ended without a done event"}
+    assert events[-1][1] == {"message": "RAG stream ended without a done event",
+                             "code": "rag_stream_incomplete", "retryable": False}
 
 
 def test_chat_stream_serializes_upstream_runner_error(monkeypatch, client_for):

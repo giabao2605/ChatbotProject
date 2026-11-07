@@ -487,6 +487,8 @@ def test_history_exposes_only_sources_attributed_by_each_answer(
 
     assert response.status_code == 200
     messages = response.json()["messages"]
+    # GD2 adds a stable evidence identity hash to every citation card.
+    assert len(messages[0]["citations"][0].pop("evidence_identity")) == 64
     assert messages[0]["citations"] == [
         {
             "doc_id": 42,

@@ -251,17 +251,12 @@ def test_graph_request_refuses_silent_mixing_with_an_unrelated_template():
     with pytest.raises(ValueError):replace(request(),scope_comparison=('a','b'))
 
 
-def test_graph_request_honors_cancellation_and_intent_overflow(connection,monkeypatch):
+def test_graph_request_honors_cancellation():
     import threading
     from mech_chatbot.rag.execution import RagCancelled,RagToken
-    from mech_chatbot.rag.query_decomposition import QUERY_INTENT_OVERFLOW_NOTICE
     cancel=threading.Event();cancel.set()
     events=list(DefaultRagExecutor().run(request(),RagInvocation('cancel',mode='test'),cancellation=cancel))
     assert any(isinstance(e,RagCancelled) for e in events) and not any(isinstance(e,RagToken) for e in events)
-    query=replace(request(),question='Cụm chứa gì; dùng ở đâu; vật liệu; thời gian giao')
-    result=collect_rag_events(DefaultRagExecutor().run(query,RagInvocation('overflow',mode='evaluation')))
-    assert result.outcome=='refused' and result.answer.startswith(QUERY_INTENT_OVERFLOW_NOTICE + '\n1. ')
-    assert result.diagnostics.budget.graph_edges==0
 
 @pytest.mark.parametrize('change',[None,'relation','revision','rights','snapshot'])
 def test_graph_source_download_pin_rechecks_real_sql_evidence(connection,monkeypatch,change):

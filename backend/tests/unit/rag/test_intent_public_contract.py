@@ -591,8 +591,8 @@ def test_runtime_factory_owns_executor_lifecycle(monkeypatch):
     created = []
 
     class Executor:
-        def __init__(self, max_workers):
-            created.append(max_workers)
+        def __init__(self, max_workers, thread_name_prefix):
+            created.append((max_workers, thread_name_prefix))
             self.closed = None
 
         def shutdown(self, *, wait, cancel_futures):
@@ -608,7 +608,8 @@ def test_runtime_factory_owns_executor_lifecycle(monkeypatch):
     )
     runtime.close()
 
-    assert created == [3]
+    # The release drain probe recognises the intent thread by this name.
+    assert created == [(3, "rag_intent")]
     assert runtime.intent_timeout == 1.5
     assert runtime.context_timeout == 2.5
     assert runtime.query_rewrite_enabled is False

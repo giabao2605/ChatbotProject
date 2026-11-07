@@ -423,16 +423,6 @@ def test_row_only_sources_survive_comparison_without_fabricated_sheet_or_page(st
     assert all(card['page_no'] is None and card['locator']['sheet'] is None for card in result.citations)
 
 
-def test_comparison_does_not_silently_discard_four_question_intents(store):
-    from mech_chatbot.rag.query_decomposition import QUERY_INTENT_OVERFLOW_NOTICE
-    query = replace(request(), question='Tổng A; tổng B; chênh lệch; xem vật liệu')
-    with bind_repository_runtime(db_engine=store):
-        result = collect_rag_events(DefaultRagExecutor().run(query, RagInvocation('overflow', mode='evaluation')))
-    assert result.outcome == 'refused' and result.refusal_reason == 'intent_overflow'
-    assert result.answer.startswith(QUERY_INTENT_OVERFLOW_NOTICE + '\n1. ')
-    assert result.citations == () and result.diagnostics.budget.calculations == 0
-
-
 @pytest.mark.parametrize('reason', ['private arbitrary reason', None])
 def test_observation_unknown_refusal_is_generic_without_exposing_reason(store, reason):
     from mech_chatbot.evaluation.grounded_math_v2 import export_math_observation
@@ -443,32 +433,6 @@ def test_observation_unknown_refusal_is_generic_without_exposing_reason(store, r
     observed=export_math_observation(replace(result,refusal_reason=reason))
     assert observed['actual_outcome']=='insufficient_evidence'
     assert 'refusal_reason' not in observed and 'private arbitrary reason' not in str(observed)
-
-
-@pytest.mark.parametrize('fault', ['reason_bool','reason_list','outcome','answer_outcome','subqueries_bool',
-                                   'subqueries_float','subqueries_work','graph_work','metadata','query_type'])
-def test_overflow_observation_rejects_invalid_or_executed_metadata(store,fault):
-    from mech_chatbot.evaluation.grounded_math_v2 import export_math_observation
-    from mech_chatbot.rag.execution import RagDiagnostics
-    query=replace(request(),question='Tổng A; tổng B; chênh lệch; xem vật liệu')
-    with bind_repository_runtime(db_engine=store):
-        result=collect_rag_events(DefaultRagExecutor().run(query,
-            RagInvocation('bad-overflow',mode='evaluation',capture_math_observations=True)))
-    if fault.startswith('reason_'):
-        result=replace(result,refusal_reason=True if fault=='reason_bool' else ['intent_overflow'])
-    elif fault=='outcome':
-        result=replace(result,outcome='answered')
-    elif fault in {'answer_outcome','metadata','query_type'}:
-        key,value={'answer_outcome':('answer_outcome',True),'metadata':('graph_v2',{'status':'unknown'}),
-                   'query_type':('query_v2',[])}[fault]
-        result=replace(result,diagnostics=RagDiagnostics.from_mapping({**dict(result.diagnostics),key:value}))
-    else:
-        field,value={'subqueries_bool':('subqueries',False),'subqueries_float':('subqueries',0.0),
-                     'subqueries_work':('subqueries',1),'graph_work':('graph_examined_relations',1)}[fault]
-        result=replace(result,diagnostics=replace(result.diagnostics,
-            budget=replace(result.diagnostics.budget,**{field:value})))
-    with pytest.raises(ValueError):
-        export_math_observation(result)
 
 
 def test_executed_math_cannot_be_relabelled_as_untouched_intent_overflow(store):

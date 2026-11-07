@@ -31,7 +31,7 @@ def test_full_query_capability_is_advertised_and_transport_binds_parent_identity
     assert response.json() == {'schema':'advanced-rag-v2-controlled-demo', 'contract':cap.contract,
         'accepted':False, 'offline_only':False, 'max_branches':3,
         'actions':['contains','where_used','bom_rollup','scope_comparison','scope_total'],
-        'text_query':True, 'scope_total_query':True}
+        'text_query':True, 'scope_total_query':True, 'activation_scope':cap.context, 'expires_at':cap.expires_at}
     actions = [{'query_plan':{'branches':[{'branch_id':'sum','question':'Sum','scope_total':{'scope_id':'A'}}]}},
                {'text_query':True}, {'bom_rollup':{'root_key':'document:1', 'product_scope':'assembly',
                 'site':'factory', 'order_quantity':'1', 'rounding_scope':'reviewed-policy'}}]

@@ -15,6 +15,8 @@ from tests.unit.api.test_rag_server_endpoints import rag_client, SERVICE_HEADERS
 from mech_chatbot.rag.execution import DefaultRagExecutor
 from mech_chatbot.rag.execution_contracts import RagRuntimeContract
 
+GUIDE_TEXT = 'The difference is B minus A. The percentage compares the difference to the first total.'
+
 
 @pytest.mark.parametrize('path', ['/chat', '/chat/stream'])
 @pytest.mark.parametrize('wrong_number', [False, True])
@@ -29,8 +31,13 @@ def test_computed_dependency_http_delivers_only_verified_numbers(path, wrong_num
         conn.execute(text("INSERT INTO PhongBanChiaSe VALUES(17,'HR')"))
         conn.execute(text('ALTER TABLE TaiLieu ADD COLUMN ExternalProcessingPolicy TEXT'))
         conn.execute(text("UPDATE TaiLieu SET ExternalProcessingPolicy='all_external'"))
+        # Retrieved text is certified against the stored page before generation.
+        conn.execute(text('CREATE TABLE DocumentPages(DocID INT,PageNo INT,TextExtract TEXT,LocalOCRText TEXT,VisionSummary TEXT)'))
+        conn.execute(text("INSERT INTO DocumentPages VALUES(17,2,:page,NULL,NULL)"), {'page': GUIDE_TEXT})
+        conn.execute(text('CREATE TABLE TechnicalAttributes(AttributeID INTEGER,DocID INTEGER,PageNo INTEGER,AttributeType TEXT,'
+                          'AttributeValue TEXT,Unit TEXT,HumanVerified INTEGER,ExtractedBy TEXT,Confidence REAL)'))
     docs, _, _, runtime = offline_pipeline
-    guide = _document('The difference is B minus A. The percentage compares the difference to the first total.')
+    guide = _document(GUIDE_TEXT)
     docs.append(type(guide)(page_content=guide.page_content,
         metadata={**guide.metadata, 'external_processing_policy':'all_external'}))
     prompts = []
@@ -45,6 +52,8 @@ def test_computed_dependency_http_delivers_only_verified_numbers(path, wrong_num
     profile = {'user_id':7, 'username':'approver', 'department':'ENG', 'roles':['reviewer'],
         'allowed_departments':['ENG','HR'], 'allowed_sites':['factory','HCM'], 'max_security_level':'internal'}
     monkeypatch.setattr(core, 'load_user_profile', lambda **kwargs: profile)
+    from mech_chatbot.db.repositories import feedback_access  # evidence pinning re-reads the actor profile
+    monkeypatch.setattr(feedback_access, 'load_user_profile', lambda **kwargs: profile)
     provider = SimpleNamespace(client=RunnableLambda(generate),
         settings=SimpleNamespace(model_name='fixture', base_url='http://127.0.0.1/fixture'),
         invoke=lambda *_a, **_kw: SimpleNamespace(content=''))

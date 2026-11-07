@@ -47,6 +47,7 @@ def _request() -> SimpleNamespace:
         allowed_departments=("Technical",),
         max_security_level="internal",
         allowed_sites=("HQ",),
+        image_analysis=None,
     )
 
 
@@ -74,9 +75,8 @@ def _phase_inputs(document: Document):
         graph_edge_count=1,
         graph_max_hops=2,
     )
-    reranked = SimpleNamespace(
-        documents=(document,), served_graph_documents=(),
-    )
+    from mech_chatbot.rag.phases.retrieval_rerank import RerankOutcome
+    reranked = RerankOutcome(documents=(document,), served_graph_documents=())
     return primary, enrichment, reranked
 
 
@@ -88,8 +88,11 @@ def _state() -> SimpleNamespace:
         final_generations=0,
         provider_retries=0,
         deadline_exceeded=False,
+        deadline_monotonic=None,
     )
     return SimpleNamespace(
+        request=SimpleNamespace(access=None),
+        checkpoint=lambda *_args: None,
         budget=budget,
         transition=lambda _phase: None,
         refuse=lambda _reason: None,
@@ -106,6 +109,9 @@ def _install_terminal_policy(monkeypatch, evidence) -> None:
         EvidenceState.INSUFFICIENT,
         "missing fact",
     )
+    from mech_chatbot.services import feedback_service
+    # Evidence pinning reads SQL; this phase test only covers refusal validation.
+    monkeypatch.setattr(feedback_service, "pin_generation_evidence", lambda documents, *_a, **_k: documents)
     monkeypatch.setattr(evidence, "_assemble_context", lambda *_args: "context")
     monkeypatch.setattr(evidence, "_select_citations", lambda *_args: ("", []))
     monkeypatch.setattr(evidence, "_audit_confidential_access", lambda *_args: None)

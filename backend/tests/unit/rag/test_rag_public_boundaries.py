@@ -339,6 +339,7 @@ def test_parent_hydration_is_terminal_when_vector_storage_is_unavailable(monkeyp
         page_content="selected evidence",
         metadata={
             "doc_id": 73,
+            "version_no": 1,
             "parent_page": 3,
             "site": "HQ",
             "phong_ban_quyen": ["Technical"],

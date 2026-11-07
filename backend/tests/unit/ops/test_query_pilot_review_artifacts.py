@@ -211,7 +211,8 @@ def test_review_ui_loader_decrypts_one_item_and_renders_refusal_in_memory(
     )
     try:
         assert question == "private question 1"
-        assert "không ghi thông tin đủ" in answer.decode()
+        from mech_chatbot.rag.evidence_gate import make_insufficient_evidence_message
+        assert answer.decode() == make_insufficient_evidence_message(None, None)
     finally:
         answer[:] = b"\0" * len(answer)
 

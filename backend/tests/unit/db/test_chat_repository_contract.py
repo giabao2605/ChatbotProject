@@ -320,7 +320,7 @@ def test_history_redacts_answer_after_permissions_are_revoked(install_engine, mo
         strict_site_filter=True,
     )
 
-    assert "không còn quyền xem" in history[1]["content"]
+    assert "Nội dung đã được ẩn" in history[1]["content"]
     assert history[1]["ref_images"] == []
 
 
@@ -334,7 +334,7 @@ def test_history_authorization_error_fails_closed(install_engine):
 
     history = chat.get_chat_history("s1", username="alice")
 
-    assert "không còn quyền xem" in history[1]["content"]
+    assert "Nội dung đã được ẩn" in history[1]["content"]
     assert history[1]["ref_images"] == []
 
 

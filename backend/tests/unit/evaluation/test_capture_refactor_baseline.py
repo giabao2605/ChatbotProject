@@ -393,6 +393,8 @@ def test_default_sse_capture_observes_real_app_endpoint_and_serializer():
         "detail": "busy",
         "message": "RAG server busy",
         "status": 503,
+        "code": "rag_stream_error",
+        "retryable": True,
     }
 
 

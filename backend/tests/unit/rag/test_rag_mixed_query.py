@@ -5,6 +5,23 @@ from tests.unit.rag.test_rag_bom_chat import bom_store, request, store, connecti
 from tests.unit.rag.test_rag_pipeline_public_characterization import offline_pipeline
 
 
+def _register_text_sources(conn, documents):
+    """Text evidence is certified against SQL before generation; give fixture chunks real source rows."""
+    from sqlalchemy import text
+    conn.execute(text('CREATE TABLE IF NOT EXISTS DocumentPages(DocID INT,PageNo INT,TextExtract TEXT,LocalOCRText TEXT,VisionSummary TEXT)'))
+    conn.execute(text('CREATE TABLE IF NOT EXISTS TechnicalAttributes(AttributeID INTEGER,DocID INTEGER,PageNo INTEGER,AttributeType TEXT,'
+                      'AttributeValue TEXT,Unit TEXT,HumanVerified INTEGER,ExtractedBy TEXT,Confidence REAL)'))
+    for doc in documents:
+        meta = doc.metadata
+        conn.execute(text("INSERT INTO TaiLieu(DocID,VersionNo,TenFile,ThuMuc,Site,SecurityLevel,LifecycleStatus,ReviewStatus,"
+                          "PublicationState,Servable,IsCurrent,EffectiveStatus,KnowledgeApproverUserID) VALUES(:doc,:version,:file,"
+                          "'HR','HCM','internal','published','approved','published',1,1,'effective',7)"),
+                     {'doc': meta['doc_id'], 'version': meta['version_no'], 'file': meta['file_goc']})
+        conn.execute(text("INSERT INTO PhongBanChiaSe VALUES(:doc,'HR')"), {'doc': meta['doc_id']})
+        conn.execute(text('INSERT INTO DocumentPages VALUES(:doc,:page,:content,NULL,NULL)'),
+                     {'doc': meta['doc_id'], 'page': meta['trang_so'], 'content': doc.page_content})
+
+
 def test_mixed_claim_repair_keeps_nonzero_shared_accounting(bom_store, offline_pipeline, monkeypatch):
     from contextlib import nullcontext
     from types import SimpleNamespace
@@ -15,10 +32,13 @@ def test_mixed_claim_repair_keeps_nonzero_shared_accounting(bom_store, offline_p
     from mech_chatbot.rag.execution import DefaultRagExecutor, RagInvocation, collect_rag_events
     from mech_chatbot.rag import pipeline_steps
     from tests.unit.rag.test_rag_pipeline_public_characterization import _document
-    _, engine = bom_store
-    _, _, _, runtime = offline_pipeline
+    source_store, engine = bom_store
+    pipeline_documents, _, _, runtime = offline_pipeline
     runtime.claim_repair_enabled = True
     document = _document('Chi phí là 10 USD. Chi phí đã được ghi nhận trong chính sách nội bộ.')
+    pipeline_documents.append(document)  # SQL metadata refresh only knows the pipeline's documents
+    with source_store.begin() as conn:
+        _register_text_sources(conn, [document])
     class Store:
         def __init__(self, **kwargs):
             pass
@@ -28,9 +48,11 @@ def test_mixed_claim_repair_keeps_nonzero_shared_accounting(bom_store, offline_p
     monkeypatch.setattr(pipeline_steps, 'audited_external_call', lambda **kwargs: nullcontext())
     repairs = []
     def repair(*args, **kwargs):
+        if kwargs.get('surface') != 'claim_repair':
+            return SimpleNamespace(content='')
         repairs.append(True)
         return SimpleNamespace(content='Chi phí là 10 USD. [SRC:D17P2]')
-    provider = SimpleNamespace(client=RunnableLambda(lambda _: AIMessage(content='Chi phí là 999 USD. [SRC:D17P2]')),
+    provider = SimpleNamespace(client=RunnableLambda(lambda _, **_kw: AIMessage(content='Chi phí là 999 USD. [SRC:D17P2]')),
         invoke=repair, settings=SimpleNamespace(model_name='fixture', base_url='http://127.0.0.1/fixture'))
     original = request()
     selected = replace(original, bom_rollup=None, question='Tính BOM; chi phí là bao nhiêu?',
@@ -185,7 +207,7 @@ def test_mixed_text_batch_generates_once_and_preserves_branch_order(bom_store,of
     with source_store.begin() as conn:
         conn.execute(text('ALTER TABLE TaiLieu ADD COLUMN ExternalProcessingPolicy TEXT'))
         conn.execute(text("UPDATE TaiLieu SET ExternalProcessingPolicy='all_external'"))
-    _,_,_,runtime=offline_pipeline
+    pipeline_documents,_,_,runtime=offline_pipeline
     documents=[_document('Điều kiện thanh toán: thanh toán trong vòng ba mươi ngày.'),
                _document('Hướng dẫn đối chiếu: nhân viên kiểm tra hóa đơn theo quy trình nội bộ.' +
                    (' Khi còn thiếu dòng hoặc chưa xác nhận đủ danh sách, chưa công bố tổng khoản cần kiểm tra.'
@@ -196,10 +218,14 @@ def test_mixed_text_batch_generates_once_and_preserves_branch_order(bom_store,of
         def __init__(self,**kwargs):pass
         def similarity_search(self,query,**kwargs):
             return [documents[0]] if 'thanh' in query else [] if missing else [documents[1]]
+    pipeline_documents.extend(documents)  # SQL metadata refresh only knows the pipeline's documents
+    with source_store.begin() as conn:
+        _register_text_sources(conn, documents)
+        conn.execute(text("UPDATE TaiLieu SET ExternalProcessingPolicy='all_external'"))
     monkeypatch.setattr('langchain_qdrant.QdrantVectorStore',Store)
     monkeypatch.setattr(pipeline_steps,'audited_external_call',lambda **kwargs:nullcontext())
     generations=[]
-    def generate(_prompt):
+    def generate(_prompt, **_kwargs):
         import re
         generations.append(True)
         if uncited:return AIMessage(content='Chưa đủ dữ liệu để trả lời.')
@@ -209,7 +235,8 @@ def test_mixed_text_batch_generates_once_and_preserves_branch_order(bom_store,of
             ('' if missing else 'Nhân viên kiểm tra hóa đơn theo quy trình nội bộ [SRC:D18P2]. '+basis))
     provider=SimpleNamespace(client=RunnableLambda(generate),settings=SimpleNamespace(
         model_name='fixture-model',base_url='http://127.0.0.1/fixture'),
-        invoke=lambda *a,**k:pytest.fail('Explicit branches must not invoke a planner'))
+        invoke=lambda *a,**k:pytest.fail('Explicit branches must not invoke a planner')
+            if k.get('surface')=='query_decomposition' else SimpleNamespace(content=''))
     executor=DefaultRagExecutor(retrieval_adapter=runtime,provider_adapter=provider)
     original=request()
     original=replace(original,access=replace(original.access,allowed_departments=frozenset({'HR','ENG','tech'}),

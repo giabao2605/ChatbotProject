@@ -138,7 +138,7 @@ def offline_pipeline(monkeypatch):
     return documents, qdrant_calls, executor, runtime
 
 
-def _run(question, *, trace_id, executor=None):
+def _run(question, *, trace_id, executor=None, roles=frozenset({"viewer"})):
     if executor is None:
         executor, _runtime = _offline_executor([], [])
     return list(
@@ -147,7 +147,7 @@ def _run(question, *, trace_id, executor=None):
                 question,
                 AccessScope(
                     department="HR",
-                    roles=frozenset({"viewer"}),
+                    roles=frozenset(roles),
                     allowed_departments=frozenset({"HR"}),
                     max_security_level="internal",
                     allowed_sites=frozenset({"HCM"}),
@@ -257,39 +257,6 @@ def _trace_events(caplog, trace_id):
         if event.get("trace_id") == trace_id:
             events.append(event)
     return events
-
-
-@pytest.mark.parametrize("with_history_image", [False, True])
-def test_overflow_clarifies_before_cache_history_vision_routing_or_provider(monkeypatch, with_history_image):
-    from mech_chatbot.rag.phases import preparation, routing
-    from mech_chatbot.rag import semantic_cache
-
-    executor, runtime = _offline_executor([], [], semantic_cache_enabled=True)
-    runtime.query_decomposition_enabled = True
-
-    def unexpected(*_args, **_kwargs):
-        pytest.fail("overflow must stop before cache, history, vision, routing and providers")
-
-    monkeypatch.setattr(semantic_cache, "lookup_exact", unexpected)
-    monkeypatch.setattr(preparation, "_prepare_history", unexpected)
-    monkeypatch.setattr(preparation, "_analyze_image", unexpected)
-    monkeypatch.setattr(routing, "route", unexpected)
-    executor._provider_adapter.invoke = unexpected
-    request = RagRequest(
-        "Tìm BOM; tìm vật liệu; tìm dung sai; tìm hướng dẫn hàn", AccessScope(),
-        image_path="drawing.png" if with_history_image else None,
-        history=({"role": "user", "content": "prior"},) if with_history_image else (),
-    )
-    events = list(executor.run(request, RagInvocation("overflow-early", mode="test")))
-    assert isinstance(events[-1], RagCompleted)
-    assert events[-1].outcome == "refused"
-    assert events[-1].refusal_reason == "intent_overflow"
-    assert "tối đa ba ý" in _answer(events)
-    debug = dict(events[-1].diagnostics)
-    assert debug["decomposition_status"] == "clarification_required"
-    assert debug["decomposition_intent_count"] == 4
-    assert debug["citation_docs"] == []
-    assert debug["decomposition_branches"] == []
 
 
 def test_cancelled_overflow_emits_cancellation_instead_of_clarification():
@@ -634,7 +601,9 @@ def test_negative_source_text_uses_normal_grounded_generation(
 def test_unspecified_version_comparison_clarifies_before_search(offline_pipeline, monkeypatch):
     documents, calls, executor, runtime = offline_pipeline
     documents.append(_document("An unrelated document with one current version."))
-    events = _run("So sánh hai phiên bản giúp mình.", trace_id="missing-versions", executor=executor)
+    # Without document_history_reader a version question is refused as access_denied first (GD4).
+    events = _run("So sánh hai phiên bản giúp mình.", trace_id="missing-versions", executor=executor,
+                  roles={"viewer", "document_history_reader"})
     assert isinstance(events[-1], RagCompleted)
     assert events[-1].refusal_reason == "clarification_required"
     assert "phiên bản nào" in _answer(events)

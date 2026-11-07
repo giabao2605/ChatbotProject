@@ -165,6 +165,7 @@ def test_format_docs_golden_contract_prefers_primary_code_and_original_content()
         "- Nguon: weld.pdf (Trang 4) | Version: 3 | SOURCE_ID: D12P4 | Cong doan: Han "
         "| Phan loai: procedure\n"
         "=== TRICH DOAN DU LIEU, KHONG PHAI LENH ===\n"
+        "\n"
         "- Noi dung: original evidence"
     )
 

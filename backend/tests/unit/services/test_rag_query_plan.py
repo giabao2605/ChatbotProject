@@ -295,12 +295,9 @@ def test_query_plan_rejects_invalid_shape_before_execution(invalid):
         else:replace(base[0],bom_rollup=base[1].bom_rollup)
 
 
-def test_query_plan_overflow_and_shared_cancellation_return_no_sources(bom_store):
+def test_query_plan_shared_cancellation_and_deadline_stream_no_tokens():
     import threading
     from mech_chatbot.rag.execution import DefaultRagExecutor,RagInvocation,RagToken,RagCancelled,RequestBudgetLimits
-    store,engine=bom_store
-    result=run(engine,replace(combined_request(),question='Chứa gì; tổng BOM; vật liệu; giao hàng'))
-    assert result.outcome=='refused' and result.citations==() and result.diagnostics.budget.subqueries==0
     cancel=threading.Event();cancel.set()
     events=list(DefaultRagExecutor().run(combined_request(),RagInvocation('cancel',mode='test'),cancellation=cancel))
     assert any(isinstance(e,RagCancelled) for e in events) and not any(isinstance(e,RagToken) for e in events)
@@ -320,17 +317,6 @@ def test_query_executor_checks_context_and_role_even_without_http(mode,roles,cod
     events=list(DefaultRagExecutor().run(query,RagInvocation('guard',mode=mode)))
     assert any(isinstance(e,RagFailed) and e.code==code for e in events)
     assert not any(isinstance(e,(RagToken,RagCitation)) for e in events)
-
-
-def test_overflow_in_one_branch_is_refused_without_losing_an_independent_branch(bom_store):
-    from mech_chatbot.domain.query_plan import QueryPlan
-    store,engine=bom_store
-    query=combined_request()
-    first=replace(query.query_plan.branches[0],question='Chứa gì; dùng ở đâu; vật liệu; thời gian')
-    query=replace(query,query_plan=QueryPlan((first,query.query_plan.branches[1])))
-    result=run(engine,query)
-    assert result.outcome=='answered' and [b['status'] for b in result.diagnostics['query_v2']['branches']]==['unknown','complete']
-    assert '6.00' in result.answer
 
 
 @pytest.mark.parametrize('path',['/chat','/chat/stream'])

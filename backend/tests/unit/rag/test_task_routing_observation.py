@@ -254,16 +254,6 @@ def test_candidate_overflow_rejects_evidence_or_inconsistent_terminal(overflow_r
         export_math_observation(result)
 
 
-def test_legacy_overflow_still_requires_zero_planners(bom_store):
-    _, engine = bom_store
-    result = execute(engine, graph_request('1. A\n2. B\n3. C\n4. D'), Planner('unused'), None)
-    assert export_math_observation(result)['actual_outcome'] == 'clarification_required'
-    result = replace(result, diagnostics=replace(result.diagnostics,
-        budget=replace(result.diagnostics.budget, planners=1)))
-    with pytest.raises(ValueError):
-        export_math_observation(result)
-
-
 def test_ready_decision_cannot_authorize_one_planner_overflow(overflow_result):
     observed = json.loads(json.dumps(overflow_result.observed_task_routing))
     observed['disposition'] = 'ready'

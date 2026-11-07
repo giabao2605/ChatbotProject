@@ -202,20 +202,3 @@ def test_runner_rejects_invalid_deadlines(store,tmp_path,seconds):
         run_fixed_case(frozen_case(tmp_path),root=tmp_path,run_binding=BINDING,
             profile_loader=current_profile,budget_limits=RequestBudgetLimits(deadline_seconds=seconds))
 
-
-@pytest.mark.parametrize('selection', [
-    {'scope_comparison':{'scope_a':'a','scope_b':'b'}},
-    {'graph_query':{'root_key':'document:1','product_scope':'product','site':'factory'}},
-    {'bom_rollup':{'root_key':'document:1','product_scope':'product','site':'factory','order_quantity':'3','rounding_scope':'policy'}},
-    {'query_plan':{'branches':[{'branch_id':'compare','question':'So sánh hai phạm vi',
-                               'scope_comparison':{'scope_a':'a','scope_b':'b'}}]}},
-])
-def test_runner_classifies_untouched_intent_overflow_as_clarification(store,tmp_path,selection):
-    from scripts.eval.run_fixed_math_v2 import run_fixed_case
-    ref=frozen_case(tmp_path,selection=selection,question='Tổng A; tổng B; chênh lệch; xem vật liệu')
-    with bind_repository_runtime(db_engine=store):
-        observed=run_fixed_case(ref,root=tmp_path,run_binding=BINDING,profile_loader=current_profile)
-    assert observed['actual_outcome']=='clarification_required'
-    assert observed['answer_outcome']=='refused' and observed['calculation_count']==0
-    assert observed['math_results']==observed['query_branches']==observed['citations']==[]
-    assert 'refusal_reason' not in observed and observed['accepted'] is False

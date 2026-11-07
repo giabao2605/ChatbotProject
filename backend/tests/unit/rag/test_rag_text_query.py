@@ -9,14 +9,15 @@ from tests.unit.api.test_rag_server_endpoints import rag_client, SERVICE_HEADERS
 pytestmark=pytest.mark.unit
 
 
-def test_text_query_overflow_stops_before_provider_and_retrieval_without_mutating_runtime(offline_pipeline):
-    _,calls,executor,runtime=offline_pipeline
+def test_four_text_requests_go_to_the_planner_instead_of_an_overflow_refusal(offline_pipeline):
+    # Since a116456 lexical splitting never refuses "too many requests"; only the planner may split.
+    _,_,executor,runtime=offline_pipeline
     request=RagRequest('Tìm BOM; tìm vật liệu; tìm dung sai; tìm hướng dẫn hàn',
                        AccessScope(roles=frozenset({'reviewer'})),text_query=True)
-    result=list(executor.run(request,RagInvocation('text-overflow',mode='test')))
-    assert isinstance(result[-1],RagCompleted) and result[-1].refusal_reason=='intent_overflow'
-    assert calls==[] and runtime.query_decomposition_enabled is False
-    assert result[-1].diagnostics.budget.planners==0 and result[-1].diagnostics.budget.final_generations==0
+    result=list(executor.run(request,RagInvocation('text-four',mode='test')))
+    assert isinstance(result[-1],RagCompleted) and result[-1].refusal_reason!='intent_overflow'
+    budget=result[-1].diagnostics.budget
+    assert (budget.planners,budget.subqueries)==(1,0) and runtime.query_decomposition_enabled is False
 
 
 @pytest.mark.parametrize('mode,roles,code',[('production',{'reviewer'},'ValueError'),('test',{'viewer'},'PermissionError')])
@@ -49,7 +50,7 @@ def test_three_text_intents_share_one_generation_and_keep_branch_sources(offline
     monkeypatch.setattr('langchain_qdrant.QdrantVectorStore',Store)
     monkeypatch.setattr(pipeline_steps,'audited_external_call',lambda **kwargs:nullcontext())
     generations=[]
-    def generate(_prompt):
+    def generate(_prompt, **_kwargs):
         generations.append(True)
         return AIMessage(content='Nhân viên gửi đề nghị đến trưởng bộ phận [SRC:D17P2]. '
             'Đăng ký bảo hiểm theo hướng dẫn của phòng nhân sự [SRC:D18P2]. '+
@@ -57,7 +58,7 @@ def test_three_text_intents_share_one_generation_and_keep_branch_sources(offline
     provider=SimpleNamespace(client=RunnableLambda(generate),settings=SimpleNamespace(
         model_name='fixture-model',base_url='http://127.0.0.1/fixture'),invoke=lambda *a,**k:SimpleNamespace(content=''))
     executor=DefaultRagExecutor(retrieval_adapter=runtime,provider_adapter=provider)
-    request=RagRequest('Quy trình nghỉ phép; chính sách bảo hiểm; hướng dẫn đào tạo',
+    request=RagRequest('Tìm quy trình nghỉ phép; tìm chính sách bảo hiểm; tìm hướng dẫn đào tạo',
         AccessScope(roles=frozenset({'reviewer'}),allowed_departments=frozenset({'HR'}),allowed_sites=frozenset({'HCM'}),
                     max_security_level='internal'),text_query=True)
     result=list(executor.run(request,RagInvocation('three-text',mode='test')))
@@ -72,7 +73,7 @@ def test_three_text_intents_share_one_generation_and_keep_branch_sources(offline
 
 def test_text_query_preserves_each_missing_branch_when_all_sources_are_absent(offline_pipeline):
     _,_,executor,_=offline_pipeline
-    result=list(executor.run(RagRequest('Quy trình nghỉ phép; chính sách bảo hiểm; hướng dẫn đào tạo',
+    result=list(executor.run(RagRequest('Tìm quy trình nghỉ phép; tìm chính sách bảo hiểm; tìm hướng dẫn đào tạo',
         AccessScope(roles=frozenset({'reviewer'})),text_query=True),RagInvocation('missing-text',mode='test')))
     assert isinstance(result[-1],RagCompleted) and result[-1].outcome=='refused'
     branches=result[-1].diagnostics['decomposition_branches']
@@ -100,7 +101,7 @@ def test_text_query_rest_and_sse_preserve_missing_branch_statuses(path,rag_clien
         'allowed_departments':['HR'],'allowed_sites':['HCM']})
     _replace_runtime(rag_client,executor=executor,runtime_contract=RagRuntimeContract('evaluation',False,120))
     response=rag_client.post(path,headers=SERVICE_HEADERS,json={'user_id':7,'text_query':True,
-        'user_question':'Quy trình nghỉ phép; chính sách bảo hiểm; hướng dẫn đào tạo'})
+        'user_question':'Tìm quy trình nghỉ phép; tìm chính sách bảo hiểm; tìm hướng dẫn đào tạo'})
     assert response.status_code==200 and runtime.query_decomposition_enabled is False
     if path=='/chat':
         debug=response.json()['debug_info']

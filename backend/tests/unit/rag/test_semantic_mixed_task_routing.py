@@ -40,7 +40,9 @@ def test_semantic_mixed_slots_derive_exact_questions_and_keep_shared_budget(bom_
         'Calculate the BOM', 'payment terms', 'reconciliation guide.']
     assert [branch['status'] for branch in branches] == ['complete', 'unknown', 'unknown']
     assert '6.00' in result.answer
-    assert len(planner.calls) == result.diagnostics.budget.planners == 1
+    # Since dfc3677 every question also makes one intent_routing call, which is not a planner.
+    planned = [call for call in planner.calls if call[1].get('surface') != 'intent_routing']
+    assert len(planned) == result.diagnostics.budget.planners == 1
     assert result.diagnostics.budget.subqueries == 3 and result.diagnostics.budget.calculations == 1
     assert retrievals
     assert result.observed_task_routing['schema'] == 'mixed-candidate-task-routing-observation-v5-draft'

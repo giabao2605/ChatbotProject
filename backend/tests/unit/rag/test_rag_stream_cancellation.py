@@ -20,6 +20,7 @@ def _request():
     return SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace()),
         client=SimpleNamespace(host="127.0.0.1"),
+        headers={},
     )
 
 
