@@ -56,7 +56,10 @@ jobs:
       - name: Install runtime and test deps
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r backend/requirements/requirements.txt -r backend/requirements/requirements-test.txt
+          # Test against the versions production serves (chat_env snapshot), not the newest releases.
+          sed -E 's/ --hash=.*//; /^(#|$)/d' backend/requirements/requirements-windows-runtime.lock.txt > "$RUNNER_TEMP/constraints.txt"
+          python -m pip install -r backend/requirements/requirements.txt -r backend/requirements/requirements-test.txt \
+            -c "$RUNNER_TEMP/constraints.txt"
 
       - name: Run fast tests (unit + security)
         run: |

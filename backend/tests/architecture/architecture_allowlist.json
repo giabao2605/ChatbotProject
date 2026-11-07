@@ -382,9 +382,9 @@
       "rule": "api_direct_data_access",
       "path": "api/source_file_pins.py",
       "dependency": "mech_chatbot.db.repositories.source_page_images",
-      "count": 1,
+      "count": 2,
       "removal_phase": "API/application boundary follow-up",
-      "reason": "Reviewed integration baseline: present unchanged in deployed 27800dc5e850ea49538a5f6874274a0e402a8bc8. Existing reviewed source-pin lookup or fail-closed SQL error translation; API owner to move behind the evidence service boundary."
+      "reason": "Reviewed integration baseline: present unchanged in deployed 27800dc5e850ea49538a5f6874274a0e402a8bc8. Existing reviewed source-pin lookup or fail-closed SQL error translation; API owner to move behind the evidence service boundary. GD8 added load_source_snapshot_hash to the same reviewed import for ordinary source pins."
     },
     {
       "rule": "api_direct_data_access",
@@ -449,6 +449,22 @@
       "count": 1,
       "removal_phase": "Shared text utility ownership follow-up",
       "reason": "Reviewed integration baseline: present unchanged in deployed 27800dc5e850ea49538a5f6874274a0e402a8bc8. Existing shared lazy tokenizer lock prevents concurrent model initialization; ingestion/RAG owner to relocate the common tokenizer without duplicating the lock."
+    },
+    {
+      "rule": "db_upward_dependency",
+      "path": "db/repositories/comprehensive.py",
+      "dependency": "mech_chatbot.rag.comprehensive",
+      "count": 2,
+      "removal_phase": "Comprehensive scan contract follow-up",
+      "reason": "Reviewed GD2-GD8 information-first debt: added in 6dbe1dc and deployed from 85e527c (2026-11-03, still present in 0699024). SQL scan-progress persistence reuses CursorMismatch and fingerprint; move both pure cursor contracts into domain."
+    },
+    {
+      "rule": "db_upward_dependency",
+      "path": "db/scan_connection.py",
+      "dependency": "mech_chatbot.rag.execution",
+      "count": 4,
+      "removal_phase": "Request budget ownership follow-up",
+      "reason": "Reviewed GD2-GD8 information-first debt: added in 6dbe1dc and deployed from 85e527c (2026-11-03, still present in 0699024). Lazy imports read the request checkpoint, budget and RequestDeadlineExceeded so SQL scans honour the request deadline; move the request-budget context into a shared runtime module."
     }
   ]
 }

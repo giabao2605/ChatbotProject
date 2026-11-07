@@ -12,6 +12,10 @@ from types import SimpleNamespace
 import pytest
 
 os.environ.setdefault("RAG_EXECUTION_CONTEXT", "test")
+# Developer-global git hooks must not run in the synthetic repos tests commit to.
+if "GIT_CONFIG_COUNT" not in os.environ:
+    os.environ.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="core.hooksPath",
+                      GIT_CONFIG_VALUE_0=str(Path(__file__).resolve().parent / ".no-git-hooks"))
 
 # --- Path setup -------------------------------------------------------------
 _REPO_ROOT = Path(__file__).resolve().parents[2]
